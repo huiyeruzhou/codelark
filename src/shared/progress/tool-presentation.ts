@@ -208,9 +208,10 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
   }
   if (detail.kind === 'mcp') {
     const name = [detail.server, detail.tool].filter(Boolean).join('/');
-    if (detail.title) {
-      return { action: truncateInline(detail.title, 88), target: '', meta };
-    }
+    const input = detail.input && typeof detail.input === 'object'
+      ? detail.input as Record<string, unknown> : null;
+    const title = detail.title || (typeof input?.title === 'string' ? input.title : '');
+    if (title) meta.unshift(truncateInline(title, 88));
     return { action: '调用', target: inlineCode(name || tool.name || 'MCP'), meta };
   }
   if (detail.kind === 'dynamic') {

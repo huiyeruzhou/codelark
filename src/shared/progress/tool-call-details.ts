@@ -55,6 +55,12 @@ function mcpToolParts(name: string | undefined): { server?: string; tool: string
     return { server: parts[1], tool: parts.slice(2).join('__') || raw };
   }
   const cursorMcp = raw.match(/^mcp:(.+)$/iu)?.[1]?.trim();
+  if (cursorMcp && !/^browser_/iu.test(cursorMcp)) {
+    const separator = cursorMcp.indexOf('/');
+    return separator > 0
+      ? { server: cursorMcp.slice(0, separator), tool: cursorMcp.slice(separator + 1) }
+      : { tool: cursorMcp };
+  }
   const browserTool = cursorMcp || (/^browser_/iu.test(raw) ? raw : '');
   if (browserTool) {
     return {
@@ -434,6 +440,7 @@ export function buildToolCallDetailFromInput(toolName: string | undefined, input
     return {
       kind: 'mcp',
       ...mcp,
+      ...(typeof record?.title === 'string' && record.title.trim() ? { title: sanitizeToolText(record.title) } : {}),
       input: parsed,
     };
   }
@@ -821,11 +828,25 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
     return '';
   }
   if (detail.kind === 'mcp') {
-    const name = [detail.server, detail.tool].filter(Boolean).join('/');
-    if (name) sections.push(`mcp: \`${name}\``);
-    if (detail.input != null) sections.push(buildFencedCodeBlock(stringifyToolValue(detail.input), 'json'));
+    const input = parseJsonMaybe(detail.input);
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      const parameters = { ...input as Record<string, unknown> };
+      // Title and MCP identity belong to the panel header. Executable source
+      // must stay source text rather than a JSON string full of escaped quotes.
+      if (typeof parameters.title === 'string') delete parameters.title;
+      if (typeof parameters.code === 'string') {
+        const language = /^(js|javascript|evaluate|run_code)$/iu.test(detail.tool || '')
+          ? 'javascript'
+          : /^(python|py)$/iu.test(detail.tool || '') ? 'python' : 'text';
+        sections.push(buildFencedCodeBlock(parameters.code, language));
+        delete parameters.code;
+      }
+      if (Object.keys(parameters).length > 0) sections.push(buildFencedCodeBlock(stringifyToolValue(parameters), 'json'));
+    } else if (input != null) {
+      sections.push(buildFencedCodeBlock(stringifyToolValue(input), typeof input === 'string' ? 'text' : 'json'));
+    }
     if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
-    if (detail.errorText) sections.push(buildFencedCodeBlock(detail.errorText, 'text'));
+    if (detail.errorText && detail.errorText !== detail.output) sections.push(buildFencedCodeBlock(detail.errorText, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'dynamic') {

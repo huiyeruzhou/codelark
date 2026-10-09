@@ -47,6 +47,29 @@ function assertFeishuElementIdsAreValid(value: unknown): void {
   }
 }
 
+it('renders MCP identity and title once, with executable code and a single failure detail', () => {
+  const title = '查找刚创建的隔离模型卡片验收群';
+  const code = "await lark.pressKey('super+k');\nawait lark.paste('Cursor模型来源核验-1009-1340');";
+  const errorText = "The user changed '/Applications/Lark.app'.";
+  for (const name of ['mcp__cua_repl__js', 'MCP:cua_repl/js']) {
+    const detail = buildToolCallDetailFromInput(name, { code, title, timeout_ms: 30000 });
+    assert.equal(detail?.kind, 'mcp');
+    if (detail?.kind !== 'mcp') throw new Error('Expected MCP detail');
+    const [panel] = buildStreamingToolsElements([{
+      id: 'mcp-code-failure', name, status: 'error',
+      detail: { ...detail, errorText },
+    }]);
+    assert.equal((panel?.header as any).title.content, `❌ 调用 \`cua_repl/js\` · ${title}`);
+    const body = (panel?.elements as any[]).map((element) => element.content).join('\n');
+    assert.match(body, /```javascript\nawait lark\.pressKey/u);
+    assert.ok(body.includes(code));
+    assert.match(body, /"timeout_ms": 30000/u);
+    assert.doesNotMatch(body, /"code":|"title":|mcp:/u);
+    assert.equal(body.split(errorText).length - 1, 1);
+    assert.equal(JSON.stringify(panel).split(title).length - 1, 1);
+  }
+});
+
 describe('preprocessFeishuMarkdown', () => {
   it('keeps Feishu image keys and degrades local or remote image targets to readable text', () => {
     const rendered = preprocessFeishuMarkdown([
@@ -539,7 +562,8 @@ describe('buildToolProgressMarkdown', () => {
     assert.ok(!content.includes('aggregated output\\nline 2'));
     assert.ok(content.includes('update: `src/a.ts`'));
     assert.ok(!content.includes('patch failed'));
-    assert.ok(content.includes('mcp: `server/read`'));
+    assert.equal((elements[2].header as any).title.content, '🔧 调用 `server/read`');
+    assert.ok(!content.includes('mcp: `server/read`'));
     assert.ok(!content.includes('mcp output'));
   });
 
