@@ -63,13 +63,39 @@ function fixture(runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' = 'co
     replaceSend: (replacement: typeof send) => { send = replacement; } };
 }
 
-it('does not interrupt a stale physical tmux target for a Desktop-backed cursor:tmux session', async () => {
+for (const active of [false, true]) {
+  it(`Desktop Stop reaches the native thread with active observer=${active} and leaves terminal confirmation to Cursor`, async () => {
+    const f = fixture('cursor');
+    f.store.updateSession(f.session.id, { runtime: { cursor: { sessionId: 'desktop-thread', provider: 'tmux', transport: 'desktop' } } });
+    const abortController = new AbortController();
+    if (active) f.state.activeTasks.set(f.session.id, { id: 'active', sessionId: f.session.id, abortController });
+    const requests: string[] = [];
+    f.deps.stopCursorDesktopThread = async (id, isCurrent) => {
+      assert.equal(isCurrent?.(), true);
+      requests.push(id);
+      return { status: 'interrupt-requested', threadId: id };
+    };
+    assert.equal(getProviderOwnedRuntimeTmuxTarget(f.store.getSession(f.session.id), f.binding), undefined);
+    const result = await f.stop();
+    assert.equal(result.method, 'desktop_interrupt');
+    assert.match(result.detail, /等待后端确认/);
+    assert.equal(abortController.signal.aborted, false);
+    assert.deepEqual(requests, ['desktop-thread']);
+    assert.deepEqual(f.sent, []);
+    assert.deepEqual(f.healthEnds, []);
+  });
+}
+
+it('unsupported Desktop Stop propagates failure without aborting the observer', async () => {
   const f = fixture('cursor');
-  f.store.updateSession(f.session.id, { runtime: { cursor: { provider: 'tmux', transport: 'desktop' } } });
-  assert.equal(getProviderOwnedRuntimeTmuxTarget(f.store.getSession(f.session.id), f.binding), undefined);
-  const result = await f.stop();
-  assert.equal(result.method, 'idle');
+  f.store.updateSession(f.session.id, { runtime: { cursor: { sessionId: 'desktop-thread', provider: 'tmux', transport: 'desktop' } } });
+  const abortController = new AbortController();
+  f.state.activeTasks.set(f.session.id, { id: 'active', sessionId: f.session.id, abortController });
+  f.deps.stopCursorDesktopThread = async () => { throw new Error('unsupported Stop'); };
+  await assert.rejects(f.stop(), /unsupported Stop/);
+  assert.equal(abortController.signal.aborted, false);
   assert.deepEqual(f.sent, []);
+  assert.deepEqual(f.healthEnds, []);
 });
 
 it('explicit /stop reaches its bound tmux runtime after health reconcile loses a manual turn', async () => {

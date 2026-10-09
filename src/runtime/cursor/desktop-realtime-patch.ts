@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { parse } from 'acorn';
 
+const CONTROL_MARKER = '__CODELARK_CURSOR_DESKTOP_CONTROL_V3__';
 const PATCH_MARKER = '__CODELARK_CURSOR_DESKTOP_REALTIME_V2__';
 const DEFAULT_CURSOR_APP = '/Applications/Cursor.app';
 
@@ -98,7 +99,7 @@ const MAIN_SEND_RESULT_AFTER = 'case"submitted":case"queued":case"steered":retur
 const MAIN_METHOD_ANCHOR = '}return t??{status:"unknown-thread"}}closeServer(){';
 const MAIN_METHOD_REPLACEMENT = `}return t??{status:"unknown-thread"}}async readThreadEvents(e){for(const t of this.orderedWindows())try{const n=await this.nativeHostMainService.runActionInWindow(void 0,{windowId:t.id,actionId:CL2readAction,args:this.bridgeActionArgs(t.id,{threadId:e.threadId,after:e.after,timeoutMs:e.timeoutMs}),waitForResult:!0});if(n===void 0)continue;if(CL2eventBatch(n))return n}catch(n){this.logService.warn(\`[desktop bridge] Failed to read events through window \${t.id}:\`,gc(n))}return{cursor:e.after,events:[]}}closeServer(){`;
 
-export function patchCursorMainBundle(source: string): string {
+function patchCursorMainRealtimeBundle(source: string): string {
   if (source.includes(PATCH_MARKER)) return source;
   let patched = replaceExactly(source, MAIN_PARSER_BEFORE, MAIN_PARSER_AFTER, 'main parser');
   patched = replaceExactly(patched, MAIN_CONSTANTS_BEFORE, MAIN_CONSTANTS_AFTER, 'main command constants');
@@ -127,7 +128,7 @@ function CL2snapshot(e){const t=e.data,n=(t.fullConversationHeadersOnly??[]).sli
 function CL2ensureState(e,t,n,i){const r=CL2eventStates.get(e);if(r&&r.handle===t)return r;r?.dispose?.();const s={handle:t,cursor:0,events:[],waiters:new Set,dispose:void 0},o=(a,c={})=>{const l={sequence:++s.cursor,type:a,threadId:e,generationId:t.data.chatGenerationUUID??t.data.latestChatGenerationUUID,status:t.data.status,model:t.data.modelConfig?.modelName,timestamp:Date.now(),...c};s.events.push(l),s.events.length>256&&s.events.splice(0,s.events.length-256);for(const u of s.waiters)u();s.waiters.clear()},a=n.onChangeEffectManuallyDisposed({deps:[()=>JSON.stringify(CL2snapshot(t))],onChange:({deps:[c]})=>{try{o("snapshot",{snapshot:JSON.parse(c)})}catch(l){o("error",{message:l instanceof Error?l.message:String(l)})}},runNowToo:!0}),c=i.onDidFinishStreamChat(l=>{l.composerId===e&&o("finished",{generationId:l.generationUUID})}),l=i.onDidComposerStopGenerating(u=>{u.composerId===e&&o("stopped")});return s.dispose=()=>{a.dispose(),c.dispose(),l.dispose()},s.read=(u,h)=>{const m=()=>({cursor:s.cursor,events:s.events.filter(g=>g.sequence>u)});if(s.cursor>u)return Promise.resolve(m());return new Promise(g=>{let f;const v=()=>{clearTimeout(f),s.waiters.delete(v),g(m())};s.waiters.add(v),f=setTimeout(v,h)})},CL2eventStates.set(e,s),s}
 var CL2ReadAction=class extends at{constructor(){super({id:CL2readAction,title:{value:"Read Desktop Bridge Thread Events",original:"Read Desktop Bridge Thread Events"}})}async run(e,t){const n=e.get(er),i=e.get(Rr),r=e.get(Cn);if(!uip(n,i,r))return{cursor:t?.after??0,events:[]};const s=await dip(t,r);if(!s||!$Uo(t)||typeof t.threadId!=="string"||!Number.isInteger(t.after)||!Number.isInteger(t.timeoutMs))return{cursor:0,events:[]};const o=e.get(E_),a=e.get(Hs),c=e.get(uo),l=e.get(Ty);let u=o.getAgent(t.threadId),h=u?.composerDataHandle;if(!h&&!n.isGlass){h=a.getHandleIfLoaded(t.threadId)??await a.getComposerHandleById(t.threadId)}if(!h)return{cursor:t.after,events:[]};return CL2ensureState(t.threadId,h,c,l).read(t.after,t.timeoutMs)}}`;
 
-export function patchCursorRendererBundle(source: string): string {
+function patchCursorRendererRealtimeBundle(source: string): string {
   if (source.includes(PATCH_MARKER)) return source;
   let patched = replaceExactly(source, RENDERER_CONSTANTS_BEFORE, RENDERER_CONSTANTS_AFTER, 'renderer command constants');
   patched = replaceExactly(patched, RENDERER_SEND_PARSE_BEFORE, RENDERER_SEND_PARSE_AFTER, 'renderer send parser');
@@ -140,6 +141,55 @@ export function patchCursorRendererBundle(source: string): string {
   patched = `${patched.slice(0, start)}${RENDERER_REPLACEMENT}${patched.slice(end)}`;
   patched = replaceExactly(patched, 'We(Z6b),We(Q6b),Zr(', 'We(Z6b),We(Q6b),We(CL2ReadAction),Zr(', 'renderer command registration');
   return `${patched}\n/* ${PATCH_MARKER} */\n`;
+}
+
+// Layer the control protocol on top of v2 so existing patched installations can
+// upgrade without discarding their original backup or silently skipping Stop.
+export function patchCursorMainBundle(source: string): string {
+  if (source.includes(CONTROL_MARKER)) return source;
+  let patched = patchCursorMainRealtimeBundle(source);
+  patched = replaceExactly(patched, 'oW=2,HC=', 'oW=3,HC=', 'control protocol version');
+  patched = replaceExactly(patched, 'if(e.type==="readThreadEvents"',
+    'if(e.type==="stopThread"&&iW(e.threadId))return{type:"stopThread",threadId:e.threadId};if(e.type==="readThreadEvents"', 'stop parser');
+  patched = replaceExactly(patched, 'CL2readAction="composer.desktopBridge.readThreadEvents",',
+    'CL2readAction="composer.desktopBridge.readThreadEvents",CL3stopAction="composer.desktopBridge.stopThread",', 'stop action constant');
+  patched = replaceExactly(patched, 'case"readThreadEvents":return this.readThreadEvents(e);',
+    'case"stopThread":return this.stopThread(e);case"readThreadEvents":return this.readThreadEvents(e);', 'stop dispatch');
+  patched = replaceExactly(patched, 'async readThreadEvents(e){', `async stopThread(e){for(const t of this.orderedWindows()){try{const n=await this.nativeHostMainService.runActionInWindow(void 0,{windowId:t.id,actionId:CL3stopAction,args:this.bridgeActionArgs(t.id,{threadId:e.threadId}),waitForResult:!0});if(n===void 0||n?.outcome==="not-found")continue;if(n?.outcome==="interrupt-requested"||n?.outcome==="idle")return{status:n.outcome,threadId:e.threadId,windowId:t.id};return{status:"error",message:n?.message??"Invalid stop acknowledgement"}}catch(n){return{status:"error",message:gc(n)}}}return{status:"unknown-thread"}}async readThreadEvents(e){`, 'stop method');
+  return `${patched}\n/* ${CONTROL_MARKER} */\n`;
+}
+
+const RENDERER_STOP_ACTION = String.raw`var CL3StopAction=class extends at {
+  constructor(){super({id:CL3stopAction,title:{value:"Stop Desktop Bridge Thread",original:"Stop Desktop Bridge Thread"}})}
+  async run(e,t){
+    const n=e.get(er),i=e.get(Rr),r=e.get(Cn);
+    if(!uip(n,i,r))return{outcome:"error",message:"Desktop bridge is disabled."};
+    if(!await dip(t,r)||!$Uo(t)||typeof t.threadId!=="string")return{outcome:"error",message:"Invalid stop arguments."};
+    const repository=e.get(E_),header=repository.getAgentHeader(t.threadId);
+    if(!header)return{outcome:"not-found"};
+    if(header.source==="draft"||header.source==="claude-code")return{outcome:"error",message:"This thread does not support Desktop Stop."};
+    let agent=repository.getAgent(t.threadId),loaded=false;
+    try{
+      if(!agent){agent=await repository.loadAgent(t.threadId);loaded=true}
+      const data=agent.composerDataHandle.data;
+      if(header.status.value!=="in_progress"&&data.status!=="generating"&&!data.chatGenerationUUID)return{outcome:"idle"};
+      await agent.desktopBridgeAbortChat();
+      return{outcome:"interrupt-requested"};
+    }catch(error){return{outcome:"error",message:error instanceof Error?error.message:String(error)}}
+    finally{if(loaded)agent?.dispose()}
+  }
+};`;
+
+export function patchCursorRendererBundle(source: string): string {
+  if (source.includes(CONTROL_MARKER)) return source;
+  let patched = patchCursorRendererRealtimeBundle(source);
+  patched = replaceExactly(patched, 'CL2readAction="composer.desktopBridge.readThreadEvents",',
+    'CL2readAction="composer.desktopBridge.readThreadEvents",CL3stopAction="composer.desktopBridge.stopThread",', 'renderer stop constant');
+  patched = replaceExactly(patched, 'abortChat(){this._withLiveAgentSync("abortChat",e=>e.abortChat())}',
+    'abortChat(){this._withLiveAgentSync("abortChat",e=>e.abortChat())}async desktopBridgeAbortChat(){return this._withLiveAgent("desktopBridgeAbortChat",async e=>{if(typeof e.abortChatAndWait!=="function")throw new Error("Native agent does not support awaited Stop");await e.abortChatAndWait()})}', 'renderer awaited stop');
+  patched = replaceExactly(patched, 'var CL2ReadAction=', `${RENDERER_STOP_ACTION}\nvar CL2ReadAction=`, 'renderer stop handler');
+  patched = replaceExactly(patched, 'We(CL2ReadAction),', 'We(CL2ReadAction),We(CL3StopAction),', 'renderer stop registration');
+  return `${patched}\n/* ${CONTROL_MARKER} */\n`;
 }
 
 function backupRoot(appVersion: string): string {
@@ -165,10 +215,11 @@ export function installCursorDesktopRealtimePatch(appPath?: string): CursorDeskt
   const appVersion = readAppVersion(paths);
   const originalMain = fs.readFileSync(paths.mainBundlePath, 'utf8');
   const originalRenderer = fs.readFileSync(paths.rendererBundlePath, 'utf8');
-  if (originalMain.includes(PATCH_MARKER) && originalRenderer.includes(PATCH_MARKER)) {
+  if (originalMain.includes(CONTROL_MARKER) && originalRenderer.includes(CONTROL_MARKER)) {
     return { action: 'already-installed', appPath: paths.appPath, appVersion, files: [paths.mainBundlePath, paths.rendererBundlePath] };
   }
-  if (originalMain.includes(PATCH_MARKER) || originalRenderer.includes(PATCH_MARKER)) {
+  if (originalMain.includes(PATCH_MARKER) !== originalRenderer.includes(PATCH_MARKER)
+    || originalMain.includes(CONTROL_MARKER) !== originalRenderer.includes(CONTROL_MARKER)) {
     throw new Error('Cursor realtime patch 处于半安装状态；请先 restore，再重新安装。');
   }
   const patchedMain = patchCursorMainBundle(originalMain);
@@ -185,7 +236,7 @@ export function installCursorDesktopRealtimePatch(appPath?: string): CursorDeskt
   for (const entry of entries) fs.copyFileSync(entry.path, entry.backup, fs.constants.COPYFILE_EXCL);
   const manifest: PatchManifest = {
     schemaVersion: 1,
-    marker: PATCH_MARKER,
+    marker: CONTROL_MARKER,
     appPath: paths.appPath,
     appVersion,
     installedAt: new Date().toISOString(),
@@ -220,7 +271,7 @@ function latestManifest(appVersion: string, appPath: string): { directory: strin
     try {
       const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8')) as PatchManifest;
       if (
-        manifest.marker === PATCH_MARKER
+        (manifest.marker === CONTROL_MARKER || manifest.marker === PATCH_MARKER)
         && manifest.schemaVersion === 1
         && path.resolve(manifest.appPath) === path.resolve(appPath)
       ) return { directory, manifest };

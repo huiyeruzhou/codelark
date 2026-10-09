@@ -28,7 +28,7 @@
 - Cursor Desktop 回合不再把 transcript 暂时无增量误判为失败：只要 Desktop Bridge 的真实 thread 状态仍为 `running` 就继续等待。无需修改 Cursor.app，CodeLark 用一个共享异步 hook tailer（`fs.watch` 即时唤醒 + 低频异步 reconcile 兜底）接收本轮 Cursor hooks，不再让每个 turn 每 500ms 同步扫描日志目录；实时 thought 会作为弱化引用进入正文历史，超过阈值时完整放入默认收起的思考面板而不截断，footer 只留简短状态。工具开始和结果按原生工具 ID 更新同一张飞书卡并复用 Codex 的公共 Shell、文件与 MCP 工具展示，泛化 shell 步骤不会抢在工具块前显示“已完成”，base model 也不会让模型标签来回跳变。transcript 继续收取正文与终态并按工具身份去重。`/tmux-screen [seconds]s` 在 Desktop provider 下会显示并刷新后端状态、generation、模型、hook 与 transcript 诊断；异常终态卡会保留具体错误正文。
 - MCP 工具卡标题同时显示 `server/tool` 和操作说明；`code` 参数直接呈现为代码块，其余参数保留，详情不再重复标题与 MCP 名称。
 - tmux 自动发现补齐 Apple Silicon Homebrew `/opt/homebrew/bin/tmux` 与 Linuxbrew 路径；即使 launchd 的 PATH 不包含 Homebrew，也不会把已安装的 tmux 误报为 ENOENT。
-- Cursor Desktop direct turn 以“提交前已有 turn”的签名建立边界，不再要求 Cursor 持久化的 user row 与原始 wire prompt 逐字一致；兼容输入包装、归一化和 transcript 原子重写。可选 realtime v2 补丁提供显式 steer 与客户端事件；旧 v1 自动回退且明确显示实际为 queue。Codex app-server 在 Bridge 重启后也从当前协议 sequence 建立新基线，不再把整段在途历史拆成多张 continuation 卡重放。
+- Cursor Desktop direct turn 以“提交前已有 turn”的签名建立边界，不再要求 Cursor 持久化的 user row 与原始 wire prompt 逐字一致；兼容输入包装、归一化和 transcript 原子重写。可选 Desktop v3 补丁提供 steer、Stop 与客户端事件。普通消息显式 steer，运行中追加绕过本地任务队列；旧 v1 发送前明确报不支持，不静默排队。Stop 调用原生取消服务，v1/v2 不支持时明确失败。Codex app-server 在 Bridge 重启后也从当前协议 sequence 建立新基线，不再把整段在途历史拆成多张 continuation 卡重放。
 - 修复 Claude Code 的首次启动、信任与 YOLO 确认流程，并适配当前 TUI 状态和嵌套工具输出；高风险启动必须经过明确确认。
 - `/clear`、`/new`、runtime 切换和配置继承使用更严格的 session owner 边界。旧任务的取消、停止、终态和 stale tmux 清理不会污染替换后的会话。
 - mirror 可从已保存进度和已绑定卡片页继续恢复；Bridge 重启只恢复当前最新 turn，不再重放历史 orphan 或把它错误显示为 interrupted；已终结 turn 的迟到工具、消息、计划和 usage 事件也不会重新创建幽灵卡。

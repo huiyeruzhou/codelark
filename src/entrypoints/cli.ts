@@ -255,7 +255,7 @@ export function buildCliHelpText(): string {
     '  autostart install                   安装 Windows Bridge 开机启动任务',
     '  autostart uninstall                 移除 Windows Bridge 开机启动任务',
     '  codex-desktop disable               停止共享 Codex 后端并关闭 Desktop 自动接入（会中断其活动轮次）',
-    '  cursor-desktop-patch install        安装 Cursor Desktop realtime v2 补丁（需重启 Cursor）',
+    '  cursor-desktop-patch install        安装 Cursor Desktop v3 控制补丁（steer/Stop）（需重启 Cursor）',
     '  cursor-desktop-patch restore        从校验备份恢复 Cursor 安装文件',
     '  uninstall                           停止服务并安排 npm uninstall -g codelark',
     '  -v, --version                       显示 CodeLark 版本',

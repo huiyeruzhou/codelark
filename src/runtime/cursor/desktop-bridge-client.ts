@@ -255,16 +255,12 @@ function parseSendResult(value: unknown): RawSendResult | null {
   return null;
 }
 
-export async function sendCursorDesktopMessage(
-  threadId: string,
-  text: string,
-  options: { force?: boolean; delivery?: CursorDesktopDelivery } = {},
-): Promise<CursorDesktopSendResult> {
+async function findDesktopTarget(threadId: string) {
   const normalizedThreadId = threadId.trim().toLowerCase();
-  if (!normalizedThreadId || !text) throw new Error('Cursor Desktop thread ID 和消息正文不能为空。');
+  if (!normalizedThreadId) throw new Error('Cursor Desktop thread ID 不能为空。');
   const instances = readLiveDesktopInstances();
   if (instances.length === 0) {
-    throw new Error('Cursor Desktop Bridge 不可用：不会降级到 tmux，以免写入另一条会话。');
+    throw new Error('Cursor Desktop Bridge 不可用：不会改用 CLI，以免写入另一条会话。');
   }
   const candidates: Array<{ instance: CursorDesktopInstance; thread: CursorDesktopThread }> = [];
   for (const instance of instances) {
@@ -279,10 +275,42 @@ export async function sendCursorDesktopMessage(
   candidates.sort((left, right) => right.thread.lastUpdatedAt - left.thread.lastUpdatedAt);
   const target = candidates[0];
   if (!target) {
-    throw new Error(`Cursor Desktop 当前没有 thread ${threadId}；不会降级到 tmux。请在 Cursor 中打开该对话后重试。`);
+    throw new Error(`Cursor Desktop 当前没有 thread ${threadId}；不会改用 CLI。请在 Cursor 中打开该对话后重试。`);
   }
-  const requestedDelivery: CursorDesktopDelivery = options.force === true ? 'force' : options.delivery || 'steer';
+  return target;
+}
+
+export async function stopCursorDesktopThread(
+  threadId: string,
+  isCurrentTarget: () => boolean = () => true,
+): Promise<{ status: 'interrupt-requested' | 'idle'; threadId: string }> {
+  const target = await findDesktopTarget(threadId);
+  if (!isCurrentTarget()) throw new Error('当前 Desktop 绑定已变化，未发送停止请求。');
+  if (target.instance.discovery.protocolVersion < 3) {
+    throw new Error('Cursor Desktop Bridge 不支持停止请求；未停止后端任务。请安装最新 CodeLark Desktop patch 并重启 Cursor。');
+  }
+  const response = await postBridge(target.instance, { type: 'stopThread', threadId: target.thread.id });
+  if (isRecord(response) && response.threadId === target.thread.id
+    && (response.status === 'interrupt-requested' || response.status === 'idle')) {
+    return { status: response.status, threadId: response.threadId };
+  }
+  const detail = isRecord(response) && typeof response.message === 'string' ? `：${response.message}` : '';
+  throw new Error(`Cursor Desktop 未确认停止请求${detail}；请检查目标对话状态。`);
+}
+
+export async function sendCursorDesktopMessage(
+  threadId: string,
+  text: string,
+  options: { delivery?: CursorDesktopDelivery; isCurrentTarget?: () => boolean } = {},
+): Promise<CursorDesktopSendResult> {
+  if (!text) throw new Error('Cursor Desktop 消息正文不能为空。');
+  const target = await findDesktopTarget(threadId);
+  if (options.isCurrentTarget && !options.isCurrentTarget()) throw new Error('当前 Desktop 绑定已变化，消息未发送。');
+  const requestedDelivery: CursorDesktopDelivery = options.delivery || 'steer';
   const supportsDelivery = target.instance.discovery.protocolVersion >= REALTIME_DESKTOP_BRIDGE_PROTOCOL_VERSION;
+  if (!supportsDelivery && requestedDelivery === 'steer') {
+    throw new Error('Cursor Desktop Bridge v1 不支持 steer；消息未发送。请安装最新 CodeLark Desktop patch 并重启 Cursor。');
+  }
   const response = parseSendResult(await postBridge(target.instance, {
     type: 'sendMessage',
     threadId: target.thread.id,
@@ -295,15 +323,13 @@ export async function sendCursorDesktopMessage(
     // has a running turn and merely queued the composer input. Treat that case
     // as queued so the transcript watcher does not raise a false 2 minute
     // timeout while the previous Desktop turn is still finishing.
-    if (response.status === 'submitted' && target.thread.status === 'running' && requestedDelivery !== 'force') {
+    if (!supportsDelivery && response.status === 'submitted' && target.thread.status === 'running' && requestedDelivery !== 'force') {
       return {
         ...response,
         status: 'queued',
         requestedDelivery,
         actualDelivery: 'queue',
-        warning: supportsDelivery
-          ? response.warning
-          : 'Cursor Desktop Bridge v1 不支持 steer；消息已按旧协议排队。',
+        warning: response.warning,
       };
     }
     return {
@@ -311,9 +337,7 @@ export async function sendCursorDesktopMessage(
       requestedDelivery,
       ...(supportsDelivery ? {} : {
         actualDelivery: response.status === 'queued' ? 'queue' : 'submitted',
-        warning: requestedDelivery === 'steer'
-          ? 'Cursor Desktop Bridge v1 不支持 steer；本次只能使用旧投递语义。'
-          : response.warning,
+        warning: response.warning,
       }),
     };
   }

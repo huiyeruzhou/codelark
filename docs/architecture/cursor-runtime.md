@@ -93,7 +93,7 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 
 - `/provider` 始终报告 `tmux`。Desktop 会话的 `/p tmux` 保持原对话，不重启、不弹 CLI 重启确认、不修改 transport；`/p default` 只清除无关覆盖。CLI 会话保留既有 `/p tmux` 重启行为。`/tmux-screen` 按 transport 读取 Desktop 状态或 CLI 屏幕，provider 字段统一为 `tmux`。
 - `/model <slug>` 和 `/current` 的 CLI 模型选择器保存 session scope 的 `runtime.cursor.model`；保存不会给已有 TUI 注入切换命令。Cursor 原生 TUI 支持 `/model` 选择器，这是 Cursor 的能力，不能与 CodeLark 尚未接入运行中切换混为一谈。`/model <文字>` 会筛选原生选择器，不保证立即应用一个 slug。
-- Desktop 的 `/model`、`/reasoning` 明确说明当前 Bridge 尚未接入模型控制，不保存未应用的覆盖；`/current` 不展示 CLI 模型目录和无效的 model/effort 控件，旧卡片提交相关变更时整份表单不写入。Cursor Desktop UI 本身可以切模型；当前原生 Desktop Bridge v1 仅接受 `listThreads`、`sendMessage`，发送 parser 只保留 threadId/text/force，单纯附加 model 字段不会生效。项目可选 realtime v2 协议也没有模型切换请求。
+- Desktop 的 `/model`、`/reasoning` 明确说明当前 Bridge 尚未接入模型控制，不保存未应用的覆盖；`/current` 不展示 CLI 模型目录和无效的 model/effort 控件，旧卡片提交相关变更时整份表单不写入。Cursor Desktop UI 本身可以切模型；当前原生 Desktop Bridge v1 仅接受 `listThreads`、`sendMessage`，发送 parser 只保留 threadId/text/force，单纯附加 model 字段不会生效。项目可选 Desktop v3 控制协议也没有模型切换请求。
 - `/set cursorDefaultModel` 和管理 UI 保存默认配置，遵守上述新建/恢复边界。`/model default` 在 CLI 路径只删除 session override；新建 CLI 会话仍可能使用上层默认或内置 `gpt-5.3-codex`，不能笼统理解为所有启动都省略 `--model`。
 - CLI 路径的 `/model`、`/current` 及全局 `/set` 共用 `agent models` 返回的目录，但不展示其 `current/default` 标记，也不根据它们预选模型或定位页码。配置 slug 在目录中时才预选；无覆盖或自定义 slug 不在目录中时不伪造已选值。
 - **模型目录不等于账号可用权限。** 2026-10-09 实测目录包含用户确认被管理员禁用的 Fable；原生 TUI 选择器没有该选项，但用启动参数仍可显示该名称。启动成功和名称显示都不是生成请求获准的证明，未发起生成请求的实验不能称为“模型可用”。当前 CLI 目录文本不提供管理员禁用标记，因此 CodeLark 明确提示实际使用受账号权限限制，不根据目录推断权限，也不硬编码某个模型的禁用状态。
@@ -113,10 +113,10 @@ Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`�
 
 1. `/t` 从 Desktop conversation index 识别出的会话写入 `provider=tmux, transport=desktop`，保留原 thread UUID。读取旧 `provider=desktop` 时按 Desktop transport 兼容，启动或再次选择时迁移为新结构；没有 Desktop thread id 的 fresh session 使用 CLI transport。
 2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
-3. 输入使用 `sendMessage` 单次提交。v1 接受 `submitted` 或 `queued`，v2 还可返回 `steered`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不改走 CLI/ACP。
+3. 输入使用 `sendMessage` 单次提交，显式 `delivery=steer`，不受 CLI 的 `--force` 权限设置影响。运行中追加绕过本地轮次排队、复用原输出 observer；Desktop 原生将该消息的 queue item 提升为 steer。v1 不支持 steer，因此发送前报错，不悄悄改为排队；v2/v3 返回 `submitted`、`queued` 或 `steered`，实际降为 queued 必须展示原生 warning，不重发。无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不改走 CLI/ACP。
 4. provider 在提交前同时记录 transcript EOF，并订阅按 Cursor logs root 共享的异步 hook tailer。tailer 用递归 `fs.watch` 唤醒一次串行异步 reconcile，并保留低频异步 fallback 防止平台漏报、合并事件或 log rotation；它只维护一份文件 offset、半包尾部和内存事件 ring，不随并发 turn 重复扫描。`afterAgentThought.text` 作为弱化引用逐条进入正文历史；超过 2000 字符时完整放入默认收起的思考面板，不截断内容。footer 只保留简短的“正在思考”，并用 thought hook 的真实 reasoning model variant 更新模型；`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新同一个工具块的开始与结果。工具 hook 的 base model 不回退卡片模型，`beforeShellExecution` / `afterShellExecution` 也不生成会抢在工具块前面的泛化 footer。其他 conversation 和 baseline 之前的历史都不会发出。
 5. provider 同时从发送前 transcript EOF 续读回答正文与终态。`queued` 时上一轮可能先产出 hooks、assistant 和 `turn_ended`，因此在本次新 turn 被 transcript 识别前丢弃这些旧 hook；旧 turn 终态不能结束本轮。hook 工具以名称和输入关联 transcript 的合成 ID，最终 transcript 结果只更新已有工具，不新建重复项。
-6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。用户停止等待时会明确说明 Desktop 中已提交的 turn 仍可能继续。可选 v2 事件提供更直接的 snapshot/finish/stop/error 信号，但 v1 无需修改 Cursor.app 也具备上述实时卡片能力。
+6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。`/stop` 及 Stop 按钮通过 v3 `stopThread` 调用已绑定 agent 的原生 `abortChatAndWait()`，并持有引用直到请求完成，不依赖本地 active task，也不向物理 tmux 发按键。确认只表示 `interrupt-requested`；observer 保持读取，终态仍以原生事件/transcript 为准。v1/v2 不支持 Stop 时明确报错，不能将本地 abort 描述为后端停止。v2+ 事件提供 snapshot/finish/stop/error 信号。
 
 Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能力由 Cursor 自己的版本/账号 feature gate 控制；开关不存在时 CodeLark 不能代替 Cursor 开启，只能保持显式不可用。
 
@@ -154,3 +154,8 @@ CodeLark 自己也使用 `/...` 命令，因此原生 Cursor 命令通过 `/tmux
 - Codex、Claude Code 与 Kimi Code 既有 routing、session 和 mirror 行为保持不变。
 
 共享 hook tailer 按实际读取字节推进游标，单次异步读取最多 256 KiB，剩余增量继续异步调度。每个文件保留未完成的 hook 标题、JSON 和 UTF-8 解码状态，避免跨次写入丢失中文或思考内容；文件轮转时重置解析状态。
+
+
+### Desktop 控制协议安装
+
+原生 Cursor 3.22.12 的 discovery 是 v1，不具备 steer/Stop。`codelark cursor-desktop-patch install` 在校验两个 bundle 锚点和语法后备份并安装 v3；已装 v2 可以直接升级，restore 恢复上一次安装前的文件。必须重启 Cursor，直到 discovery 公告 v3，控制能力才生效；也必须部署包含对应请求逻辑的 CodeLark bridge。安装文件成功不代表正在运行的进程已升级。普通断开输出订阅或 bridge 退出不应自动终止用户的 Desktop 任务，明确的 Stop 才调用原生取消服务。
