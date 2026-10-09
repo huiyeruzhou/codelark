@@ -87,7 +87,7 @@ import {
   extractCursorModelPageArg,
   sessionCursorModelOverride,
 } from './cursor-model-picker.js';
-import { resolveCursorExecutionProvider } from '../session/cursor-provider-identity.js';
+import { resolveCursorCapabilities } from '../session/cursor-provider-identity.js';
 import {
   handleEveryCommand,
 } from './every.js';
@@ -259,7 +259,7 @@ async function buildCurrentCommandRichCardWithCursorModels(
   if (!session) return card;
   const section = options.configSection || options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
   if (section !== 'cursor') return card;
-  if (resolveCursorExecutionProvider(session) === 'desktop') return attachCursorDesktopModelNotice(card);
+  if (resolveCursorCapabilities(session).modelCatalog === 'unavailable') return attachCursorDesktopModelNotice(card);
   try {
     const models = await listCursorAvailableModels();
     return attachCursorModelPickerControls({
@@ -391,6 +391,8 @@ async function handleCurrentConfigFormCommand(options: {
 
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const submittedSection = parseCurrentConfigSectionArg(options.args) || activeRuntime;
+  const cursorModelConfiguration = submittedSection === 'cursor'
+    ? resolveCursorCapabilities(session).modelConfiguration : undefined;
   const responses: string[] = [];
   const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const service = createConfigService({ migrate: false });
@@ -425,7 +427,7 @@ async function handleCurrentConfigFormCommand(options: {
     const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
     const configPath = settingConfigPath(definition);
-    if (submittedSection === 'cursor' && resolveCursorExecutionProvider(session) === 'desktop'
+    if (cursorModelConfiguration === 'external'
       && (configPath === 'runtime.cursor.model' || configPath === 'runtime.cursor.reasoningEffort')) {
       const currentValue = definition.read(currentConfig);
       const changesValue = rawValue

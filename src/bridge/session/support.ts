@@ -56,7 +56,7 @@ import {
   getGlobalWorkspaceRoot,
 } from './global-config.js';
 import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
-import { resolveCursorExecutionProvider } from './cursor-provider-identity.js';
+import { resolveCursorCapabilities } from './cursor-provider-identity.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
@@ -423,15 +423,16 @@ export function resolveKimiRuntimeConfig(session?: BridgeSession | null, binding
 
 export function resolveCursorRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): CursorRuntimeConfig {
   const { config } = scopedConfigForRuntime(binding, session);
-  const desktop = resolveCursorExecutionProvider(session) === 'desktop';
+  const capabilities = resolveCursorCapabilities(session);
+  const configuresModelAtLaunch = capabilities.modelConfiguration === 'process-launch';
   return {
     runtime: 'cursor',
-    provider: desktop ? 'desktop' : 'tmux',
+    provider: capabilities.provider,
     // Desktop owns its conversation model. The bridge protocol has no model
     // override or model-query field, so do not claim or force the CLI default.
-    model: desktop ? undefined : config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL,
+    model: configuresModelAtLaunch ? config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL : undefined,
     force: config.runtime.cursor.force === true,
-    ...(!desktop && config.runtime.cursor.reasoningEffort ? { reasoningEffort: config.runtime.cursor.reasoningEffort } : {}),
+    ...(configuresModelAtLaunch && config.runtime.cursor.reasoningEffort ? { reasoningEffort: config.runtime.cursor.reasoningEffort } : {}),
   };
 }
 
@@ -446,7 +447,7 @@ export function resolveCursorInvocationModel(
   session?: BridgeSession | null,
   options: { resuming: boolean } = { resuming: false },
 ): string | undefined {
-  if (resolveCursorExecutionProvider(session) === 'desktop') return undefined;
+  if (resolveCursorCapabilities(session).modelConfiguration !== 'process-launch') return undefined;
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const model = config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL;
   if (!options.resuming) return model;
@@ -459,7 +460,7 @@ export function resolveDisplayedCursorModel(
   session?: BridgeSession | null,
   binding?: ChannelChat | null,
 ): string {
-  if (resolveCursorExecutionProvider(session) === 'desktop') return '跟随 Cursor Desktop';
+  if (resolveCursorCapabilities(session).modelConfiguration === 'external') return '跟随 Cursor Desktop';
   const { effective, config } = scopedConfigForRuntime(binding, session);
   const configured = config.runtime.cursor.model.trim();
   if (configured && effective.provenance.get('runtime.cursor.model')?.source === 'session') return configured;
