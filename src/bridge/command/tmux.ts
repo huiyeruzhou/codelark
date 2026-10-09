@@ -1,3 +1,4 @@
+import { resolveCursorTransport } from '../session/cursor-transport.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
 import type { ChannelChat, OutboundRichCard } from '../../domain/index.js';
 import type { StructuredStreamingUiActionButton } from '../../channels/contracts.js';
@@ -711,7 +712,7 @@ async function buildCursorDesktopStatusResponse(
   if (!sessionId) {
     const text = buildCommandFields(
       'Cursor Desktop 后端状态',
-      [['Provider', 'desktop'], ['Cursor session', '未绑定']],
+      [['Provider', 'tmux'], ['Cursor session', '未绑定']],
       ['当前会话尚未绑定 Cursor Desktop thread。'],
       markdown,
     );
@@ -735,7 +736,7 @@ async function buildCursorDesktopStatusResponse(
   const text = buildCommandFields(
     'Cursor Desktop 后端状态',
     [
-      ['Provider', 'desktop'],
+      ['Provider', 'tmux'],
       ['Cursor session', sessionId],
       ['后端状态', backendStatus],
       ['标题', thread?.title || summary?.title],
@@ -838,6 +839,9 @@ async function ensureRuntimeTmuxSessionForProvider(
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
   if (runtimeProvider.provider !== 'tmux') {
     return { target: configuredTarget || undefined, commands: [], recovered: false };
+  }
+  if (runtimeProvider.runtime === 'cursor' && resolveCursorTransport(session) === 'desktop') {
+    return { target: undefined, commands: [], recovered: false, error: '当前 Cursor 会话由桌面对话接收输入，请直接发送普通消息。' };
   }
   if (runtimeProvider.runtime === 'claude') {
     const claudeSessionId = getSessionClaudeSessionId(session) || undefined;
@@ -1475,7 +1479,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
 
       const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-      if (runtimeProvider.runtime === 'cursor' && runtimeProvider.provider === 'desktop') {
+      if (runtimeProvider.runtime === 'cursor' && resolveCursorTransport(session) === 'desktop') {
         const initial = await buildCursorDesktopStatusResponse(
           session,
           binding,

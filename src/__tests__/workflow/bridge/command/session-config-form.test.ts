@@ -26,6 +26,7 @@ function fixture() {
     await handleBridgeCommand(adapter, msg, text, {
       getActiveTask: () => ({ abortController }),
       diagnoseSessionHealth: async () => null, diagnoseAllActiveSessions: async () => [],
+      restartCursorTmuxSession: async () => assert.fail('Desktop commands must never start a CLI TUI'),
     });
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
     assert.equal(abortController.signal.aborted, false);
@@ -70,5 +71,21 @@ it('Desktop Cursor cards omit unsupported model controls and stale forms cannot 
   for (const form of forms) {
     assert.match((await f.command('/current-config cursor', form)).text, /配置未保存.*Desktop Bridge 接口尚未接入/u);
     assert.deepEqual(f.service.snapshot(f.scope).config, before, 'reject the entire stale form before saving any field');
+  }
+});
+
+it('Desktop /p tmux keeps the active conversation and public provider without a restart confirmation', async () => {
+  const f = fixture();
+  f.store.updateSession(f.session.id, {
+    runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'desktop-p-thread', provider: 'tmux', transport: 'desktop' } },
+  });
+  const before = f.store.getSession(f.session.id)?.runtime;
+  for (const command of ['/provider', '/p tmux', '/p default']) {
+    const result = await f.command(command);
+    assert.match(result.text, /Provider[\s\S]*tmux/u);
+    assert.match(result.text, /当前会话由 Cursor Desktop 管理/u);
+    assert.doesNotMatch(result.text, /改用|重新启动|确认重启/u);
+    assert.equal(result.richCard, undefined);
+    assert.deepEqual(f.store.getSession(f.session.id)?.runtime, before);
   }
 });

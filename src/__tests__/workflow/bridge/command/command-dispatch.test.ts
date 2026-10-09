@@ -4931,7 +4931,7 @@ enabled = true
 
     releaseRestart.resolve();
     await provider;
-    assert.match(sent.at(-1)?.text || '', /已切换 Cursor Provider/);
+    assert.match(sent.at(-1)?.text || '', /Cursor Provider · tmux 已启动/);
   });
 
   it('does not let a delayed provider tmux startup write back after clear rebinds the chat', async () => {

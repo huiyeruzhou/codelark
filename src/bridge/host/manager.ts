@@ -122,7 +122,7 @@ import {
 } from '../mirror/suppression.js';
 import { mirrorReadPosition, type BridgeMirrorSubscription } from '../mirror/subscription-state.js';
 import { SessionRegistryService } from '../session/registry.js';
-import { migrateCursorDesktopSessionIdentities } from '../session/cursor-provider-identity.js';
+import { migrateCursorDesktopSessionIdentities, resolveCursorTransport } from '../session/cursor-transport.js';
 import {
   buildAdapterConfigFingerprint,
 } from '../../channels/adapter-runtime/sync-plan.js';
@@ -454,7 +454,7 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
   if (!session) return;
   if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-  if (runtimeProvider.provider !== 'tmux') return;
+  if (runtimeProvider.provider !== 'tmux' || resolveCursorTransport(session) === 'desktop') return;
   const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
   if (!tmuxSessionName) return;
   const exists = await tmuxCore.hasSession(tmuxSessionName);
@@ -2959,7 +2959,8 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!session) return false;
   if (session.runtime?.codex?.appServerEndpoint) return getCodexAppServerSession(session.id)?.direct === true;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-  return runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty';
+  return resolveCursorTransport(session) !== 'desktop'
+    && (runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty');
 }
 
 function resolveInboundCommandText(rawText: string): string {
@@ -3176,7 +3177,7 @@ function adapterSessionLane(msg: InboundMessage, category: 'channel-event' | 'ca
     const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
     if (!session) return null;
     const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-    if (runtimeProvider.provider !== 'tmux') return null;
+    if (runtimeProvider.provider !== 'tmux' || resolveCursorTransport(session) === 'desktop') return null;
     const activeRuntime = getSessionActiveRuntime(session) || 'codex';
     return {
       sessionId: binding.bridgeSessionId,
@@ -4243,7 +4244,7 @@ async function sendAgentMessageToSession(options: {
       }
     }
   }
-  if (effectiveRuntimeProvider?.provider === 'tmux') {
+  if (effectiveRuntimeProvider?.provider === 'tmux' && resolveCursorTransport(options.session) !== 'desktop') {
     await handleCommand(adapter, msg, `/tmux ${options.prompt}`, {
       scopedBinding: syntheticBinding,
       tmuxProviderAutoForward: true,

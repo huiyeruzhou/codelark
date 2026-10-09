@@ -279,9 +279,9 @@ describe('Cursor tmux provider helpers', () => {
 
     const sessions = listCursorSessionFileSummaries();
     assert.deepEqual(sessions.map((session) => session.sessionId), [legacyId, modernId, cliId]);
-    assert.equal(sessions.find((session) => session.sessionId === cliId)?.provider, 'tmux');
-    assert.equal(sessions.find((session) => session.sessionId === modernId)?.provider, 'desktop');
-    assert.equal(sessions.find((session) => session.sessionId === legacyId)?.provider, 'desktop');
+    assert.equal(sessions.find((session) => session.sessionId === cliId)?.transport, 'cli');
+    assert.equal(sessions.find((session) => session.sessionId === modernId)?.transport, 'desktop');
+    assert.equal(sessions.find((session) => session.sessionId === legacyId)?.transport, 'desktop');
     assert.equal(sessions.find((session) => session.sessionId === modernId)?.filePath, modernTranscript);
     assert.match(sessions.find((session) => session.sessionId === modernId)?.storePath || '', /store\.db$/);
     assert.equal(sessions.find((session) => session.sessionId === modernId)?.title, 'Desktop modern chat');

@@ -87,7 +87,7 @@ import {
   extractCursorModelPageArg,
   sessionCursorModelOverride,
 } from './cursor-model-picker.js';
-import { resolveCursorCapabilities } from '../session/cursor-provider-identity.js';
+import { resolveCursorCapabilities } from '../session/cursor-transport.js';
 import {
   handleEveryCommand,
 } from './every.js';

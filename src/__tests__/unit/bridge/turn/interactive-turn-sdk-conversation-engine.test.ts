@@ -27,6 +27,7 @@ import {
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { CODELARK_HOME } from '../../../../configuration/paths.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import {
   getSessionKimiCwd,
   getSessionKimiSessionId,
@@ -165,6 +166,40 @@ describe('buildInlineToolBlock', () => {
 });
 
 describe('interactive-turn sdk-conversation-engine tool expansion', () => {
+  for (const transport of ['cli', 'desktop'] as const) {
+    it(`passes tmux identity with ${transport} transport and the matching model policy to the runtime`, async () => {
+      resetBridgeTestState();
+      const calls: StreamChatParams[] = [];
+      const llm: LLMProvider = { streamChat(params) {
+        calls.push(params);
+        return new ReadableStream({ start(controller) {
+          controller.enqueue(sseEvent('status', { session_id: 'bound-cursor-thread' }));
+          controller.enqueue(sseEvent('text', 'reply'));
+          controller.enqueue(sseEvent('result', { session_id: 'bound-cursor-thread' }));
+          controller.close();
+        } });
+      } };
+      const store = initBridgeTestContext({ settings: makeBridgeSettings(), llm });
+      const session = store.createSession('Cursor transport', 'default');
+      store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: {
+        sessionId: 'bound-cursor-thread', provider: 'tmux', transport,
+      } } });
+      createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, {
+        runtime: { cursor: { provider: 'tmux', model: 'configured-model', reasoningEffort: 'high' } },
+      });
+      const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: `cursor-${transport}`, bridgeSessionId: session.id });
+      await processMessage(binding, 'hello', undefined, undefined, undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, createTestSdkConversationRuntime(store, llm));
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0]?.cursorProvider, 'tmux');
+      assert.equal(calls[0]?.cursorTransport, transport);
+      assert.equal(calls[0]?.cursorSessionId, 'bound-cursor-thread');
+      assert.equal(calls[0]?.model, transport === 'cli' ? 'configured-model' : undefined);
+      assert.equal(calls[0]?.cursorReasoningEffort, transport === 'cli' ? 'high' : undefined);
+      assert.equal(store.getSession(session.id)?.runtime?.cursor?.transport, transport);
+    });
+  }
+
   it('keeps provider status reasoning out of answer text when a status handler is available', async () => {
     resetBridgeTestState();
     const partialTexts: string[] = [];

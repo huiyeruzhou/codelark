@@ -62,7 +62,7 @@ export interface BindingSummary {
   chatDisplayName?: string;
   mode: ChannelChatMode;
   codexProvider: 'tmux' | 'default';
-  executionProvider: 'sdk' | 'pty' | 'tmux' | 'desktop' | 'default';
+  executionProvider: 'sdk' | 'pty' | 'tmux' | 'default';
   model: string;
   workingDirectory: string;
   currentTargetLabel: string;
@@ -193,7 +193,7 @@ function getSessionCodexProvider(
 function getSessionExecutionProvider(
   session: BridgeSession | null | undefined,
   binding?: ChannelChat | null,
-): 'sdk' | 'pty' | 'tmux' | 'desktop' | 'default' {
+): 'sdk' | 'pty' | 'tmux' | 'default' {
   if (!session) return 'default';
   return resolveEffectiveRuntimeProvider(session, binding).provider;
 }

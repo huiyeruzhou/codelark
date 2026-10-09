@@ -4,7 +4,7 @@
 
 Cursor Agent CLI 会话由 CodeLark 在 provider-owned tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入 chat metadata 与 transcript JSONL，CodeLark 从 transcript 读取结构化输出，不解析终端屏幕的 ANSI/局部重绘。
 
-Cursor Desktop 已有对话使用 `cursor:desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，并从同一 transcript 读取输出。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 provider；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
+Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，并从同一 transcript 读取输出。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 transport；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
 
 ## 官方证据
 
@@ -44,7 +44,7 @@ Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 
 - `globalStorage/state.vscdb` 的 `composerHeaders`：新版 Desktop 会话的 workspace；
 - `workspaceStorage/*/state.vscdb` 中的 `composer.composerData` 和同目录 `workspace.json`：旧版 composer 会话与 workspace 的映射。
 
-列表把 Desktop 与 `~/.cursor/chats` 的 CLI 会话按 conversation id 合并；同一 id 同时存在时以 Desktop index 的 title/cwd/provider 身份为准，同时保留 CLI `store.db` 供结构化记录核验。无法可靠恢复 cwd，或原 workspace 已不存在的残留索引不会展示。Desktop 会话不会再通过 `agent --resume <chatId>` 恢复；这会建立第二个 writer。若此前没有 transcript，CodeLark 会在 Desktop Bridge 提交首条新输入后等待同一 chat id 的 transcript 出现，再开始读取输出。
+列表把 Desktop 与 `~/.cursor/chats` 的 CLI 会话按 conversation id 合并；同一 id 同时存在时以 Desktop index 的 title/cwd/transport 身份为准，同时保留 CLI `store.db` 供结构化记录核验。无法可靠恢复 cwd，或原 workspace 已不存在的残留索引不会展示。Desktop 会话不会再通过 `agent --resume <chatId>` 恢复；这会建立第二个 writer。若此前没有 transcript，CodeLark 会在 Desktop Bridge 提交首条新输入后等待同一 chat id 的 transcript 出现，再开始读取输出。
 
 可读 transcript 位于：
 
@@ -67,20 +67,20 @@ Cursor 后台活动还可能连续写入只有 `<timestamp>…</timestamp>` 的 
 
 ## 模型配置与实际生效边界
 
-模型由执行 provider 决定，不能仅凭 CodeLark 保存成功或卡片上的 `model:` 判断已经切换。
+模型应用能力由当前会话的内部 transport 决定，不能仅凭 CodeLark 保存成功或卡片上的 `model:` 判断已经切换。
 
 ### 执行入口与能力契约
 
-Cursor Desktop 和 CLI 是同一 runtime 下的两个执行 adapter，具有各自的传输协议和会话生命周期。Bridge 先通过 `resolveCursorExecutionProvider` 区分来源与执行入口：来源为 Desktop 的 thread 仍可显式选择 CLI 执行，不能只读持久化的来源标签。
+Cursor 对外只有一个 provider：`tmux`，identity 固定为 `cursor:tmux`。`CursorTmuxProvider` 内部区分 `desktop` / `cli` 两种 transport，分别使用 Desktop Bridge 和官方 TUI。`resolveCursorTransport` 根据已绑定会话的来源选择传输方式；provider 配置不能将 Desktop thread 改走 CLI。
 
-`runtime/cursor/capabilities.ts` 定义当前集成的 `CursorProviderCapabilities`；`resolveCursorCapabilities` 在解析实际执行入口后返回该契约。`/model`、`/reasoning`、`/current` 表单和执行参数构造共享它，不再各自维护“Desktop 是否支持配置”的判断。
+`runtime/cursor/capabilities.ts` 定义当前集成的 `CursorCapabilities`；`resolveCursorCapabilities` 在解析会话 transport后返回该契约。`/model`、`/reasoning`、`/current` 表单和执行参数构造共享它，不再各自维护“Desktop 是否支持配置”的判断。
 
-| 执行入口 | `modelCatalog` | `modelConfiguration` |
+| 内部 transport（provider 均为 `tmux`） | `modelCatalog` | `modelConfiguration` |
 | --- | --- | --- |
-| Desktop | `unavailable`：没有会话级模型目录接口 | `external`：模型和 effort 由 Desktop 管理，CodeLark 不写假应用配置 |
-| CLI/tmux | `cli`：读取独立 CLI 模型目录 | `process-launch`：模型和 effort 在启动进程时传入，复用 TUI 不会重新应用 |
+| `desktop` | `unavailable`：没有会话级模型目录接口 | `external`：模型和 effort 由 Desktop 管理，CodeLark 不写假应用配置 |
+| `cli` | `cli`：读取独立 CLI 模型目录 | `process-launch`：模型和 effort 在启动进程时传入，复用 TUI 不会重新应用 |
 
-契约表达的是 **CodeLark 已接入的能力**，不是 Cursor 原生 UI 的全部能力，也不是账号授权。目录、保存的配置和本轮运行回报是三个不同的数据来源；管理员是否允许某个模型必须由权限证据确认。未来接入 Desktop 模型控制或运行中 TUI 切换时，需要同时实现对应 adapter 操作及同一 thread 的应用结果确认，再扩展能力契约；不能只打开前端控件或增加一个 provider 分支。
+契约表达的是 **CodeLark 已接入的能力**，不是 Cursor 原生 UI 的全部能力，也不是账号授权。目录、保存的配置和本轮运行回报是三个不同的数据来源；管理员是否允许某个模型必须由权限证据确认。未来接入 Desktop 模型控制或运行中 TUI 切换时，需要同时实现对应 transport 操作及同一 thread 的应用结果确认，再扩展能力契约；不能只打开前端控件或新增可选 provider。
 
 | 执行场景 | CodeLark 如何传 model | 生效模型由谁控制 |
 | --- | --- | --- |
@@ -91,6 +91,7 @@ Cursor Desktop 和 CLI 是同一 runtime 下的两个执行 adapter，具有各�
 
 ### 配置入口与模型目录
 
+- `/provider` 始终报告 `tmux`。Desktop 会话的 `/p tmux` 保持原对话，不重启、不弹 CLI 重启确认、不修改 transport；`/p default` 只清除无关覆盖。CLI 会话保留既有 `/p tmux` 重启行为。`/tmux-screen` 按 transport 读取 Desktop 状态或 CLI 屏幕，provider 字段统一为 `tmux`。
 - `/model <slug>` 和 `/current` 的 CLI 模型选择器保存 session scope 的 `runtime.cursor.model`；保存不会给已有 TUI 注入切换命令。Cursor 原生 TUI 支持 `/model` 选择器，这是 Cursor 的能力，不能与 CodeLark 尚未接入运行中切换混为一谈。`/model <文字>` 会筛选原生选择器，不保证立即应用一个 slug。
 - Desktop 的 `/model`、`/reasoning` 明确说明当前 Bridge 尚未接入模型控制，不保存未应用的覆盖；`/current` 不展示 CLI 模型目录和无效的 model/effort 控件，旧卡片提交相关变更时整份表单不写入。Cursor Desktop UI 本身可以切模型；当前原生 Desktop Bridge v1 仅接受 `listThreads`、`sendMessage`，发送 parser 只保留 threadId/text/force，单纯附加 model 字段不会生效。项目可选 realtime v2 协议也没有模型切换请求。
 - `/set cursorDefaultModel` 和管理 UI 保存默认配置，遵守上述新建/恢复边界。`/model default` 在 CLI 路径只删除 session override；新建 CLI 会话仍可能使用上层默认或内置 `gpt-5.3-codex`，不能笼统理解为所有启动都省略 `--model`。
@@ -101,7 +102,7 @@ Cursor Desktop 和 CLI 是同一 runtime 下的两个执行 adapter，具有各�
 ### 尚未接入或仍需改善的行为
 
 - Desktop 模型控制需要扩展 Bridge 的请求解析、主进程路由及 renderer 模型服务，并在切换后读取同一 thread 的状态确认应用；本次修正没有新增该控制接口，也没有修改 Cursor.app。
-- Cursor hook 可以同时给出 `model=<模型>-high` 与 `model_id=<基础模型>`，另一些 hook 只有基础模型的 `model`。当前 Desktop provider 从 `afterAgentThought` 更新模型，不再让工具 hook 的基础模型覆盖思考 variant；仅凭不同原始 hook 的后缀差异不能断言切换了模型或思考级别。
+- Cursor hook 可以同时给出 `model=<模型>-high` 与 `model_id=<基础模型>`，另一些 hook 只有基础模型的 `model`。当前 Desktop transport 从 `afterAgentThought` 更新模型，不再让工具 hook 的基础模型覆盖思考 variant；仅凭不同原始 hook 的后缀差异不能断言切换了模型或思考级别。
 - `/tmux-screen` 的 Desktop 状态优先读取最近 hook，其次是持久化 summary，最后回退到显示策略。最近记录不能证明一个新轮次的模型；审计时应关联 conversation ID、generation ID 和时间，优先核对 `beforeSubmitPrompt` 等原始运行记录。
 
 2026-10-09 对生产版本的取证发现：session 保存模型 A 后，下一轮仍通过 Desktop 的 `sendMessage` 提交且没有 model 参数；同一 generation 的 `beforeSubmitPrompt` 回报模型 B，旧卡片从 A 更新成 B。管理员禁用模型 A 与 CodeLark 未下发模型参数是两项事实，不能推断为 Desktop 收到 A 后自动回退到 B。本次修正消除了无关 CLI current 展示及 Desktop 假成功，尚未实现 Desktop 模型切换或 CLI 运行中模型同步。
@@ -110,9 +111,9 @@ Cursor Desktop 和 CLI 是同一 runtime 下的两个执行 adapter，具有各�
 
 ### Cursor Desktop
 
-1. `/t` 从 Desktop conversation index 识别出的会话写入 `cursor:desktop` identity；它不是全局默认 provider，也不能用于没有 Desktop thread id 的 fresh session。
+1. `/t` 从 Desktop conversation index 识别出的会话写入 `provider=tmux, transport=desktop`，保留原 thread UUID。读取旧 `provider=desktop` 时按 Desktop transport 兼容，启动或再次选择时迁移为新结构；没有 Desktop thread id 的 fresh session 使用 CLI transport。
 2. 发送前读取 `~/.cursor/desktop-bridge/*.json`，验证目录/文件仅当前用户可读、协议版本、live PID、Unix socket 和 64 位 hex token，再通过 Bearer 鉴权向 `/` 提交 `listThreads`。目标必须是 live 列表中的精确 thread id。
-3. 输入使用 `sendMessage` 单次提交。v1 接受 `submitted` 或 `queued`，v2 还可返回 `steered`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不回退到 tmux/ACP。
+3. 输入使用 `sendMessage` 单次提交。v1 接受 `submitted` 或 `queued`，v2 还可返回 `steered`；无 discovery、stale PID、目标 thread 不存在、不可发送、HTTP 错误或超时都明确失败，绝不改走 CLI/ACP。
 4. provider 在提交前同时记录 transcript EOF，并订阅按 Cursor logs root 共享的异步 hook tailer。tailer 用递归 `fs.watch` 唤醒一次串行异步 reconcile，并保留低频异步 fallback 防止平台漏报、合并事件或 log rotation；它只维护一份文件 offset、半包尾部和内存事件 ring，不随并发 turn 重复扫描。`afterAgentThought.text` 作为弱化引用逐条进入正文历史；超过 2000 字符时完整放入默认收起的思考面板，不截断内容。footer 只保留简短的“正在思考”，并用 thought hook 的真实 reasoning model variant 更新模型；`preToolUse` / `postToolUse` 以 Cursor 原生 `tool_use_id` 更新同一个工具块的开始与结果。工具 hook 的 base model 不回退卡片模型，`beforeShellExecution` / `afterShellExecution` 也不生成会抢在工具块前面的泛化 footer。其他 conversation 和 baseline 之前的历史都不会发出。
 5. provider 同时从发送前 transcript EOF 续读回答正文与终态。`queued` 时上一轮可能先产出 hooks、assistant 和 `turn_ended`，因此在本次新 turn 被 transcript 识别前丢弃这些旧 hook；旧 turn 终态不能结束本轮。hook 工具以名称和输入关联 transcript 的合成 ID，最终 transcript 结果只更新已有工具，不新建重复项。
 6. Desktop Bridge status 负责后端生命周期，hooks 负责实时思考/工具过程，transcript 负责正文与 `turn_ended`。用户停止等待时会明确说明 Desktop 中已提交的 turn 仍可能继续。可选 v2 事件提供更直接的 snapshot/finish/stop/error 信号，但 v1 无需修改 Cursor.app 也具备上述实时卡片能力。
@@ -146,7 +147,7 @@ CodeLark 自己也使用 `/...` 命令，因此原生 Cursor 命令通过 `/tmux
 
 ## 兼容性边界
 
-- Cursor 是独立 `RuntimeAgent`，provider identity 为 `cursor:tmux` 或 `cursor:desktop`。
+- Cursor 是独立 `RuntimeAgent`，provider identity 统一为 `cursor:tmux`；`desktop` / `cli` 仅是内部 transport，不是可切换的 provider。
 - Cursor chat UUID、cwd、transcript 和 tmux 生命周期不复用 Codex/Kimi 的身份字段。
 - Cursor CLI 不存在、未登录、pane 提前退出、Desktop Bridge 不可用、transcript 未出现或长时间无活动时返回明确错误，不回退到其他 runtime/provider。
 - readiness 超时与 pane 退出不是同一种错误：前者保留仍存活的 provider-owned tmux 供观察和下一轮接管，后者按失败进程清理。

@@ -300,6 +300,9 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
   if (!session) return { response: '当前会话不存在。' };
   const task = options.deps.getActiveTask?.(session.id)?.abortController;
   const runtime = getSessionActiveRuntime(session) || 'codex';
+  if (runtime === 'cursor' && resolveCursorRuntimeConfig(session, binding).transport === 'desktop') {
+    return { response: await applyProviderCommand({ ...options, args: 'tmux' }) };
+  }
   if (confirmation) {
     if (!consumeTmuxRestart(confirmation[2]!, binding, session, task)) {
       return { response: '这个重启操作已失效，当前任务未受影响。' };
@@ -549,8 +552,8 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
       return buildCommandFields(
         '当前 Cursor Provider',
         [['Runtime', 'cursor'], ['Provider', currentCursorConfig.provider]],
-        [currentCursorConfig.provider === 'desktop'
-          ? '当前会话来自 Cursor Desktop；发送 `/provider tmux` 可显式改用 Cursor Agent TUI，或 `/provider default` 恢复 Desktop 来源身份。'
+        [currentCursorConfig.transport === 'desktop'
+          ? '当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'
           : '发送 `/provider tmux` 可重新启动官方 TUI，或 `/provider default` 清除会话级覆盖。'],
         options.markdown,
       );
@@ -560,10 +563,10 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
       const defaultCursorConfig = resolveCursorRuntimeConfig(options.store.getSession(session.id), binding);
       scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider default');
       return buildCommandFields(
-        '已恢复默认 Cursor Provider',
+        '已清除 Cursor Provider 配置覆盖',
         [['Runtime', 'cursor'], ['Provider', defaultCursorConfig.provider]],
-        [defaultCursorConfig.provider === 'desktop'
-          ? '已恢复该会话的 Cursor Desktop 来源身份。'
+        [defaultCursorConfig.transport === 'desktop'
+          ? '当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'
           : '当前会话使用 Cursor Agent tmux。'],
         options.markdown,
       );
@@ -573,6 +576,14 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
         'Cursor Provider 用法',
         [['命令', '`/provider tmux|default` 或 `/p tmux|default`']],
         ['Cursor Agent 当前只支持 tmux Provider。'],
+        options.markdown,
+      );
+    }
+    if (currentCursorConfig.transport === 'desktop') {
+      return buildCommandFields(
+        '当前 Cursor Provider',
+        [['Runtime', 'cursor'], ['Provider', 'tmux']],
+        ['当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'],
         options.markdown,
       );
     }
@@ -630,7 +641,7 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
     setSessionCursorProviderToml(session.id);
     scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider tmux');
     return buildCommandFields(
-      '已切换 Cursor Provider',
+      'Cursor Provider · tmux 已启动',
       [['Runtime', 'cursor'], ['Provider', 'tmux'], ['tmux session', prepared.sessionName]],
       [
         prepared.existed

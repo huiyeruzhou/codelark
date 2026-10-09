@@ -41,6 +41,7 @@ import type {
   KimiProviderChoice,
   KimiThinkingMode,
   CursorProviderChoice,
+  CursorTransport,
   CursorReasoningEffort,
   RuntimeAgent,
   RuntimeProviderChoice,
@@ -56,7 +57,7 @@ import {
   getGlobalWorkspaceRoot,
 } from './global-config.js';
 import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
-import { resolveCursorCapabilities } from './cursor-provider-identity.js';
+import { resolveCursorCapabilities } from './cursor-transport.js';
 
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
@@ -192,6 +193,7 @@ export interface KimiRuntimeConfig {
 export interface CursorRuntimeConfig {
   runtime: 'cursor';
   provider: CursorProviderChoice;
+  transport: CursorTransport;
   model?: string;
   force: boolean;
   reasoningEffort?: CursorReasoningEffort;
@@ -240,7 +242,6 @@ export function hasSessionKimiProviderOverride(session?: BridgeSession | null): 
 export function getSessionCursorProviderOverride(session?: BridgeSession | null): CursorProviderChoice | undefined {
   const tomlProvider = getSessionTomlOverride<CursorProviderChoice>(session, 'runtime.cursor.provider');
   if (tomlProvider === 'tmux') return 'tmux';
-  if (session?.runtime?.activeRuntime === 'cursor' && session.runtime.cursor?.provider === 'desktop') return 'desktop';
   return undefined;
 }
 
@@ -428,6 +429,7 @@ export function resolveCursorRuntimeConfig(session?: BridgeSession | null, bindi
   return {
     runtime: 'cursor',
     provider: capabilities.provider,
+    transport: capabilities.transport,
     // Desktop owns its conversation model. The bridge protocol has no model
     // override or model-query field, so do not claim or force the CLI default.
     model: configuresModelAtLaunch ? config.runtime.cursor.model.trim() || DEFAULT_CURSOR_MODEL : undefined,

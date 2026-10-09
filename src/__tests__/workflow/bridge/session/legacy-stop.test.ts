@@ -63,6 +63,15 @@ function fixture(runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' = 'co
     replaceSend: (replacement: typeof send) => { send = replacement; } };
 }
 
+it('does not interrupt a stale physical tmux target for a Desktop-backed cursor:tmux session', async () => {
+  const f = fixture('cursor');
+  f.store.updateSession(f.session.id, { runtime: { cursor: { provider: 'tmux', transport: 'desktop' } } });
+  assert.equal(getProviderOwnedRuntimeTmuxTarget(f.store.getSession(f.session.id), f.binding), undefined);
+  const result = await f.stop();
+  assert.equal(result.method, 'idle');
+  assert.deepEqual(f.sent, []);
+});
+
 it('explicit /stop reaches its bound tmux runtime after health reconcile loses a manual turn', async () => {
   const f = fixture();
   f.health.observeBridgeMirrorRecords(f.session.id, f.session.id, [{

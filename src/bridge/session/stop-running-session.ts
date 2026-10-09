@@ -1,3 +1,4 @@
+import { resolveCursorTransport } from './cursor-transport.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
 import { getSessionClaudeSessionId, getSessionCodexThreadId, getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
 import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
@@ -32,7 +33,7 @@ export function getProviderOwnedRuntimeTmuxTarget(
 ): { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' } | undefined {
   if (!session || session.id !== binding.bridgeSessionId) return undefined;
   const provider = resolveEffectiveRuntimeProvider(session, binding);
-  if (provider.provider !== 'tmux') return undefined;
+  if (provider.provider !== 'tmux' || resolveCursorTransport(session) === 'desktop') return undefined;
   if (provider.runtime === 'codex'
     && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id))) return undefined;
   const sessionName = getSessionRuntimeTmuxSessionName(session);
@@ -55,7 +56,7 @@ function tmuxInterruptTarget(session: BridgeSession | null | undefined, binding:
   // before its attachment metadata has been written. Do not infer an idle target.
   if (!session || session.id !== binding.bridgeSessionId || !hasActiveTask || getSessionRuntimeTmuxSessionName(session)) return undefined;
   const provider = resolveEffectiveRuntimeProvider(session, binding);
-  if (provider.provider !== 'tmux') return undefined;
+  if (provider.provider !== 'tmux' || resolveCursorTransport(session) === 'desktop') return undefined;
   const sessionName = provider.runtime === 'kimi' ? kimiTmuxSessionName(session.id)
     : provider.runtime === 'zcode' ? zcodeTmuxSessionName(session.id) : undefined;
   return sessionName ? { sessionName, runtime: provider.runtime } : undefined;

@@ -412,7 +412,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
     start(controller) {
       void (async () => {
         const sessionId = params.cursorSessionId?.trim();
-        if (!sessionId) throw new Error('Cursor Desktop provider 只能用于已绑定的 Desktop thread。');
+        if (!sessionId) throw new Error('Cursor Desktop 连接需要已绑定的桌面对话。');
         const known = findCursorSessionFileById(sessionId, params.workingDirectory);
         const initialFilePath = known?.filePath || (params.workingDirectory
           ? getCursorTranscriptCandidates(sessionId, params.workingDirectory)
@@ -497,7 +497,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
   });
 }
 
-export class CursorDesktopProvider implements LLMProvider {
+export class CursorDesktopTransport implements LLMProvider {
   streamChat(params: StreamChatParams): ReadableStream<string> {
     return streamCursorDesktop(params);
   }
