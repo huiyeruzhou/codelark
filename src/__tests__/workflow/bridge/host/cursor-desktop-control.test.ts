@@ -2,6 +2,7 @@ import '../../../setup/test-setup.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { it } from 'node:test';
@@ -14,6 +15,9 @@ import { sseEvent } from '../../../../runtime/sse.js';
 it('Desktop follow-up bypasses an unfinished observer and Stop button reaches the same native thread', async (t) => {
   manager.resetStateForTests();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-desk-control-'));
+  const socketPath = process.platform === 'win32'
+    ? String.raw`\\.\pipe\codelark-cursor-${randomUUID()}`
+    : path.join(root, 'bridge.sock');
   fs.chmodSync(root, 0o700);
   const previous = process.env.CURSOR_DESKTOP_BRIDGE_DIR;
   process.env.CURSOR_DESKTOP_BRIDGE_DIR = root;
@@ -32,9 +36,12 @@ it('Desktop follow-up bypasses an unfinished observer and Stop button reaches th
       }
     });
   });
-  await new Promise<void>(resolve => server.listen(path.join(root, 'bridge.sock'), resolve));
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
   fs.writeFileSync(path.join(root, 'instance.json'), JSON.stringify({ protocolVersion: 3, pid: process.pid,
-    socketPath: path.join(root, 'bridge.sock'), token: 'a'.repeat(64), appName: 'Cursor', appVersion: 'test', userDataDir: root, createdAt: Date.now() }), { mode: 0o600 });
+    socketPath, token: 'a'.repeat(64), appName: 'Cursor', appVersion: 'test', userDataDir: root, createdAt: Date.now() }), { mode: 0o600 });
   let controller: ReadableStreamDefaultController<string> | undefined;
   let streams = 0;
   const store = initBridgeTestContext({ llm: { streamChat: () => {

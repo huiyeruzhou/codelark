@@ -134,6 +134,8 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 
 这些测试证明 bridge 与 Codex/Claude/Kimi provider 的协议边界稳定：事件流、session identity、tmux 生命周期、CLI 可执行文件、模型列表和错误事件。Codex 只发布 tmux provider，app-server 作为自动优先执行后端另行测试；旧 SDK/PTY 实现的隔离测试只保留兼容价值，不再代表可选运行路径。配置迁移测试仍可保留旧 `sdk/pty` 值，防止读取历史配置时损坏数据。
 
+Cursor Desktop 的本地 HTTP bridge 测试在 macOS/Linux 使用 Unix socket，在 Windows 使用每次测试独立生成的命名管道；两端均通过 discovery 中的 `socketPath` 连接，保持 send/steer/stop 和模型切换断言一致。Windows 不能直接监听临时目录中的 `.sock` 文件路径。
+
 | 测试文件 | 关注点 |
 | --- | --- |
 | `codex-provider.test.ts` | 已退出路由的 Codex SDK/SSE 适配层隔离兼容测试。 |

@@ -2,6 +2,7 @@ import '../../../setup/test-setup.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -41,7 +42,9 @@ describe('Cursor Desktop provider', () => {
     previousQueuedIdleTimeout = process.env.CODELARK_CURSOR_DESKTOP_QUEUED_IDLE_TIMEOUT_MS;
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-cursor-desktop-'));
     bridgeDir = path.join(root, 'desktop-bridge');
-    socketPath = path.join(root, 'bridge.sock');
+    socketPath = process.platform === 'win32'
+      ? String.raw`\\.\pipe\codelark-cursor-${randomUUID()}`
+      : path.join(root, 'bridge.sock');
     fs.mkdirSync(bridgeDir, { mode: 0o700 });
     fs.chmodSync(bridgeDir, 0o700);
     process.env.CURSOR_DESKTOP_BRIDGE_DIR = bridgeDir;
