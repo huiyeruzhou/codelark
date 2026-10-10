@@ -1,3 +1,4 @@
+import { prepareTextAttachmentPrompt } from '../local-attachments.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -627,7 +628,7 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
             runtime: 'cursor',
             sessionName,
             send: async () => {
-              const result = await tmuxCore.injectPromptIntoPane(targetPane, params.prompt);
+              const result = await tmuxCore.injectPromptIntoPane(targetPane, prepareTextAttachmentPrompt(params));
               await waitForCursorInputSubmitted(targetPane, (elapsedMs) => {
                 controller.enqueue(sseEvent('status', {
                   reasoning: `输入已写入 Cursor；工作区索引可能仍在进行，正在确认提交，已等待 ${Math.floor(elapsedMs / 1_000)}s。`,

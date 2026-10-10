@@ -1,4 +1,6 @@
 import '../../../setup/test-setup.js';
+import { CodexAppServerLifecycle } from '../../../../runtime/codex/app-server-lifecycle.js';
+import { closeCodexAppServerSessions, prepareCodexAppServerSession } from '../../../../runtime/codex/app-server-registry.js';
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -250,53 +252,42 @@ describe('bridge-manager model prompt context', () => {
     ].join('\n'));
   });
 
-  it('asks tmux users to quote the original attachment with an instruction', async () => {
+  it('submits image and file attachments to the bound native thread without starting an SDK card', async (t) => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(CONFIG_TOML_PATH, { force: true });
     const store = new JsonFileStore(makeSettings());
-    initBridgeContext({
-      store,
-      llm: noopLlm,
-      permissions: noopPermissions,
-      lifecycle: noopLifecycle,
-    });
+    initBridgeContext({ store, llm: { streamChat: () => assert.fail('must not start SDK turn') }, permissions: noopPermissions, lifecycle: noopLifecycle });
     _testOnly.resetStateForTests();
-
-    const address = { channelType: 'feishu-default', chatId: 'chat-tmux-attachment' } as const;
-    const binding = router.createBinding(address, '/tmp/tmux-attachment');
-    createConfigService({ migrate: false, env: {} }).set(
-      { kind: 'session', sessionId: binding.bridgeSessionId },
-      { runtime: { codex: { provider: 'tmux' } } },
-    );
-    const sent: OutboundMessage[] = [];
-    const adapter: any = {
-      channelType: 'feishu-default',
-      provider: 'feishu',
-      send: async (message: OutboundMessage) => {
-        sent.push(message);
-        return { ok: true, messageId: 'notice-tmux-attachment' };
-      },
+    t.after(async () => { await closeCodexAppServerSessions(); _testOnly.resetStateForTests(); });
+    t.mock.method(CodexAppServerLifecycle.prototype, 'ensureThread', async () => 'attachment-thread');
+    t.mock.method(CodexAppServerLifecycle.prototype, 'snapshot', () => ({ threadId: 'attachment-thread', attached: true, connection: 'ready', activity: 'active', requests: [] }));
+    const submit = t.mock.method(CodexAppServerLifecycle.prototype, 'submit', async () => ({ status: 'steered', threadId: 'attachment-thread' }));
+    const address = { channelType: 'feishu-default', chatId: 'chat-native-attachment' };
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-attachment-'));
+    t.after(() => fs.rmSync(workDir, { recursive: true, force: true }));
+    const binding = router.createBinding(address, workDir);
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { codex: { provider: 'sdk' } } });
+    store.updateSession(binding.bridgeSessionId, { runtime: { activeRuntime: 'codex', codex: { threadId: 'attachment-thread', appServerEndpoint: 'ws://127.0.0.1:12345' } } });
+    const native = await prepareCodexAppServerSession({ sessionId: binding.bridgeSessionId, threadId: 'attachment-thread', endpoint: 'ws://127.0.0.1:12345' });
+    assert(native); native.direct = true;
+    const adapter: any = { channelType: 'feishu-default', provider: 'feishu',
+      send: async () => assert.fail('no extra notice or SDK response card'),
+      onMessageStart: () => assert.fail('no SDK stream'),
     };
-
-    await _testOnly.handleMessage(adapter, {
-      messageId: 'incoming-tmux-attachment',
-      address,
-      text: '',
-      timestamp: Date.now(),
-      attachments: [{
-        id: 'image-1',
-        name: 'diagram.png',
-        type: 'image/png',
-        size: 4,
-        data: Buffer.from('test').toString('base64'),
-      }],
-    });
-
-    assert.equal(sent.length, 1);
-    assert.equal(sent[0]?.replyToMessageId, 'incoming-tmux-attachment');
-    assert.match(sent[0]?.text || '', /请引用你刚发送的图片或文件消息/);
-    assert.match(sent[0]?.text || '', /告诉模型要如何处理/);
-    assert.doesNotMatch(sent[0]?.text || '', /provider sdk|TUI 内自行读取/);
+    await _testOnly.handleMessage(adapter, { messageId: 'native-image', address, text: '查看附件', timestamp: Date.now(), attachments: [
+      { id: 'image', name: 'same.png', type: 'image/png', size: 4, data: Buffer.from('test').toString('base64') },
+      { id: 'file', name: 'bridge.log', type: 'application/octet-stream', size: 5, data: Buffer.from('hello').toString('base64') },
+    ] });
+    assert.equal(submit.mock.callCount(), 1);
+    const [threadId, input] = submit.mock.calls[0].arguments;
+    assert(input);
+    assert.equal(threadId, 'attachment-thread');
+    assert.equal(input[1].type, 'localImage');
+    assert.equal(fs.readFileSync(input[1].path, 'utf8'), 'test');
+    assert.equal(input[0].type, 'text');
+    assert.match(input[0].text, /bridge\.log/);
+    assert.match(input[0].text, /<local_attachments>/);
+    assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, 'attachment-thread');
   });
 
 });

@@ -21,6 +21,8 @@ import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../dom
 import type { FeishuChannelConfig } from '../../channels/types.js';
 import { feishuSiteToApiBaseUrl } from '../../channels/feishu/site.js';
 import { statSync } from 'node:fs';
+import path from 'node:path';
+import { prepareMessageAttachments, buildConversationPromptText, prepareTextAttachmentPrompt } from '../../runtime/local-attachments.js';
 import crypto from 'node:crypto';
 import { inspect } from 'node:util';
 // Side-effect import: triggers self-registration of all adapter factories
@@ -2967,18 +2969,18 @@ function clearMirrorSubscriptions(): void {
 
 function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   const rawText = msg.text.trim();
-  if (!rawText || msg.channelEvent || msg.callbackData || isBridgeCommandText(rawText)) return false;
+  const hasAttachments = Boolean(msg.attachments?.length);
+  if ((!rawText && !hasAttachments) || msg.channelEvent || msg.callbackData || isBridgeCommandText(rawText)) return false;
   if (isPendingAttachmentConfirmationReply(msg.address, rawText)) return true;
   const currentBinding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (currentBinding && hasAppServerQuestion(currentBinding.bridgeSessionId)) return true;
-  if (msg.attachments && msg.attachments.length > 0) return false;
   const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding || !INTERACTIVE_RUNTIME.getActiveTask(binding.bridgeSessionId)) return false;
   const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
   if (!session) return false;
   if (session.runtime?.codex?.appServerEndpoint) return getCodexAppServerSession(session.id)?.direct === true;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-  return runtimeProvider.provider === 'tmux' || runtimeProvider.provider === 'pty';
+  return runtimeProvider.provider === 'tmux' || (!hasAttachments && runtimeProvider.provider === 'pty');
 }
 
 function resolveInboundCommandText(rawText: string): string {
@@ -5368,10 +5370,17 @@ async function handleMessage(
             if (store.getChannelChat(msg.address.channelType, msg.address.chatId)?.bridgeSessionId !== session.id) {
               throw new Error('准备期间聊天已切换会话，原消息尚未提交。');
             }
-            if (!hasAttachments && (effective.provider === 'tmux' || protocol.direct)) {
-              const prompt = sanitizeInput(appendModelContextText(modelText, msg.contextText)).text;
+            if (effective.provider === 'tmux' || protocol.direct) {
+              const prepared = prepareMessageAttachments({ text: modelText, files: msg.attachments,
+                workDir: getSessionWorkingDirectory(session) || path.join(CODELARK_HOME, 'uploads', session.id) });
+              if (hasAttachments && prepared.persistedFileMeta.length !== msg.attachments!.length) {
+                throw new Error('附件保存失败，消息尚未提交，请重试。');
+              }
+              const prompt = sanitizeInput(appendModelContextText(buildConversationPromptText(
+                modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), prepared.persistedFileMeta), msg.contextText)).text;
               if (prompt) {
-                await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt }], codexAppServerTurnOptions(binding, session));
+                await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
+                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session));
                 addInboundGetReaction(adapter, msg, 'app_server_input_accepted');
               }
               void reconcileMirrorSubscriptions().catch((error) => console.warn('[bridge-manager] app-server mirror:', error));
@@ -5449,13 +5458,6 @@ async function handleMessage(
       ack();
       return;
     }
-    if (hasAttachments) {
-      enqueueBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，图片或文件不会直接转发到 TUI。请引用你刚发送的图片或文件消息，并告诉模型要如何处理。', {
-        replyToMessageId: msg.messageId,
-      });
-      ack();
-      return;
-    }
     if (isBridgeCommandText(rawText)) {
       try {
         await handleCommand(adapter, msg, rawText);
@@ -5473,7 +5475,7 @@ async function handleMessage(
       return;
     }
     const tmuxModelText = appendModelContextText(
-      modelText,
+      prepareTextAttachmentPrompt({ prompt: modelText, files: msg.attachments, workingDirectory: getSessionWorkingDirectory(tmuxProviderSession) || path.join(CODELARK_HOME, 'uploads', tmuxProviderSession.id) }),
       msg.contextText,
     );
     const { text, truncated } = sanitizeInput(tmuxModelText);
@@ -5565,11 +5567,11 @@ async function handleMessage(
   // immediately to its native thread instead of queueing another local turn.
   if (tmuxProviderBinding && tmuxProviderSession && tmuxProviderActiveTask
     && resolveCursorTransport(tmuxProviderSession) === 'desktop'
-    && !hasAttachments && !isBridgeCommandText(rawText) && rawText.trim()) {
+    && !isBridgeCommandText(rawText) && (rawText.trim() || hasAttachments)) {
     const threadId = getSessionCursorSessionId(tmuxProviderSession);
     try {
       if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，消息未发送。');
-      const { text } = sanitizeInput(appendModelContextText(modelText, msg.contextText));
+      const { text } = sanitizeInput(appendModelContextText(prepareTextAttachmentPrompt({ prompt: modelText, files: msg.attachments, workingDirectory: getSessionWorkingDirectory(tmuxProviderSession) || path.join(CODELARK_HOME, 'uploads', tmuxProviderSession.id) }), msg.contextText));
       const sent = await sendCursorDesktopMessage(threadId, text, {
         delivery: 'auto',
         isCurrentTarget: () => {

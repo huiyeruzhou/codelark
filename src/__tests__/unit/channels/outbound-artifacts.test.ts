@@ -310,3 +310,10 @@ describe('outbound-artifacts', () => {
     assert.equal(withRealBlock, [inlineOnly, '', '控制块后的正文。'].join('\n'));
   });
 });
+
+it('normalizes image and file Markdown destinations with angle brackets, encoded spaces and file URLs', () => {
+  const parsed = parseOutboundArtifacts('![图](</tmp/a b.png> "图标题")\n[报告](file:///tmp/report%20one.pdf)\n![转义](/tmp/a\\(1\\).png)');
+  assert.deepEqual(parsed.attachments.map(({ kind, path }) => ({ kind, path })), [
+    { kind: 'image', path: '/tmp/a b.png' }, { kind: 'file', path: '/tmp/report one.pdf' }, { kind: 'image', path: '/tmp/a(1).png' },
+  ]);
+});

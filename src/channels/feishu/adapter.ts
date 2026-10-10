@@ -2188,6 +2188,12 @@ interface FeishuPostParseResult {
 
 interface FeishuFetchedMessageItem {
   message_id?: string;
+  upper_message_id?: string;
+  chat_id?: string;
+  deleted?: boolean;
+  updated?: boolean;
+  create_time?: string;
+  sender?: { id?: string };
   root_id?: string;
   parent_id?: string;
   thread_id?: string;
@@ -2201,7 +2207,7 @@ const POST_ELEMENT_FIELDS: Record<string, Set<string>> = {
   a: new Set(['tag', 'text', 'href', 'style']),
   at: new Set(['tag', 'user_id', 'user_name', 'style']),
   code_block: new Set(['tag', 'language', 'text']),
-  img: new Set(['tag', 'image_key', 'file_key', 'imageKey']),
+  img: new Set(['tag', 'image_key', 'file_key', 'imageKey', 'width', 'height']),
   text: new Set(['tag', 'text', 'style', 'un_escape']),
 };
 
@@ -2330,7 +2336,7 @@ function escapeXmlAttribute(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function formatQuotedMessageContext(messageId: string, messageType: string, body: string): string {
+function formatQuotedMessageContext(messageId: string, messageType: string, body: string, hydrated?: string): string {
   const typeLabel = messageType || 'unknown';
   let rendered = '';
 
@@ -2342,8 +2348,10 @@ function formatQuotedMessageContext(messageId: string, messageType: string, body
   } else if (messageType === 'interactive') {
     rendered = formatInteractiveCardPromptBlock(body);
   } else {
-    rendered = '请使用 lark-cli，以用户身份（--as user）或**当前群聊**中的机器人身份（--as bot）读取这条消息。';
+    const resource = extractFeishuResourceInfo(body);
+    rendered = [resource.name ? `文件名：${resource.name}` : `消息类型：${typeLabel}`, body].filter(Boolean).join('\n');
   }
+  if (hydrated !== undefined) rendered = hydrated;
 
   return [
     `<quoted_message platform="feishu" message_id="${escapeXmlAttribute(messageId)}" message_type="${escapeXmlAttribute(typeLabel)}">`,
@@ -2691,10 +2699,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
   }
 
-  private async fetchMessageById(messageId: string): Promise<FeishuFetchedMessageItem | null> {
-    if (!this.restClient || !messageId.trim()) return null;
+  private async fetchMessagesById(messageId: string): Promise<FeishuFetchedMessageItem[]> {
+    if (!this.restClient || !messageId.trim()) return [];
     const getter = (this.restClient as any).im?.message?.get;
-    if (typeof getter !== 'function') return null;
+    if (typeof getter !== 'function') return [];
     try {
       const res = await this.withFeishuRequestTimeout<{
         data?: { items?: FeishuFetchedMessageItem[] };
@@ -2705,30 +2713,104 @@ export class FeishuAdapter extends BaseChannelAdapter {
           card_msg_content_type: FEISHU_FULL_CARD_MESSAGE_CONTENT_TYPE,
         },
       }));
-      return res?.data?.items?.[0] || null;
+      return res?.data?.items || [];
     } catch (error) {
       console.warn('[feishu-adapter] Failed to fetch quoted message:', messageId, error instanceof Error ? error.message : error);
-      return null;
+      return [];
     }
   }
 
-  private async buildQuotedMessageContext(parentMessageId?: string): Promise<string | undefined> {
+  private async buildQuotedMessageContext(parentMessageId?: string, attachments: FileAttachment[] = [], expectedChatId?: string, downloadAttachments = true): Promise<string | undefined> {
     const messageId = parentMessageId?.trim();
     if (!messageId) return undefined;
-
-    const item = await this.fetchMessageById(messageId);
-    if (!item) {
-      return [
-        `<quoted_message platform="feishu" message_id="${escapeXmlAttribute(messageId)}" message_type="unknown" read_error="true">`,
-        '[无法读取被引用消息内容]',
-        '</quoted_message>',
-      ].join('\n');
+    const items = await this.fetchMessagesById(messageId);
+    const root = items.find((item) => item.message_id === messageId) || items[0];
+    if (!root || (expectedChatId && root.chat_id && root.chat_id !== expectedChatId)) {
+      return `<quoted_message platform="feishu" message_id="${escapeXmlAttribute(messageId)}" message_type="unknown" read_error="true">\n[无法读取被引用消息内容]\n</quoted_message>`;
     }
-
-    const fetchedMessageId = item.message_id || messageId;
-    const messageType = item.msg_type || '';
-    const body = item.body?.content || '';
-    return formatQuotedMessageContext(fetchedMessageId, messageType, body);
+    const children = new Map<string, FeishuFetchedMessageItem[]>();
+    for (const item of items) {
+      if (!item.upper_message_id) continue;
+      const siblings = children.get(item.upper_message_id) || [];
+      siblings.push(item); children.set(item.upper_message_id, siblings);
+    }
+    const seen = new Set<string>();
+    const resources = new Set<string>();
+    let remainingChars = 64_000;
+    let count = 0;
+    let bytes = attachments.reduce((total, file) => total + file.size, 0);
+    const render = async (item: FeishuFetchedMessageItem, depth: number): Promise<string> => {
+      const id = item.message_id || messageId;
+      if (seen.has(id)) return '[重复或循环的合并消息已跳过]';
+      if (depth > 8 || count >= 50 || remainingChars <= 0) return '[合并消息过长，其余内容未展开]';
+      seen.add(id); count++;
+      const type = item.msg_type || 'unknown';
+      const body = item.body?.content || '';
+      let content: string | undefined;
+      if (item.deleted) content = '[消息已撤回或删除]';
+      else if (type === 'merge_forward') {
+        const entries = children.get(id) || [];
+        const rendered: string[] = [];
+        for (const child of entries) {
+          if (count >= 50 || remainingChars <= 0) { rendered.push('[合并消息过长，其余内容未展开]'); break; }
+          rendered.push(await render(child, depth + 1));
+        }
+        content = rendered.length ? `<merged_messages>\n${rendered.join('\n')}\n</merged_messages>` : '[合并消息未返回可读取的子消息]';
+      } else {
+        const resourceRefs = (value: string): Array<{ key: string; kind: string; name?: string }> => {
+          if (type === 'post') return parseFeishuPostContent(value).imageKeys.map((key) => ({ key, kind: 'image' }));
+          if (!['image', 'file', 'audio', 'video', 'media'].includes(type)) return [];
+          const resource = extractFeishuResourceInfo(value);
+          return resource.fileKey ? [{ key: resource.fileKey, kind: type, name: resource.name }] : [];
+        };
+        const keys = resourceRefs(body);
+        let originalKeys: ReturnType<typeof resourceRefs> | undefined;
+        if (item.upper_message_id && keys.length && downloadAttachments && resources.size < 20 && bytes < MAX_FILE_SIZE) {
+          // Merged children retain original message IDs but contain different resource keys.
+          // Resolve the original only inside this chat; never assume merged keys are downloadable.
+          const original = (await this.fetchMessagesById(id)).find((candidate) => candidate.message_id === id
+            && !candidate.upper_message_id && !candidate.deleted && !candidate.updated && candidate.msg_type === type
+            && Boolean(expectedChatId) && candidate.chat_id === expectedChatId);
+          if (original) {
+            const refs = resourceRefs(original.body?.content || '');
+            if (refs.length === keys.length) originalKeys = refs;
+          }
+        }
+        const notes: string[] = [];
+        for (const [index, resource] of keys.entries()) {
+          if (!downloadAttachments) break;
+          const key = `${id}:${resource.key}`;
+          if (resources.has(key)) continue;
+          if (attachments.length >= 20 || resources.size >= 20 || bytes >= MAX_FILE_SIZE) { notes.push('[附件总量超限，未继续下载]'); break; }
+          resources.add(key);
+          // Feishu message-resource/get rejects merged children with 234043.
+          // Preserve their identity without claiming the bytes were attached.
+          if (item.upper_message_id && !originalKeys) {
+            notes.push(`合并转发附件：${resource.name || resource.key}（${resource.kind}）。飞书资源接口不支持下载合并转发子消息；需要直接发送附件，或引用非合并的原始附件消息。`);
+            continue;
+          }
+          const download = originalKeys?.[index] || resource;
+          const file = await this.downloadResource(id, download.key, download.kind, download.name);
+          if (!file) { notes.push(`附件下载失败：${resource.name || resource.key}；原消息 ID：${id}`); continue; }
+          if (bytes + file.size > MAX_FILE_SIZE) { notes.push(`附件总量超限，未附加：${file.name}`); continue; }
+          attachments.push(file); bytes += file.size;
+          notes.push(`已附加${file.type.startsWith('image/') ? '图片' : '文件'}：${file.name}（${file.type}，${file.size} 字节）`);
+        }
+        if (notes.length) {
+          const rendered = type === 'post' ? parseFeishuPostContent(body).extractedText : type === 'image' ? '引用的图片' : body;
+          content = [rendered, ...notes].filter(Boolean).join('\n');
+        }
+      }
+      if (type !== 'merge_forward') {
+        const full = formatQuotedMessageContext(id, type, body, content);
+        const suffix = '\n[引用内容过长，已截断]\n</quoted_message>';
+        const clipped = full.length > remainingChars ? full.slice(0, Math.max(0, remainingChars - suffix.length)) + suffix : full;
+        remainingChars -= full.length;
+        return clipped;
+      }
+      return formatQuotedMessageContext(id, type, body, content);
+    };
+    return render(root, 0);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────
@@ -7047,7 +7129,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const attachments: FileAttachment[] = [];
     let contextPromise: Promise<string | undefined> | null = null;
     const getContextPromise = () => {
-      contextPromise ||= this.buildQuotedMessageContext(msg.parent_id);
+      contextPromise ||= this.buildQuotedMessageContext(msg.parent_id, attachments, chatId, !isBridgeCommandText(commandText));
       return contextPromise;
     };
 
@@ -7119,6 +7201,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         if (attachment) attachments.push(attachment);
         // Don't add fallback text for individual post images — the text already carries context
       }
+    } else if (messageType === 'merge_forward') {
+      text = await this.buildQuotedMessageContext(msg.message_id, attachments, chatId) || '[合并消息读取失败]';
     } else if (messageType === 'interactive') {
       text = [
         '用户发送了一张飞书交互卡片。',
@@ -8037,8 +8121,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       const base64 = buffer.toString('base64');
       const id = crypto.randomUUID();
-      const mimeType = MIME_BY_TYPE[resourceType] || 'application/octet-stream';
-      const ext = resourceType === 'image' ? 'png'
+      const imageType = buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) ? 'jpeg'
+        : buffer.subarray(0, 4).toString() === 'GIF8' ? 'gif'
+        : buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WEBP' ? 'webp' : 'png';
+      const mimeType = resourceType === 'image' ? `image/${imageType}` : MIME_BY_TYPE[resourceType] || 'application/octet-stream';
+      const ext = resourceType === 'image' ? imageType
         : resourceType === 'audio' ? 'ogg'
         : resourceType === 'video' ? 'mp4'
         : 'bin';

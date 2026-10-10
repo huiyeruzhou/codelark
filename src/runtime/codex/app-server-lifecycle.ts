@@ -191,10 +191,13 @@ export class CodexAppServerLifecycle {
     let result: { thread: AppServerThread };
     try { result = await client.request('thread/read', { threadId, includeTurns: true }); }
     catch (error) {
-      if (!(error instanceof AppServerRpcError) || error.code !== -32600 || !(
-        error.message.endsWith('paginated threads do not support thread/read(includeTurns=true)')
-        || error.message.endsWith('ephemeral threads do not support includeTurns')
-        || error.message.endsWith(`thread ${threadId} is not materialized yet; includeTurns is unavailable before first user message`)
+      if (!(error instanceof AppServerRpcError) || !(
+        (error.code === -32601 && error.message.endsWith('list_turns is not supported yet'))
+        || (error.code === -32600 && (
+          error.message.endsWith('paginated threads do not support thread/read(includeTurns=true)')
+          || error.message.endsWith('ephemeral threads do not support includeTurns')
+          || error.message.endsWith(`thread ${threadId} is not materialized yet; includeTurns is unavailable before first user message`)
+        ))
       )) throw error;
       this.assertAttached(state, client);
       result = await client.request('thread/read', { threadId, includeTurns: false });

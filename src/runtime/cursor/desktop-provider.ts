@@ -1,3 +1,4 @@
+import { prepareTextAttachmentPrompt } from '../local-attachments.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -473,7 +474,7 @@ export function streamCursorDesktop(params: StreamChatParams): ReadableStream<st
             session_id: sessionId,
             ...(context.cwd ? { cwd: context.cwd } : {}),
           }));
-          const sent = await sendCursorDesktopMessage(sessionId, params.prompt, {
+          const sent = await sendCursorDesktopMessage(sessionId, prepareTextAttachmentPrompt(params), {
             delivery: params.cursorDelivery || 'auto',
           });
           controller.enqueue(sseEvent('status', {

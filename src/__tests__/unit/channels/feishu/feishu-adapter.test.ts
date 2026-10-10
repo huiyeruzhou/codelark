@@ -2308,7 +2308,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(inbound.contextText || '', /<\/quoted_message>/);
   });
 
-  it('guides the model to parse unsupported quoted Feishu messages with lark-cli', async () => {
+  it('marks a merged quote with no returned children as unavailable', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -2353,7 +2353,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(inbound);
     assert.equal(inbound.contextText, [
       '<quoted_message platform="feishu" message_id="merge-forward-parent-1" message_type="merge_forward">',
-      '请使用 lark-cli，以用户身份（--as user）或**当前群聊**中的机器人身份（--as bot）读取这条消息。',
+      '[合并消息未返回可读取的子消息]',
       '</quoted_message>',
     ].join('\n'));
   });
@@ -2543,6 +2543,16 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.deepEqual(parsed.warnings, ['暂不支持飞书富文本元素：unsupported_widget']);
   });
 
+  it('accepts image dimensions from Feishu clients without unsupported-content warnings', () => {
+    const parsed = _testOnly.parseFeishuPostContent(JSON.stringify({ content: [[
+      { tag: 'img', image_key: 'screenshot', width: 750, height: 166 },
+      { tag: 'text', text: '看这张图片' },
+    ]] }));
+    assert.deepEqual(parsed.imageKeys, ['screenshot']);
+    assert.equal(parsed.extractedText, '看这张图片');
+    assert.deepEqual(parsed.warnings, []);
+  });
+
   it('downloads Feishu post images concurrently before enqueuing the inbound message', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
@@ -2578,8 +2588,8 @@ describe('feishu-adapter structured streaming regions', () => {
         content: JSON.stringify({
           content: [[
             { tag: 'text', text: '看这两张图' },
-            { tag: 'img', image_key: 'img-first' },
-            { tag: 'img', image_key: 'img-second' },
+            { tag: 'img', image_key: 'img-first', width: 1200, height: 800 },
+            { tag: 'img', image_key: 'img-second', width: 64, height: 64 },
           ]],
         }),
         create_time: String(Date.now()),
@@ -2681,10 +2691,10 @@ describe('feishu-adapter structured streaming regions', () => {
         sender_id: { open_id: 'user-1' },
       },
       message: {
-        message_id: 'msg-merge-forward-1',
+        message_id: 'msg-sticker-1',
         chat_id: 'chat-1',
         chat_type: 'p2p',
-        message_type: 'merge_forward',
+        message_type: 'sticker',
         content: '{}',
         create_time: String(Date.now()),
       },
@@ -2693,11 +2703,11 @@ describe('feishu-adapter structured streaming regions', () => {
     await resolvesWithin(processing);
 
     assert.equal(replies.length, 1);
-    assert.equal(replies[0].path.message_id, 'msg-merge-forward-1');
+    assert.equal(replies[0].path.message_id, 'msg-sticker-1');
     assert.equal(replies[0].data.msg_type, 'text');
     const content = JSON.parse(replies[0].data.content);
     try {
-      assert.match(content.text, /暂不支持直接转发飞书消息类型：merge_forward/);
+      assert.match(content.text, /暂不支持直接转发飞书消息类型：sticker/);
       assert.match(content.text, /请引用这条消息，并告诉模型要如何处理/);
       assert.doesNotMatch(content.text, /不会转发给 Codex|重新发送/);
       assert.equal(await adapter.consumeOne(), null);

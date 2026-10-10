@@ -36,8 +36,8 @@ import {
 } from '../response-assembler.js';
 import {
   buildConversationPromptText,
-  prepareSdkMessageAttachments,
-} from './sdk-attachments.js';
+  prepareMessageAttachments,
+} from '../../../runtime/local-attachments.js';
 import {
   appendStreamPreviewChunk,
   buildInlineToolBlock,
@@ -224,7 +224,7 @@ export async function processMessage(
     const cursorRuntimeConfig = activeRuntime === 'cursor' ? resolveCursorRuntimeConfig(session, binding) : null;
     const zcodeRuntimeConfig = activeRuntime === 'zcode' ? resolveZcodeRuntimeConfig(session, binding) : null;
 
-    const { savedContent, llmFiles, persistedFileMeta } = prepareSdkMessageAttachments({ text, files, workDir });
+    const { savedContent, llmFiles, persistedFileMeta } = prepareMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
 
     const promptText = buildConversationPromptText(text, persistedFileMeta);

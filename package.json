@@ -38,6 +38,7 @@
     "real:setup-wizard:e2e": "tsx scripts/setup-wizard-real-e2e.ts",
     "real:setup-wizard:wizard-e2e": "tsx scripts/setup-wizard-real-wizard-e2e.ts",
     "real:feishu:e2e": "tsx scripts/real-feishu-e2e.ts",
+    "real:feishu:attachments": "tsx scripts/real-feishu-attachments.ts",
     "run": "node dist/cli.mjs run",
     "test": "node scripts/run-test-groups.js",
     "test:serial": "node scripts/run-tests.js",

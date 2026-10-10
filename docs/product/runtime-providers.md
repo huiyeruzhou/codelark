@@ -80,7 +80,7 @@ app-server 直接把结构化事件交给 IM turn。协议不可用时的 tmux �
 
 tmux Provider 的普通文本会先转发到 tmux 中的当前 runtime TUI。Codex tmux 如需自动预创建 `codex_thread_id` 或恢复缺失的 tmux session，启动进度会更新到同一张 Provider 卡片；Claude、Kimi、Cursor 和 ZCode 分别从自身 JSONL、transcript 或 SQLite 同步结构化输出。显式发送 `/p tmux` 时会重建 provider-owned session；Kimi、Cursor 与 ZCode 由各自 provider 负责恢复稳定 session id 和注入输入。`/clear` 和 `/t archive` 会 best-effort 清理记录在 runtime state 中的 tmux provider session。
 
-tmux 兼容路径不把飞书图片或文件的二进制内容直接注入 TUI。用户发送附件后，CodeLark 会提示其引用原附件并补充处理指令；引用的飞书消息 id 和类型会作为模型上下文传入。遇到 `merge_forward` 等 adapter 未直接解析的引用类型时，上下文会明确要求模型使用 `lark-cli` 按消息 id 读取原消息。
+图片和文件沿用当前会话的输入链路。Codex app-server 使用同一 thread 提交图片输入，文件保存后以本地路径交给模型；tmux 文字输入及 Cursor 会将已下载附件的路径交给模型，图片需由模型使用可用的看图工具读取。引用图片、文件或富文本图片时，CodeLark 自动读取并附加资源；合并转发按 `upper_message_id` 展开子消息，直接发送和引用均支持。该能力适用于普通群、私聊与客服话题，不会因附件切换 provider。
 
 相关模块：
 
@@ -88,3 +88,5 @@ tmux 兼容路径不把飞书图片或文件的二进制内容直接注入 TUI�
 - mirror 运行时：[src/bridge/mirror/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/runtime.ts)
 - mirror turn 合并：[src/bridge/mirror/turns.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/turns.ts)
 - mirror 反馈：[src/bridge/mirror/feedback-controller.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/mirror/feedback-controller.ts)
+
+图片、文件、引用和合并消息的具体行为见 [图片与文件](./message-attachments.md)。

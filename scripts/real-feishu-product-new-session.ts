@@ -133,7 +133,7 @@ async function main(): Promise<void> {
   if (botIdentity.botId) mutableAdapter.botIds.add(botIdentity.botId);
   if (botIdentity.openId) mutableAdapter.botIds.add(botIdentity.openId);
 
-  const args = `${groupName} ${workDir}`;
+  const args = `${JSON.stringify(groupName)} ${JSON.stringify(workDir)}`;
   const result = await handleNewSessionCommand({
     adapter,
     msg: {

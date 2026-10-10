@@ -106,6 +106,27 @@ test('completion before start response never resurrects an active turn or drops 
   assert(f.runtime.recordsAfter('thread').records.some((r) => r.content === 'finished'));
 });
 
+test('paginated Desktop without list_turns can stop an active turn and safely stop again when idle', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  let active = true;
+  f.handle((m, socket) => {
+    if (m.method !== 'thread/read') return false;
+    if (m.params.includeTurns) socket.send(JSON.stringify({ id: m.id, error: { code: -32601, message: 'list_turns is not supported yet' } }));
+    else f.respond(m, { thread: { id: 'thread', status: { type: active ? 'active' : 'idle' } } });
+    return true;
+  });
+  assert.equal(await f.runtime.interrupt('thread'), true);
+  assert.equal(f.received.find(m => m.method === 'turn/interrupt').params.turnId, turnId);
+  assert.equal(f.runtime.snapshot('thread').activity, 'active');
+  active = false;
+  f.send('turn/completed', { turn: { id: turnId, status: 'interrupted', items: [] } });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+  assert.equal(await f.runtime.interrupt('thread'), false);
+  assert.equal(f.received.filter(m => m.method === 'turn/interrupt').length, 1);
+  assert.equal(f.received.filter(m => m.method === 'thread/read' && m.params.includeTurns === false).length, 2);
+});
+
 test('late item and plan events cannot revive a terminal turn', async (t) => {
   const f = await fixture(t);
   const turnId = await f.runtime.submit('thread', text);

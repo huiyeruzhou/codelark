@@ -41,7 +41,7 @@ it('Desktop follow-up bypasses an unfinished observer and Stop button reaches th
     streams++;
     return new ReadableStream({ start(c) { controller = c; c.enqueue(sseEvent('status', { session_id: threadId })); } });
   } } });
-  const session = store.createSession('Desktop control', 'model');
+  const session = store.createSession('Desktop control', 'model', undefined, root);
   store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'desktop', sessionId: threadId } } });
   const address = { channelType: 'feishu', chatId: 'cursor-desktop-control' };
   store.upsertChannelChat({ ...address, bridgeSessionId: session.id });
@@ -66,8 +66,22 @@ it('Desktop follow-up bypasses an unfinished observer and Stop button reaches th
   await manager.handleMessage(adapter, followup);
   assert.equal(streams, 1, 'follow-up must not open a second stream');
   assert.deepEqual(requests, [{ type: 'sendMessage', threadId, text: 'change direction', delivery: 'steer' }]);
+  const attachmentFollowup = { ...msg('', 'attachment-followup'), attachments: [
+    { id: 'image', name: 'image.png', type: 'image/png', size: 3, data: Buffer.from('PNG').toString('base64') },
+    { id: 'file', name: 'report.txt', type: 'text/plain', size: 4, data: Buffer.from('FILE').toString('base64') },
+  ] };
+  assert.equal(manager.shouldBypassSessionLock(attachmentFollowup), true, 'image-only input must bypass the unfinished observer');
+  await manager.handleMessage(adapter, attachmentFollowup);
+  assert.equal(streams, 1, 'attachments must not open a second stream');
+  assert.equal(requests[1].threadId, threadId);
+  assert.equal(requests[1].delivery, 'steer');
+  const attachmentPrompt = String(requests[1].text);
+  assert.match(attachmentPrompt, /image\.png/);
+  assert.match(attachmentPrompt, /report\.txt/);
+  const filePaths = [...attachmentPrompt.matchAll(/\bpath="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(filePaths.map(filePath => fs.readFileSync(filePath, 'utf8')), ['PNG', 'FILE']);
   await manager.handleMessage(adapter, { ...msg('', 'stop-button'), callbackData: buildCommandCallbackData('/stop', session.id), callbackMessageId: 'card' });
-  assert.deepEqual(requests[1], { type: 'stopThread', threadId });
+  assert.deepEqual(requests[2], { type: 'stopThread', threadId });
   assert.ok(adapter.sent.some(message => /已向 Cursor Desktop 请求中断/.test(message.text)));
   assert.equal(manager.shouldBypassSessionLock(followup), true, 'Stop acknowledgement must not prematurely remove the observer');
 });

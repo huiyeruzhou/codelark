@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type {
   ManualInputTargetSelector,
@@ -17,8 +18,8 @@ const ASK_BLOCK_REGEX = /^[ \t]*<clk-ask>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ 
 const ASK_BLOCK_OPEN_REGEX = /^[ \t]*<clk-ask>[ \t]*(?=$|[\[{])/im;
 const INPUT_BLOCK_REGEX = /^[ \t]*<clk-input>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-input>[ \t]*$/gim;
 const INPUT_BLOCK_OPEN_REGEX = /^[ \t]*<clk-input>[ \t]*(?=$|[\[{])/im;
-const LOCAL_MARKDOWN_IMAGE_REGEX = /!\[([^\]\n]*)\]\(([^)\n]+)\)/gu;
-const LOCAL_MARKDOWN_FILE_LINK_REGEX = /(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)/gu;
+const LOCAL_MARKDOWN_IMAGE_REGEX = /!\[([^\]\n]*)\]\((<[^>\n]+>|(?:\\.|[^)\\\n])+)\)/gu;
+const LOCAL_MARKDOWN_FILE_LINK_REGEX = /(?<!!)\[([^\]\n]+)\]\((<[^>\n]+>|(?:\\.|[^)\\\n])+)\)/gu;
 
 interface RawSendInstruction {
   type?: unknown;
@@ -225,6 +226,18 @@ function compactBlankLines(text: string): string {
     .trim();
 }
 
+function localMarkdownPath(destination: string): string | null {
+  let value = destination.trim().replace(/\s+["'][^"']*["']$/, '');
+  if (value.startsWith('<') && value.endsWith('>')) value = value.slice(1, -1);
+  if (/^file:/i.test(value)) {
+    try { value = fileURLToPath(value); } catch { return null; }
+  } else {
+    try { value = decodeURIComponent(value); } catch { /* literal percent in a file name */ }
+    value = value.replace(/\\([()\[\] ])/g, '$1');
+  }
+  return (path.isAbsolute(value) || path.win32.isAbsolute(value)) && !/[\r\n\0]/.test(value) ? value : null;
+}
+
 function extractLocalMarkdownAttachments(text: string): {
   text: string;
   attachments: OutboundAttachment[];
@@ -246,8 +259,8 @@ function extractLocalMarkdownAttachments(text: string): {
     if (/^(?: {4}|\t)/u.test(line)) return line;
 
     const withoutLocalImages = line.replace(LOCAL_MARKDOWN_IMAGE_REGEX, (match, altText: string, destination: string) => {
-      const filePath = destination.trim();
-      if (!(path.isAbsolute(filePath) || path.win32.isAbsolute(filePath))) return match;
+      const filePath = localMarkdownPath(destination);
+      if (!filePath) return match;
       attachments.push({
         kind: 'image',
         path: filePath,
@@ -257,8 +270,8 @@ function extractLocalMarkdownAttachments(text: string): {
       return '';
     });
     return withoutLocalImages.replace(LOCAL_MARKDOWN_FILE_LINK_REGEX, (match, _label: string, destination: string) => {
-      const filePath = destination.trim();
-      if (!(path.isAbsolute(filePath) || path.win32.isAbsolute(filePath))) return match;
+      const filePath = localMarkdownPath(destination);
+      if (!filePath) return match;
       attachments.push({
         kind: 'file',
         path: filePath,
