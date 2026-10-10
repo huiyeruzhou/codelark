@@ -17,6 +17,7 @@
 import crypto from 'crypto';
 import { canControlCustomerService, isCustomerServiceChat, parseTopicConversationId, resolveTopicAddress, topicConversationId, type TopicMessage } from './customer-service.js';
 import { isBridgeCommandText } from '../../bridge/command/aliases.js';
+import { editCustomerServiceWhitelist } from './customer-service-admin.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as lark from '@larksuiteoapi/node-sdk';
@@ -43,7 +44,7 @@ import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
 } from './site.js';
-import { fetchFeishuBotIdentity } from './bot-identity.js';
+import { fetchFeishuBotIdentity, readFeishuAppCreator } from './bot-identity.js';
 import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
 import {
   BaseChannelAdapter,
@@ -2420,6 +2421,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private botId: string | null = null;
   private botName: string | null = null;
   private botAvatarUrl: string | null = null;
+  private botCreatorOpenId: string | null = null;
+  private botCreatorLookup: Promise<void> | null = null;
+  private botCreatorRetryAt = 0;
   /** All known bot IDs (open_id, user_id, union_id) for mention matching. */
   private botIds = new Set<string>();
   /** Track last incoming message ID per chat for replying with streaming cards. */
@@ -2760,6 +2764,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Resolve bot identity for @mention detection
     await this.resolveBotIdentity(appId, appSecret, domain);
+    const serviceChat = this.channelConfig.customerServiceChats?.[0];
+    if (serviceChat) await this.prepareControlAuthorization({ channelType: this.channelType, chatId: serviceChat });
 
     this.running = true;
 
@@ -3309,7 +3315,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       if (!chatId) return FALLBACK_TOAST;
       if (!this.isControlAuthorized({ channelType: this.channelType, chatId, userId })) {
-        return { toast: { type: 'error' as const, content: '只有控制白名单用户可以操作客服群的卡片。' } };
+        // Never wait for an API call inside Feishu's 3s callback response window.
+        this.runDetachedEventTask('resolve bot creator', () => this.prepareControlAuthorization({ channelType: this.channelType, chatId }));
+        return { toast: { type: 'error' as const, content: '只有控制白名单用户（留空时为 bot 创始人）可以操作客服群的卡片。' } };
       }
 
       if (String(callbackData).trim() === FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA) {
@@ -6803,9 +6811,61 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return null;
   }
 
-  isControlAuthorized(address: ChannelAddress): boolean {
-    return !isCustomerServiceChat(this.channelConfig, address.chatId)
-      || canControlCustomerService(this.channelConfig, address.userId || '');
+  private customerServiceConfig(): FeishuChannelConfig {
+    // Read the exact channel each time: queued controls and old adapter instances
+    // must see revocations before the periodic adapter restart.
+    return createConfigService({ migrate: false }).snapshot().config.channels
+      .find((channel) => channel.id === this.channelType)?.config || this.channelConfig;
+  }
+
+  async prepareControlAuthorization(address: ChannelAddress, commandText = ''): Promise<void> {
+    const config = this.customerServiceConfig();
+    if (config.customerServiceControlUsers?.length || this.botCreatorOpenId
+      || (!isCustomerServiceChat(config, address.chatId) && !/^\/(?:whitelist|service-admin)(?:\s|$)/i.test(commandText.trim()))) return;
+    if (this.botCreatorLookup) return this.botCreatorLookup;
+    if (Date.now() < this.botCreatorRetryAt || !this.restClient?.application?.application?.get) return;
+    this.botCreatorRetryAt = Date.now() + 60_000;
+    this.botCreatorLookup = (async () => {
+      try {
+        const payload = await this.withFeishuRequestTimeout(this.channelType, 'application.get:creator', async () => {
+          const result = await this.restClient!.application.application.get({ path: { app_id: 'me' },
+            params: { lang: 'zh_cn', user_id_type: 'open_id' } });
+          // The full app response can contain secrets; retain only identity fields.
+          return { code: result.code, data: { app: { app_id: result.data?.app?.app_id, creator_id: result.data?.app?.creator_id } } };
+        }, 10_000);
+        this.botCreatorOpenId = readFeishuAppCreator(payload, this.appId);
+      } catch (error) {
+        console.warn('[feishu-adapter] Cannot resolve bot creator; application:application:self_manage is required:',
+          error instanceof Error ? error.message : 'lookup failed');
+      } finally {
+        this.botCreatorLookup = null;
+      }
+    })();
+    return this.botCreatorLookup;
+  }
+
+  isControlAuthorized(address: ChannelAddress, commandText = ''): boolean {
+    const config = this.customerServiceConfig();
+    const userId = address.userId || '';
+    if (/^\/(?:whitelist|service-admin)(?:\s|$)/i.test(commandText.trim())) {
+      return canControlCustomerService(config, userId, this.botCreatorOpenId);
+    }
+    return !isCustomerServiceChat(config, address.chatId) || canControlCustomerService(config, userId, this.botCreatorOpenId);
+  }
+
+  manageCustomerServiceWhitelist(msg: InboundMessage, args: string): string {
+    const result = editCustomerServiceWhitelist({ config: this.customerServiceConfig(),
+      userId: msg.address.userId || '', args, mentionedUserIds: msg.mentionedUserIds, creatorId: this.botCreatorOpenId });
+    if (result.users) {
+      createConfigService({ migrate: false }).set({ kind: 'home' }, {
+        channels: [{ id: this.channelType, config: { customerServiceControlUsers: result.users } }],
+      });
+      this.channelConfig.customerServiceControlUsers = result.users;
+      getBridgeContext().store.insertAuditLog({ channelType: this.channelType, channelProvider: this.provider,
+        chatId: msg.address.chatId, direction: 'inbound', messageId: msg.messageId,
+        summary: `[CUSTOMER_SERVICE_WHITELIST] actor=${msg.address.userId} users=${result.users.join(',')}` });
+    }
+    return result.text;
   }
 
   private async getTopicMessage(messageId: string): Promise<TopicMessage> {
@@ -6877,7 +6937,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const isGroup = msg.chat_type === 'group';
 
     // Authorization check
-    const customerService = msg.chat_type === 'group' && isCustomerServiceChat(this.channelConfig, chatId);
+    const customerService = msg.chat_type === 'group' && isCustomerServiceChat(this.customerServiceConfig(), chatId);
     if (!customerService && !this.isAuthorized(userId, chatId)) {
       console.warn('[feishu-adapter] Unauthorized message from userId:', userId, 'chatId:', chatId);
       return;
@@ -6951,8 +7011,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     // Track last message ID per chat for typing indicator
     const commandText = this.stripMentionMarkers(msg.message_type === 'text' ? this.parseTextContent(msg.content)
       : msg.message_type === 'post' ? this.parsePostContent(msg.content).extractedText : '');
+    if (isBridgeCommandText(commandText) || commandText.trim().toLowerCase() === '//clear') {
+      await this.prepareControlAuthorization({ channelType: this.channelType, chatId }, commandText);
+    }
     const groupControl = customerService && !msg.root_id && !msg.parent_id
-      && canControlCustomerService(this.channelConfig, userId)
+      && this.isControlAuthorized({ channelType: this.channelType, chatId, userId }, commandText)
       && (isBridgeCommandText(commandText) || commandText.trim().toLowerCase() === '//clear');
     const topic = customerService && !groupControl ? await this.resolveCustomerServiceTopic(chatId, msg) : undefined;
     const conversationId = topic ? topicConversationId(topic) : chatId;
@@ -7069,8 +7132,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       userId,
     };
 
-    if (!this.isControlAuthorized(address) && (isBridgeCommandText(text) || text.trim().toLowerCase() === '//clear')) {
-      await this.sendAsPlainText(conversationId, '客服模式：只有控制白名单用户可以执行控制指令。');
+    if (!this.isControlAuthorized(address, text) && (isBridgeCommandText(text) || text.trim().toLowerCase() === '//clear')) {
+      await this.sendAsPlainText(conversationId, '客服模式：只有控制白名单用户（留空时为 bot 创始人）可以执行控制指令。');
       return;
     }
 
@@ -7079,6 +7142,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       address,
       text: text.trim(),
       timestamp,
+      ...(/^\/(?:whitelist|service-admin)(?:\s|$)/i.test(text.trim()) ? {
+        mentionedUserIds: (msg.mentions || []).filter((mention) =>
+          ![mention.id.open_id, mention.id.user_id, mention.id.union_id].some((id) => id && this.botIds.has(id)))
+          .map((mention) => mention.id.open_id || ''),
+      } : {}),
       attachments: attachments.length > 0 ? attachments : undefined,
       contextText,
     };

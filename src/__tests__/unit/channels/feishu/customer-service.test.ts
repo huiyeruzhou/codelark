@@ -12,8 +12,10 @@ import { JsonFileStore } from '../../../../storage/json-store.js';
 const chatId = 'oc_service';
 const admin = 'ou_admin';
 function adapter(config: Record<string, unknown> = {}) {
-  const result = new FeishuAdapter({ id: 'feishu-default', alias: '客服', provider: 'feishu', enabled: true,
-    config: { customerServiceChats: [chatId], customerServiceControlUsers: [admin], requireMention: true, allowedUsers: [admin], ...config } });
+  const instance = { id: 'feishu-default', alias: '客服', provider: 'feishu' as const, enabled: true,
+    config: { customerServiceChats: [chatId], customerServiceControlUsers: [admin], requireMention: true, allowedUsers: [admin], ...config } };
+  createConfigService({ migrate: false }).set({ kind: 'home' }, { channels: [instance] });
+  const result = new FeishuAdapter(instance);
   (result as any).running = true;
   return result;
 }

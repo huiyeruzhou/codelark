@@ -13,6 +13,17 @@ interface FeishuBotIdentityOptions {
   timeoutMs?: number;
 }
 
+/** Only the queried application's creator is a default controller, never a chat owner. */
+export function readFeishuAppCreator(payload: {
+  code?: number; data?: { app?: { app_id?: string; creator_id?: string } };
+}, appId: string): string {
+  const app = payload.data?.app;
+  if (payload.code !== 0 || !appId || app?.app_id !== appId || !/^ou_[a-zA-Z0-9]+$/.test(app.creator_id || '')) {
+    throw new Error('无法确认当前飞书应用创建者，请检查 application:application:self_manage 权限。');
+  }
+  return app.creator_id!;
+}
+
 function responseError(payload: unknown, fallback: string): Error {
   if (typeof payload === 'object' && payload !== null) {
     const message = (payload as { msg?: unknown; message?: unknown }).msg

@@ -340,7 +340,7 @@ const BACKGROUND_INPUT_LIMIT = 64_000;
 // 保存下一次执行的配置不依赖当前任务结束；只有实际切换执行载体才进入执行队列。
 const SESSION_SETTINGS_COMMANDS = new Set([
   '/current-config', '/current-runtime', '/cd', '/cwd', '/model', '/mode', '/yolo',
-  '/sandbox', '/network', '/reasoning', '/require-at', '/tmux-set',
+  '/sandbox', '/network', '/reasoning', '/require-at', '/whitelist', '/tmux-set',
 ]);
 const SESSION_CONFIG_BARRIER_COMMANDS = new Set([
   '/provider',
@@ -4947,9 +4947,12 @@ async function handleMessage(
     return;
   }
   // Check before every callback/command branch, including trusted local ingress.
-  const controlAuthorized = adapter.isControlAuthorized?.(msg.address) ?? true;
+  if (msg.callbackData || isBridgeCommandText(msg.text) || msg.text.trim().toLowerCase() === '//clear') {
+    await adapter.prepareControlAuthorization?.(msg.address, msg.callbackData ? undefined : msg.text);
+  }
+  const controlAuthorized = adapter.isControlAuthorized?.(msg.address, msg.callbackData ? undefined : msg.text) ?? true;
   if (!controlAuthorized && (msg.callbackData || isBridgeCommandText(msg.text) || msg.text.trim().toLowerCase() === '//clear')) {
-    enqueueBridgeNotice(adapter, msg.address, '客服模式：只有控制白名单用户可以执行控制指令。', { replyToMessageId: msg.messageId });
+    enqueueBridgeNotice(adapter, msg.address, '客服模式：只有控制白名单用户（留空时为 bot 创始人）可以执行控制指令。', { replyToMessageId: msg.messageId });
     ack();
     return;
   }

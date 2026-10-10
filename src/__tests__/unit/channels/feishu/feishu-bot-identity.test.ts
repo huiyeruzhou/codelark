@@ -6,7 +6,18 @@ import test from 'node:test';
 import {
   buildFeishuBotChatAppLink,
   fetchFeishuBotIdentity,
+  readFeishuAppCreator,
 } from '../../../../channels/feishu/bot-identity.js';
+
+test('requires a verified creator open ID from this exact app', () => {
+  assert.equal(readFeishuAppCreator({ code: 0, data: { app: { app_id: 'cli_self', creator_id: 'ou_creator' } } }, 'cli_self'), 'ou_creator');
+  for (const payload of [
+    { code: 99991672 },
+    { code: 0, data: { app: { app_id: 'cli_other', creator_id: 'ou_creator' } } },
+    { code: 0, data: { app: { app_id: 'cli_self' } } },
+    { code: 0, data: { app: { app_id: 'cli_self', creator_id: 'oc_group' } } },
+  ]) assert.throws(() => readFeishuAppCreator(payload, 'cli_self'), /无法确认/);
+});
 
 test('fetches bot identity with tenant credentials without exposing the secret in the URL', async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];

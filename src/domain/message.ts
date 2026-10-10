@@ -20,6 +20,8 @@ export interface InboundMessage {
   address: ChannelAddress;
   text: string;
   timestamp: number;
+  /** Platform-resolved user mentions for control commands; excludes the receiving bot. */
+  mentionedUserIds?: string[];
   callbackData?: string;
   callbackMessageId?: string;
   raw?: unknown;
