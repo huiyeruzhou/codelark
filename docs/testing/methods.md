@@ -136,6 +136,8 @@ long-running 功能不能只测“成功派发 worker”。精炼用户故事至
 
 Cursor Desktop 的本地 HTTP bridge 测试在 macOS/Linux 使用 Unix socket，在 Windows 使用每次测试独立生成的命名管道；两端均通过 discovery 中的 `socketPath` 连接，保持 send/steer/stop 和模型切换断言一致。Windows 不能直接监听临时目录中的 `.sock` 文件路径。
 
+附件出站测试中的 `file://` 链接通过 `pathToFileURL` 从当前平台的绝对路径生成，断言解析后回到原路径；Windows 文件 URL 必须包含盘符或合法 UNC 主机，不能复用 Unix 的 `file:///tmp/...` 夹具。
+
 | 测试文件 | 关注点 |
 | --- | --- |
 | `codex-provider.test.ts` | 已退出路由的 Codex SDK/SSE 适配层隔离兼容测试。 |

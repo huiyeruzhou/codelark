@@ -1,6 +1,8 @@
 import '../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   parseOutboundArtifacts,
@@ -312,8 +314,9 @@ describe('outbound-artifacts', () => {
 });
 
 it('normalizes image and file Markdown destinations with angle brackets, encoded spaces and file URLs', () => {
-  const parsed = parseOutboundArtifacts('![图](</tmp/a b.png> "图标题")\n[报告](file:///tmp/report%20one.pdf)\n![转义](/tmp/a\\(1\\).png)');
+  const reportPath = path.resolve('report one.pdf');
+  const parsed = parseOutboundArtifacts(`![图](</tmp/a b.png> "图标题")\n[报告](${pathToFileURL(reportPath).href})\n![转义](/tmp/a\\(1\\).png)`);
   assert.deepEqual(parsed.attachments.map(({ kind, path }) => ({ kind, path })), [
-    { kind: 'image', path: '/tmp/a b.png' }, { kind: 'file', path: '/tmp/report one.pdf' }, { kind: 'image', path: '/tmp/a(1).png' },
+    { kind: 'image', path: '/tmp/a b.png' }, { kind: 'file', path: reportPath }, { kind: 'image', path: '/tmp/a(1).png' },
   ]);
 });

@@ -2,6 +2,7 @@ import '../../../setup/test-setup.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -25,7 +26,9 @@ describe('Cursor Desktop /tmux-screen status', () => {
       process.env[name] = path.join(root, name.toLowerCase());
     }
     const bridgeDir = process.env.CURSOR_DESKTOP_BRIDGE_DIR!;
-    const socketPath = path.join(root, 'bridge.sock');
+    const socketPath = process.platform === 'win32'
+      ? String.raw`\\.\pipe\codelark-cursor-${randomUUID()}`
+      : path.join(root, 'bridge.sock');
     fs.mkdirSync(bridgeDir, { recursive: true, mode: 0o700 });
     fs.chmodSync(bridgeDir, 0o700);
     server = http.createServer((request, response) => {
