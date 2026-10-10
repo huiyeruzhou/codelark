@@ -111,7 +111,9 @@ export abstract class BaseChannelAdapter {
   abstract isAuthorized(userId: string, chatId: string): boolean;
 
   /** Separate control permissions from ordinary conversation access. */
-  isControlAuthorized(_address: ChannelAddress): boolean { return true; }
+  prepareControlAuthorization?(_address: ChannelAddress, _commandText?: string): Promise<void>;
+  isControlAuthorized(_address: ChannelAddress, _commandText?: string): boolean { return true; }
+  manageCustomerServiceWhitelist?(_msg: InboundMessage, _args: string): string;
 
   onMessageStart?(_chatId: string, _streamKey?: string): void;
   onMessageEnd?(_chatId: string, _streamKey?: string): void;

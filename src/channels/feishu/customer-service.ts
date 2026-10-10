@@ -28,8 +28,13 @@ export function isCustomerServiceChat(config: FeishuChannelConfig, chatId: strin
 }
 
 /** Explicit user IDs only. A group allowlist is never a control permission. */
-export function canControlCustomerService(config: FeishuChannelConfig, userId: string): boolean {
-  return /^ou_[\w]+$/.test(userId) && config.customerServiceControlUsers?.includes(userId) === true;
+export function customerServiceControllers(config: FeishuChannelConfig, creatorId?: string | null): string[] {
+  const configured = config.customerServiceControlUsers || [];
+  return configured.length ? configured : creatorId && /^ou_[a-zA-Z0-9]+$/.test(creatorId) ? [creatorId] : [];
+}
+
+export function canControlCustomerService(config: FeishuChannelConfig, userId: string, creatorId?: string | null): boolean {
+  return /^ou_[\w]+$/.test(userId) && customerServiceControllers(config, creatorId).includes(userId);
 }
 
 export interface TopicMessage {

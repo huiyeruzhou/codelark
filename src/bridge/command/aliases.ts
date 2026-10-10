@@ -14,6 +14,8 @@ export function parseListIndex(raw: string): number | null {
 
 export function resolveCommandAlias(rawCommand: string, args: string): string {
   switch (rawCommand) {
+    case '/service-admin':
+      return '/whitelist';
     case '/require_at':
       return '/require-at';
     case '/check':
@@ -92,6 +94,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/network',
   '/ui',
   '/require-at',
+  '/whitelist',
   '/model',
   '/status',
   '/current',

@@ -18,6 +18,7 @@ function uniqueSorted(values: string[]): string[] {
 }
 
 export const FEISHU_BASE_TENANT_SCOPES: FeishuPermissionRequirement[] = [
+  { scope: 'application:application:self_manage', reason: 'Read this bot application creator as the default customer service controller when the whitelist is empty.' },
   { scope: 'im:message:send_as_bot', reason: 'Send bot text, post, card, file, and permission messages.' },
   { scope: 'im:message:readonly', reason: 'Read message metadata and hydrate quoted messages.' },
   { scope: 'im:message.p2p_msg:readonly', reason: 'Receive direct messages from users.' },
