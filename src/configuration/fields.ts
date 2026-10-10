@@ -473,6 +473,18 @@ export const configFields = [
     formatEnv: (value) => Array.isArray(value) ? value.join(',') : undefined,
   },
   {
+    path: 'channels[].config.customerServiceChats',
+    tomlPath: 'channels[].config.customer_service_chats',
+    scopes: homeOnlyScopes,
+    schema: z.array(z.string().regex(/^oc_[a-zA-Z0-9]+$/)),
+  },
+  {
+    path: 'channels[].config.customerServiceControlUsers',
+    tomlPath: 'channels[].config.customer_service_control_users',
+    scopes: homeOnlyScopes,
+    schema: z.array(z.string().regex(/^ou_[a-zA-Z0-9]+$/)),
+  },
+  {
     path: 'channels[].config.streamingEnabled',
     tomlPath: 'channels[].config.streaming_enabled',
     scopes: homeOnlyScopes,

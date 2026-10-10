@@ -32,6 +32,8 @@ export interface ChannelAddress {
   userId?: string;
   displayName?: string;
   cloudDocument?: CloudDocumentAddress;
+  /** Physical Feishu destination for an isolated topic conversation. */
+  feishuTopic?: { chatId: string; rootMessageId: string; threadId?: string };
 }
 
 export interface InboundChannelEvent {
@@ -62,6 +64,7 @@ export interface ChannelChat {
     cursor?: string;
     zcode?: string;
   };
+  feishuTopic?: ChannelAddress['feishuTopic'];
   cloudDocumentChat?: {
     provider: 'feishu';
     fileToken: string;

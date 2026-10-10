@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { createConfigService } from '../../configuration/service.js';
 import { listBindingsForChat } from '../session/registry.js';
+import { sessionRequiresMention } from '../session/require-mention.js';
 import {
   buildCommandFields,
   formatCommandPath,
@@ -457,7 +458,7 @@ export function buildCurrentCommandRichCard(options: {
   const configScope = { kind: 'session' as const, sessionId: session.id };
   const runtimeConfig = configService.snapshot(configScope).config;
   const configDefinitions = commonSection
-    ? currentSessionCommonSettingDefinitions()
+    ? currentSessionCommonSettingDefinitions().filter((definition) => !binding.feishuTopic || definition.key !== 'requireMention')
     : currentSessionSettingDefinitions(configSection);
   const formSelects = configDefinitions
     .filter((definition) => definition.control === 'select')
@@ -503,6 +504,9 @@ export function buildCurrentCommandRichCard(options: {
     // 飞书每个 section 只直接显示三个字段；后端活动与终端用途分行，
     // 保持所有状态可见，而不改变其他命令卡片的字段预算。
     sections: [
+      ...(commonSection && binding.feishuTopic ? [{ fields: [
+        ['群聊 @bot', `${sessionRequiresMention(options.store, binding) ? 'on' : 'off'}（跟随所属群）`] as [string, string],
+      ] }] : []),
       { fields: [
         ...backendFields.filter(([label]) => label !== '终端用途'),
         ...(backendStatus?.backend === 'app-server' ? [] : [['运行状态', currentTag(formatRuntimeStatus(session), statusColor)] as [string, string]]),
@@ -544,7 +548,9 @@ export function buildCurrentCommandRichCard(options: {
     footer: [
       `当前 agent：${currentTag(runtimeLabel(getSessionActiveRuntime(session) || 'codex'), 'orange')}`,
       commonSection
-        ? '通用配置只修改当前会话的对话名称、工作目录、tmux 展示行数和群聊 @bot 要求，不会切换 agent。留空会删除当前会话覆盖。'
+        ? binding.feishuTopic
+          ? '通用配置修改当前话题的对话名称、工作目录和 tmux 展示行数。是否需要 @ 跟随所属群；使用 /require-at on|off 修改整个群的规则。'
+          : '通用配置只修改当前会话的对话名称、工作目录、tmux 展示行数和群聊 @bot 要求，不会切换 agent。留空会删除当前会话覆盖。'
         : `当前分栏只显示 ${runtimeLabel(configSection as RuntimeAgent)} 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
     ],
   };

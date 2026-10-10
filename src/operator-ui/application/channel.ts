@@ -63,6 +63,10 @@ const uiChannelPayloadSchema = z.object({
   allowedUsers: trimString()
     .transform((value) => value.split(',').map((item) => item.trim()).filter(Boolean))
     .optional(),
+  customerServiceChats: trimString().transform((value) => value.split(',').map((s) => s.trim()).filter(Boolean))
+    .pipe(z.array(z.string().regex(/^oc_[a-zA-Z0-9]+$/))).optional(),
+  customerServiceControlUsers: trimString().transform((value) => value.split(',').map((s) => s.trim()).filter(Boolean))
+    .pipe(z.array(z.string().regex(/^ou_[a-zA-Z0-9]+$/))).optional(),
   streamingEnabled: z.boolean().optional(),
   feedbackMarkdownEnabled: z.boolean().optional(),
   historyMessageLimit: optionalInteger({ min: 1, max: 20, message: '历史消息条数必须在 1 到 20 之间。' }),
@@ -142,6 +146,8 @@ export function mergeChannelInstanceV2(
       appSecret: parsed.appSecret ?? existing?.config.appSecret ?? '',
       site: parsed.site ?? existing?.config.site ?? template.site,
       allowedUsers: parsed.allowedUsers ?? existing?.config.allowedUsers ?? template.allowedUsers,
+      customerServiceChats: parsed.customerServiceChats ?? existing?.config.customerServiceChats ?? [],
+      customerServiceControlUsers: parsed.customerServiceControlUsers ?? existing?.config.customerServiceControlUsers ?? [],
       streamingEnabled: parsed.streamingEnabled ?? existing?.config.streamingEnabled ?? template.streamingEnabled,
       feedbackMarkdownEnabled: parsed.feedbackMarkdownEnabled
         ?? existing?.config.feedbackMarkdownEnabled

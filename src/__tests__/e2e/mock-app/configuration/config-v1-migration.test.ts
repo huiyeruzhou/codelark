@@ -471,6 +471,8 @@ describe('v1 config migration e2e', () => {
         appSecret: 'env-runtime-secret',
         site: 'lark',
         allowedUsers: ['env-user-1', 'env-user-2'],
+        customerServiceChats: [],
+        customerServiceControlUsers: [],
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,
         requireMention: false,

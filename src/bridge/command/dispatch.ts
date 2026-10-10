@@ -424,6 +424,10 @@ async function handleCurrentConfigFormCommand(options: {
 
   const definitions = submittedSection === 'common'
     ? currentSessionCommonSettingDefinitions() : currentSessionSettingDefinitions(submittedSection);
+  if (binding.feishuTopic && definitions.some((definition) => definition.key === 'requireMention'
+    && currentSettingFormValue(formValue, definition) !== undefined)) {
+    return { response: '配置未保存：话题的 @ 规则跟随所属群。请刷新 /current，或使用 /require-at on|off 修改整个群的规则。' };
+  }
   for (const definition of definitions) {
     const rawValue = currentSettingFormValue(formValue, definition);
     if (rawValue === undefined) continue;
