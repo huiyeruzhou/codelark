@@ -17,7 +17,7 @@
 import crypto from 'crypto';
 import { canControlCustomerService, isCustomerServiceChat, parseTopicConversationId, resolveTopicAddress, topicConversationId, type TopicMessage } from './customer-service.js';
 import { isBridgeCommandText } from '../../bridge/command/aliases.js';
-import { editCustomerServiceWhitelist } from './customer-service-admin.js';
+import { editCustomerServiceMode, editCustomerServiceWhitelist, isCustomerServiceManagementCommand } from './customer-service-admin.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as lark from '@larksuiteoapi/node-sdk';
@@ -2947,7 +2947,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     // identity here, after the callback response and before bridge dispatch.
     if (message?.callbackData && message.callbackMessageId
       && !parseTopicConversationId(message.address.chatId)
-      && isCustomerServiceChat(this.channelConfig, message.address.chatId)) {
+      && isCustomerServiceChat(this.customerServiceConfig(), message.address.chatId)) {
       const topic = await this.resolveCustomerServiceTopic(message.address.chatId, await this.getTopicMessage(message.callbackMessageId));
       const conversationId = topicConversationId(topic);
       // Group-level command cards have no topic session; retain their group scope.
@@ -6821,7 +6821,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   async prepareControlAuthorization(address: ChannelAddress, commandText = ''): Promise<void> {
     const config = this.customerServiceConfig();
     if (config.customerServiceControlUsers?.length || this.botCreatorOpenId
-      || (!isCustomerServiceChat(config, address.chatId) && !/^\/(?:whitelist|service-admin)(?:\s|$)/i.test(commandText.trim()))) return;
+      || (!isCustomerServiceChat(config, address.chatId) && !isCustomerServiceManagementCommand(commandText))) return;
     if (this.botCreatorLookup) return this.botCreatorLookup;
     if (Date.now() < this.botCreatorRetryAt || !this.restClient?.application?.application?.get) return;
     this.botCreatorRetryAt = Date.now() + 60_000;
@@ -6847,10 +6847,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
   isControlAuthorized(address: ChannelAddress, commandText = ''): boolean {
     const config = this.customerServiceConfig();
     const userId = address.userId || '';
-    if (/^\/(?:whitelist|service-admin)(?:\s|$)/i.test(commandText.trim())) {
+    if (isCustomerServiceManagementCommand(commandText)) {
       return canControlCustomerService(config, userId, this.botCreatorOpenId);
     }
     return !isCustomerServiceChat(config, address.chatId) || canControlCustomerService(config, userId, this.botCreatorOpenId);
+  }
+
+  manageCustomerServiceMode(msg: InboundMessage, args: string): string {
+    const result = editCustomerServiceMode({ config: this.customerServiceConfig(),
+      address: msg.address, args, creatorId: this.botCreatorOpenId });
+    if (result.chats) {
+      createConfigService({ migrate: false }).set({ kind: 'home' }, {
+        channels: [{ id: this.channelType, config: { customerServiceChats: result.chats } }],
+      });
+      this.channelConfig.customerServiceChats = result.chats;
+      getBridgeContext().store.insertAuditLog({ channelType: this.channelType, channelProvider: this.provider,
+        chatId: msg.address.chatId, direction: 'inbound', messageId: msg.messageId,
+        summary: `[CUSTOMER_SERVICE_MODE] actor=${msg.address.userId} action=${args.trim().toLowerCase()} chats=${result.chats.join(',')}` });
+    }
+    return result.text;
   }
 
   manageCustomerServiceWhitelist(msg: InboundMessage, args: string): string {
@@ -7017,7 +7032,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const groupControl = customerService && !msg.root_id && !msg.parent_id
       && this.isControlAuthorized({ channelType: this.channelType, chatId, userId }, commandText)
       && (isBridgeCommandText(commandText) || commandText.trim().toLowerCase() === '//clear');
-    const topic = customerService && !groupControl ? await this.resolveCustomerServiceTopic(chatId, msg) : undefined;
+    // A mode command inside an existing reply chain keeps its reply destination,
+    // even when that group has not enabled customer service yet.
+    const modeCommandInReply = isGroup && /^\/customer(?:\s|$)/i.test(commandText.trim())
+      && Boolean(msg.root_id || msg.parent_id || msg.thread_id);
+    const topic = (customerService && !groupControl) || modeCommandInReply ? await this.resolveCustomerServiceTopic(chatId, msg) : undefined;
     const conversationId = topic ? topicConversationId(topic) : chatId;
     if (topic) this.lastIncomingMessageId.set(conversationId, msg.message_id);
     this.lastIncomingMessageId.set(chatId, msg.message_id);

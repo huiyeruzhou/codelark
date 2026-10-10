@@ -95,6 +95,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/ui',
   '/require-at',
   '/whitelist',
+  '/customer',
   '/model',
   '/status',
   '/current',
