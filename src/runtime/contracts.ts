@@ -163,6 +163,8 @@ export interface MirrorJsonlSource {
   /** A stable directory watch can observe sidecar creation/removal without changing the read path. */
   watchPath?(filePath: string): string;
   findByThreadId(threadId: string, cwd?: string): MirrorJsonlSourceSummary | null;
+  /** Promote a temporary fallback when the authoritative source becomes available. */
+  refreshSource?(threadId: string, filePath: string, cwd?: string): MirrorJsonlSourceSummary | null;
   /** Refresh live metadata; true requires reconciliation even without file writes. */
   refresh?(threadId: string, filePath: string): Promise<boolean>;
   readDelta(

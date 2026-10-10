@@ -17,6 +17,7 @@ export function buildHelpCommandResponse(): string {
     '- `/his msg [1-20]` 最近消息卡片，可临时指定本次条数',
     '- `/his raw [1-20]` 解析后的纯文本视图，可临时指定本次条数',
     '- `/his json` 直接发送原始 session JSONL 文件（兼容别名：`/his file`）',
+    '- `/sync-history` 查看 Cursor 积压同步选择；`skip` 跳过历史，`20` 查看最近20条回复摘要，在同一卡片中翻页，随后继续实时同步',
     '- `/his limit 12` 修改 `/his msg` 默认返回条数（1-20）',
     '- `/hot-update` 使用当前 Bridge 环境派发本项目热更新，并每 3 秒刷新 hot update log 卡片，只展示最后 100 行；`/hot-update --dry-run` 只检查不执行',
     '',

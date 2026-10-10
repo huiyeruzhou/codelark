@@ -66,6 +66,7 @@ export function readMirrorDeliverableRecords(
   let deliverableRecords: BridgeMirrorRecord[] = [];
   let unknownKinds: string[] = [];
   let recoveredStateRecords: BridgeMirrorRecord[] = [];
+  let reset = false;
 
   const requiresFullRecover = !subscription.cursor.initialized
     || source.readMode === 'snapshot'
@@ -97,6 +98,7 @@ export function readMirrorDeliverableRecords(
       source.runtime === 'cursor',
     );
     subscription.cursor = delta.nextCursor;
+    reset = delta.reset || !previousCursor.initialized;
     // Cursor rewrites its snapshot transcript in place.  Signatures for an
     // already-delivered turn can therefore disappear or change across a
     // Bridge restart, and turn-id recovery alone may return that old turn plus
@@ -167,6 +169,7 @@ export function readMirrorDeliverableRecords(
 
   return {
     records: deliverableRecords,
+    reset,
     recoveredStateRecords,
     unknownKinds,
   };

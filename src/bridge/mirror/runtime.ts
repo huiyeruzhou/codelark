@@ -74,6 +74,7 @@ export interface MirrorRuntimeSession {
       cwd?: string | null;
     };
     cursor?: {
+      transport?: 'cli' | 'desktop';
       sessionId?: string | null;
       cwd?: string | null;
     };
@@ -110,6 +111,7 @@ export interface CreateMirrorRuntimeDeps {
     lifecycle: Pick<CodexAppServerLifecycle, 'recordsAfter' | 'onChange' | 'snapshot'>;
   } | undefined;
   mirrorSource?: MirrorJsonlSource;
+  filterHistorySync?(subscription: BridgeMirrorSubscription, records: BridgeMirrorRecord[], checkpointAt?: string, recovering?: boolean): Promise<{ records: BridgeMirrorRecord[]; hold: boolean; notify?: () => Promise<void> }>;
   runtimeLabel?: string;
   nowIso(): string;
   describeUnknownError(error: unknown): string;
@@ -125,6 +127,7 @@ export interface CreateMirrorRuntimeDeps {
     threadId: string,
     cwd: string | null | undefined,
     context: string,
+    session?: MirrorRuntimeSession,
   ): MirrorJsonlSourceSummary | null;
   hasSessionMirrorSource?(session: MirrorRuntimeSession | null | undefined): boolean;
   syncMirrorSessionStateSafe(sessionId: string, context: string): void;
@@ -347,14 +350,18 @@ export function createMirrorRuntime(
 
     const existing = state.mirrorSubscriptions.get(binding.id);
     const protocol = isProtocolSession(binding.bridgeSessionId, session);
-    const filePath = protocol ? null : existing?.threadId === threadId && existing.filePath
+    const promotedSource = existing?.threadId === threadId && existing.filePath
+      ? mirrorSource.refreshSource?.(threadId, existing.filePath, getSessionMirrorCwd(session) || undefined)
+      : null;
+    const filePath = protocol ? null : promotedSource?.filePath || (existing?.threadId === threadId && existing.filePath
       ? existing.filePath
       : getMirrorSourceSummary(
           mirrorSource,
           threadId,
           getSessionMirrorCwd(session),
           'mirror subscription sync',
-        )?.filePath || null;
+          session,
+        )?.filePath || null);
     const activityTier = getMirrorRegistryBindingActivityTier(binding, {
       activeBindingWindowMs: options.activeBindingWindowMs,
       nowMs: Date.now(),
@@ -463,6 +470,8 @@ export function createMirrorRuntime(
     }
 
     const protocol = isProtocolSession(subscription.sessionId, session);
+    const checkpointAt = subscription.lastReconciledAt || subscription.cursor.lastEventTimestamp || subscription.lastDeliveredAt || undefined;
+    let recovering = false;
     let deliverableRecords: BridgeMirrorRecord[];
     if (protocol) {
       syncProtocolSubscription(subscription);
@@ -487,6 +496,7 @@ export function createMirrorRuntime(
           subscription.threadId,
           getSessionMirrorCwd(session),
           'mirror reconcile',
+          session,
         );
         if (!sourceSummary) {
           subscription.missingThreadPolls += 1;
@@ -528,6 +538,7 @@ export function createMirrorRuntime(
         deps.observeSessionHealthRecords(subscription.sessionId, subscription.threadId, readResult.recoveredStateRecords);
       }
       deliverableRecords = readResult.records;
+      recovering = readResult.reset;
       for (const kind of readResult.unknownKinds) {
         if (subscription.unknownMirrorKindsSeen.has(kind)) continue;
         subscription.unknownMirrorKindsSeen.add(kind);
@@ -557,10 +568,23 @@ export function createMirrorRuntime(
     } else {
       routeResult = { claimed: [], unclaimed: unsuppressedRecords, terminalClaimed: false };
     }
-    const mirrorRecords = routeResult.terminalClaimed
+    let mirrorRecords = routeResult.terminalClaimed
       ? unsuppressedRecords
       : routeResult.unclaimed;
 
+    if (deps.filterHistorySync) {
+      const filtered = await deps.filterHistorySync(subscription, mirrorRecords, checkpointAt, recovering);
+      mirrorRecords = filtered.records;
+      if (filtered.hold) {
+        if (subscription.pendingTurn) deps.stopMirrorStreaming(subscription, 'interrupted');
+        subscription.pendingTurn = null;
+        subscription.pendingDeliveries = [];
+        subscription.bufferedRecords = [];
+        deps.syncMirrorSessionStateSafe(subscription.sessionId, 'mirror history awaiting choice');
+        await filtered.notify?.();
+        return 'processed';
+      }
+    }
     if (mirrorRecords.length > 0) {
       deps.observeSessionHealthRecords(subscription.sessionId, subscription.threadId, mirrorRecords);
     }

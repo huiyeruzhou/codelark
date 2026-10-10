@@ -253,6 +253,7 @@ import {
   type BridgeInteractiveRuntimeState,
 } from './interactive-runtime.js';
 import { createMirrorRuntime, type BridgeMirrorRuntimeState } from '../mirror/runtime.js';
+import { createMirrorHistorySyncController } from '../mirror/history-sync.js';
 import {
   createMirrorFeedbackController,
   type MirrorStructuredStreamStatusConfig,
@@ -2789,6 +2790,7 @@ const KIMI_MIRROR_RUNTIME = createMirrorRuntime(getKimiMirrorState, {
   deliverMirrorTurns,
 });
 
+const CURSOR_MIRROR_SOURCE = createCursorMirrorJsonlSource();
 const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   watchDebounceMs: MIRROR_WATCH_DEBOUNCE_MS,
   danglingThreadRetryLimit: DANGLING_MIRROR_THREAD_RETRY_LIMIT,
@@ -2799,7 +2801,7 @@ const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   activeBindingWindowMs: MIRROR_ACTIVE_BINDING_WINDOW_MS,
   coldReconcileIntervalMs: MIRROR_COLD_RECONCILE_INTERVAL_MS,
 }, {
-  mirrorSource: createCursorMirrorJsonlSource(),
+  mirrorSource: CURSOR_MIRROR_SOURCE,
   runtimeLabel: 'Cursor',
   nowIso,
   describeUnknownError,
@@ -2817,8 +2819,24 @@ const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   ),
   getSessionMirrorThreadId: (session) => getSessionCursorSessionId(session),
   getSessionMirrorCwd: (session) => getSessionCursorCwd(session) || getSessionWorkingDirectory(session),
-  getMirrorSourceSummary: (source, threadId, cwd) => source.findByThreadId(threadId, cwd || undefined),
+  getMirrorSourceSummary: (_source, threadId, cwd, _context, session) => CURSOR_MIRROR_SOURCE.findByThreadId(
+    threadId, cwd || undefined, session?.runtime?.cursor?.transport,
+  ),
   syncMirrorSessionStateSafe,
+  filterHistorySync: createMirrorHistorySyncController({
+    store: () => getBridgeContext().store,
+    checkpoint: (subscription) => syncMirrorSessionState(subscription.sessionId),
+    notify: async (subscription, richCard) => {
+      const adapter = getState().adapters.get(subscription.channelType);
+      if (!adapter) throw new Error('Cursor history choice channel is unavailable');
+      const result = await deliverBridgeNotice(adapter, {
+        channelType: subscription.channelType, chatId: subscription.chatId,
+      }, '历史补发已暂停，请选择同步范围。', {
+        sessionId: subscription.sessionId, audit: false, richCard,
+      });
+      if (!result.ok) throw new Error(result.error || 'Cursor history choice delivery failed');
+    },
+  }),
   filterSuppressedMirrorRecords,
   observeSessionHealthRecords: (sessionId, threadId, records) => {
     SESSION_HEALTH_RUNTIME.observeBridgeMirrorRecords(sessionId, threadId, records);

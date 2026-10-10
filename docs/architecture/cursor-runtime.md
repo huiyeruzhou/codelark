@@ -67,11 +67,26 @@ Cursor 后台活动还可能连续写入只有 `<timestamp>…</timestamp>` 的 
 
 ### Desktop 原生输出与实时生命周期
 
+镜像源优先服从 Bridge 已绑定的 `transport`，不能用会话发现索引覆盖 Desktop/CLI 身份。Desktop 的索引或 workspace 映射缺失时，同 ID 的旧 CLI metadata 可能仍存在；只要原生 conversation 可读，仍读取原生库。原生库临时不可读而退到 transcript 后，每 30 秒检查能否恢复原生读取，避免永久盯住延迟导出的文件。
+
 Desktop direct 与 mirror 共用 `CursorDesktopSessionSource`：读取 `globalStorage/state.vscdb` 的 `cursorDiskKV`，以 user bubble 建立 turn，以 tool bubble ID 关联开始和真实结果。SQLite 主文件和 WAL 均参与变更检测；内存 revision ledger 将原地更新的迟到结果追加到上次读取位置之后，已初始化且签名仍可匹配时不再用消息发送时间水位过滤它。进程重启仍用持久化水位抑制历史重放。Read/Grep 已被 Cursor 清理的正文只说明“未保留完整原始输出”，不重读现在的文件伪造历史结果。
 
 **持久化 `composer.status` 不能决定当前回合结束。** 2026-10-09 真实取证中，root 仍为旧 `aborted`、时间停在用户提交时，但工具持续新增，标准 v1 `listThreads` 返回 `running`。direct 与 mirror 在读取前刷新同一 thread 的实时状态，只有 `completed` / `error` 连续两次且该对话内容不变时才收尾；`running`、等待输入的 `idle`、`unknown` 或查询失败都保留当前回合。状态观察绑定查询前的对话内容，查询中新增用户/工具使旧终态失效；其他对话写同一库不会阻塞本线程收尾。mirror 即使文件字节未变化也检查实时状态。每个 turn 的终态签名固定，已确认关闭的历史修订不重开卡片。
 
 同一 turn 反复创建消息与同一卡片整卡重绘是两个独立问题。Feishu history renderer 现在为工具详情提供稳定 element ID；工具完成只更新标题、边框和正文，新工具追加到已有组，局部请求不写 `expanded` 或替换已有 children。正常连续工具调用不再触发整卡更新；组件能力缺失、结构不兼容、失败或超预算仍沿用既有整卡恢复/continuation。
+
+### 长断档历史补发
+
+Cursor mirror（Desktop 原生库与 transcript 共用）在生成或投递历史卡片之前检查积压。存在超过 2 分钟的记录，且上次实际同步距今至少 30 分钟（无同步位置时看最早积压），或旧记录达到 100 条 / 10 轮回复时，停止自动补发，只发一张“选择历史同步范围”卡。长期空闲后刚到达的新回复不触发此确认。
+
+- **跳过历史**：跳过选择时刻之前的积压，后续新内容继续同步。
+- **最近 20 条回复**：在同一张卡中翻页查看最近 assistant 回复摘要，每页 5 条、从新到旧，每条最多截取 1500 字符；不补工具调用、推理过程或历史 continuation 卡。完整记录仍可在 Cursor 查看。
+- 读取积压、内存缓冲与失败重试队列共用此检查。等待选择时暂停 mirror 输出，并保留最多 20 条最新摘要，不持续堆积投递队列。`/sync-history` 可重新打开选择；也可直接用 `/sync-history skip`、`/sync-history 20`。
+- 读取游标、摘要、选择 ID 与结果落盘；自动提示最多尝试一次，网络超时或重启不会反复发提示。提示发送失败时可以用上述命令恢复。旧按钮校验群绑定、thread 与选择 ID，已处理的选择按钮不再次补发。翻页按钮更新原卡，重启后仍可继续翻页；`/sync-history` 可重开已选的20条。以后再次断档仍会发起新的选择。
+
+选择后的时间水位仅用于游标丢失或源重建时抑制旧记录；正常增量中的同一 turn 新回复/迟到工具结果即使保留旧时间戳也继续交付。
+
+此策略只控制 Cursor mirror 到聊天群的输出，不停止 Cursor 任务，不改变 provider/transport，不拦截已由 direct turn 接管的记录。其他 runtime 的同步策略保持原状。
 
 ## 模型配置与实际生效边界
 

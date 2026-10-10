@@ -101,6 +101,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/health',
   '/doctor',
   '/history',
+  '/sync-history',
   '/hot-update',
   '/codex-desktop-restart',
   '/shell',
