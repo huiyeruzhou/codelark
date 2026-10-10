@@ -168,6 +168,8 @@ export function legacyConfigToConfigPatch(config: Config): ConfigPatch {
       appSecret: (channel.config as FeishuChannelConfig).appSecret ?? '',
       site: (channel.config as FeishuChannelConfig).site ?? 'feishu',
       allowedUsers: (channel.config as FeishuChannelConfig).allowedUsers ?? [],
+      customerServiceChats: (channel.config as FeishuChannelConfig).customerServiceChats ?? [],
+      customerServiceControlUsers: (channel.config as FeishuChannelConfig).customerServiceControlUsers ?? [],
       streamingEnabled: (channel.config as FeishuChannelConfig).streamingEnabled ?? true,
       feedbackMarkdownEnabled: (channel.config as FeishuChannelConfig).feedbackMarkdownEnabled ?? true,
       requireMention: (channel.config as FeishuChannelConfig).requireMention ?? false,

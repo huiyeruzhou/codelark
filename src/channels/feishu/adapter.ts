@@ -15,6 +15,8 @@
  */
 
 import crypto from 'crypto';
+import { canControlCustomerService, isCustomerServiceChat, parseTopicConversationId, resolveTopicAddress, topicConversationId, type TopicMessage } from './customer-service.js';
+import { isBridgeCommandText } from '../../bridge/command/aliases.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as lark from '@larksuiteoapi/node-sdk';
@@ -2933,8 +2935,21 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   // ── Queue ───────────────────────────────────────────────────
 
-  consumeOne(): Promise<InboundMessage | null> {
-    return this.consumeInboundMessage(this.running);
+  async consumeOne(): Promise<InboundMessage | null> {
+    const message = await this.consumeInboundMessage(this.running);
+    // Feishu callbacks must return within 3s: resolve network-dependent topic
+    // identity here, after the callback response and before bridge dispatch.
+    if (message?.callbackData && message.callbackMessageId
+      && !parseTopicConversationId(message.address.chatId)
+      && isCustomerServiceChat(this.channelConfig, message.address.chatId)) {
+      const topic = await this.resolveCustomerServiceTopic(message.address.chatId, await this.getTopicMessage(message.callbackMessageId));
+      const conversationId = topicConversationId(topic);
+      // Group-level command cards have no topic session; retain their group scope.
+      if (getBridgeContext().store.getChannelChat(this.channelType, conversationId)) {
+        message.address = { ...message.address, chatId: conversationId, feishuTopic: topic };
+      }
+    }
+    return message;
   }
 
   async createGroupChat(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
@@ -3043,7 +3058,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       msg?: string;
       data?: { chat_id?: string; chat_mode?: string; name?: string };
     }>(chatId, 'im.chat.get', () => restClient.im.chat.get({
-      path: { chat_id: chatId },
+      path: { chat_id: parseTopicConversationId(chatId)?.chatId || chatId },
       params: { user_id_type: 'open_id' },
     }));
 
@@ -3084,7 +3099,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       msg?: string;
       data?: { chat_id?: string; name?: string };
     }>(chatId, 'im.chat.update', () => restClient.im.chat.update({
-      path: { chat_id: chatId },
+      path: { chat_id: parseTopicConversationId(chatId)?.chatId || chatId },
       params: { user_id_type: 'open_id' },
       data: { name: groupName },
     }));
@@ -3293,6 +3308,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       });
 
       if (!chatId) return FALLBACK_TOAST;
+      if (!this.isControlAuthorized({ channelType: this.channelType, chatId, userId })) {
+        return { toast: { type: 'error' as const, content: '只有控制白名单用户可以操作客服群的卡片。' } };
+      }
 
       if (String(callbackData).trim() === FEISHU_GROUP_AUTHORIZED_CALLBACK_DATA) {
         this.persistGroupAuthorized();
@@ -3559,19 +3577,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Step 2: Send card as IM message
       const cardContent = JSON.stringify({ type: 'card', data: { card_id: cardId } });
       const sendStartedAt = Date.now();
-      const msgResp = replyToMessageId
-        ? await this.withFeishuRequestTimeout(cardKey, 'im.message.reply:interactive', () => this.restClient!.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: { content: cardContent, msg_type: 'interactive' },
-        }))
-        : await this.withFeishuRequestTimeout(cardKey, 'im.message.create:interactive', () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'interactive',
-            content: cardContent,
-          },
-        }));
+      const msgResp = await this.createImMessage(chatId, 'interactive', cardContent, replyToMessageId);
       const sendMessageMs = Date.now() - sendStartedAt;
 
       const messageId = msgResp?.data?.message_id;
@@ -6490,7 +6496,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
               params: { type: 'file', need_notification: false },
               data: {
                 member_type: 'openchat',
-                member_id: address.chatId,
+                member_id: parseTopicConversationId(address.chatId)?.chatId || address.chatId,
                 perm: 'view',
               },
             }),
@@ -6504,6 +6510,23 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return warnings;
   }
 
+  /** All IM output (including streaming and permission cards) shares topic routing. */
+  private async createImMessage(chatId: string, msgType: string, content: string, replyToMessageId?: string, uuid?: string) {
+    const topic = parseTopicConversationId(chatId);
+    const targetMessageId = topic?.rootMessageId || replyToMessageId;
+    const data = { msg_type: msgType, content, ...(uuid ? { uuid } : {}) };
+    if (targetMessageId) {
+      return this.withFeishuRequestTimeout(chatId, `im.message.reply:${msgType}`, () => this.restClient!.im.message.reply({
+        path: { message_id: targetMessageId },
+        data: { ...data, ...(topic ? { reply_in_thread: true } : {}) },
+      }));
+    }
+    return this.withFeishuRequestTimeout(chatId, `im.message.create:${msgType}`, () => this.restClient!.im.message.create({
+      params: { receive_id_type: 'chat_id' },
+      data: { ...data, receive_id: chatId },
+    }));
+  }
+
   private async sendStructuredMessage(
     chatId: string,
     msgType: string,
@@ -6512,20 +6535,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     uuid?: string,
   ): Promise<SendResult> {
     try {
-      const res = replyToMessageId
-        ? await this.withFeishuRequestTimeout(chatId, `im.message.reply:${msgType}`, () => this.restClient!.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: { msg_type: msgType, content },
-        }))
-        : await this.withFeishuRequestTimeout(chatId, `im.message.create:${msgType}`, () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: msgType,
-            content,
-            ...(uuid ? { uuid } : {}),
-          },
-        }));
+      const res = await this.createImMessage(chatId, msgType, content, replyToMessageId, uuid);
 
       const target = replyToMessageId ? `im.message.reply:${msgType}` : `im.message.create:${msgType}`;
       const apiError = feishuApiErrorFromResponse(res, target);
@@ -6636,19 +6646,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         const cardId = createResp?.data?.card_id;
         if (cardId) {
           const linkedCardContent = JSON.stringify({ type: 'card', data: { card_id: cardId } });
-          const res = replyToMessageId
-            ? await this.withFeishuRequestTimeout(updateKey, 'im.message.reply:rich-command-card', () => this.restClient!.im.message.reply({
-              path: { message_id: replyToMessageId },
-              data: { msg_type: 'interactive', content: linkedCardContent },
-            }))
-            : await this.withFeishuRequestTimeout(updateKey, 'im.message.create:rich-command-card', () => this.restClient!.im.message.create({
-              params: { receive_id_type: 'chat_id' },
-              data: {
-                receive_id: chatId,
-                msg_type: 'interactive',
-                content: linkedCardContent,
-              },
-            }));
+          const res = await this.createImMessage(chatId, 'interactive', linkedCardContent, replyToMessageId);
           if (res?.data?.message_id) {
             this.richCardUpdates.set(updateKey, {
               cardId,
@@ -6667,19 +6665,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     try {
-      const res = replyToMessageId
-        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:rich-command-card', () => this.restClient!.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: { msg_type: 'interactive', content: cardContent },
-        }))
-        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:rich-command-card', () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'interactive',
-            content: cardContent,
-          },
-        }));
+      const res = await this.createImMessage(chatId, 'interactive', cardContent, replyToMessageId);
 
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
@@ -6703,19 +6689,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardContent = buildCardContent(text);
 
     try {
-      const res = replyToMessageId
-        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:interactive-card', () => this.restClient!.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: { msg_type: 'interactive', content: cardContent },
-        }))
-        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:interactive-card', () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'interactive',
-            content: cardContent,
-          },
-        }));
+      const res = await this.createImMessage(chatId, 'interactive', cardContent, replyToMessageId);
 
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
@@ -6738,19 +6712,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const postContent = buildPostContent(text);
 
     try {
-      const res = replyToMessageId
-        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:post', () => this.restClient!.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: { msg_type: 'post', content: postContent },
-        }))
-        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:post', () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'post',
-            content: postContent,
-          },
-        }));
+      const res = await this.createImMessage(chatId, 'post', postContent, replyToMessageId);
 
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
@@ -6767,19 +6729,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private async sendAsPlainText(chatId: string, text: string, replyToMessageId?: string): Promise<SendResult> {
     try {
       const content = JSON.stringify({ text });
-      const res = replyToMessageId
-        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:text', () => this.restClient!.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: { msg_type: 'text', content },
-        }))
-        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:text', () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'text',
-            content,
-          },
-        }));
+      const res = await this.createImMessage(chatId, 'text', content, replyToMessageId);
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
       }
@@ -6828,14 +6778,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const cardJson = buildPermissionButtonCard(mdText, permId, chatId);
 
       try {
-        const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:permission-button-card', () => this.restClient!.im.message.create({
-          params: { receive_id_type: 'chat_id' },
-          data: {
-            receive_id: chatId,
-            msg_type: 'interactive',
-            content: cardJson,
-          },
-        }));
+        const res = await this.createImMessage(chatId, 'interactive', cardJson);
         if (res?.data?.message_id) {
           return { ok: true, messageId: res.data.message_id };
         }
@@ -6858,6 +6801,29 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!appSecret) return 'Feishu App Secret 未配置';
 
     return null;
+  }
+
+  isControlAuthorized(address: ChannelAddress): boolean {
+    return !isCustomerServiceChat(this.channelConfig, address.chatId)
+      || canControlCustomerService(this.channelConfig, address.userId || '');
+  }
+
+  private async getTopicMessage(messageId: string): Promise<TopicMessage> {
+    const response = await this.restClient!.im.message.get({ path: { message_id: messageId } });
+    const message = response.data?.items?.[0];
+    if (response.code || !message?.message_id) throw new Error('Cannot resolve Feishu topic message');
+    return { ...message, message_id: message.message_id };
+  }
+
+  private resolveCustomerServiceTopic(chatId: string, message: TopicMessage) {
+    return resolveTopicAddress(chatId, message, (id) => this.getTopicMessage(id), async (threadId) => {
+      const response = await this.restClient!.im.message.list({ params: {
+        container_id_type: 'thread', container_id: threadId, page_size: 1, sort_type: 'ByCreateTimeAsc',
+      } });
+      const root = response.data?.items?.[0];
+      if (response.code || !root?.message_id) throw new Error('Cannot resolve Feishu thread root');
+      return { ...root, message_id: root.message_id };
+    });
   }
 
   isAuthorized(userId: string, chatId: string): boolean {
@@ -6896,7 +6862,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const sender = data.sender;
 
     // [P1] Filter out bot messages to prevent self-triggering loops
-    if (sender.sender_type === 'bot') return;
+    if (sender.sender_type !== 'user') return;
 
     // Dedup by message_id
     if (this.seenMessageIds.has(msg.message_id)) return;
@@ -6911,7 +6877,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const isGroup = msg.chat_type === 'group';
 
     // Authorization check
-    if (!this.isAuthorized(userId, chatId)) {
+    const customerService = msg.chat_type === 'group' && isCustomerServiceChat(this.channelConfig, chatId);
+    if (!customerService && !this.isAuthorized(userId, chatId)) {
       console.warn('[feishu-adapter] Unauthorized message from userId:', userId, 'chatId:', chatId);
       return;
     }
@@ -6977,11 +6944,19 @@ export class FeishuAdapter extends BaseChannelAdapter {
           summary: `[FILTERED] Feishu redelivery suppressed after ${ageMs}ms`,
         });
       } catch { /* best effort */ }
-      this.notifyRedeliveredInboundMessage(chatId, msg.message_id);
+      if (!customerService) this.notifyRedeliveredInboundMessage(chatId, msg.message_id);
       return;
     }
 
     // Track last message ID per chat for typing indicator
+    const commandText = this.stripMentionMarkers(msg.message_type === 'text' ? this.parseTextContent(msg.content)
+      : msg.message_type === 'post' ? this.parsePostContent(msg.content).extractedText : '');
+    const groupControl = customerService && !msg.root_id && !msg.parent_id
+      && canControlCustomerService(this.channelConfig, userId)
+      && (isBridgeCommandText(commandText) || commandText.trim().toLowerCase() === '//clear');
+    const topic = customerService && !groupControl ? await this.resolveCustomerServiceTopic(chatId, msg) : undefined;
+    const conversationId = topic ? topicConversationId(topic) : chatId;
+    if (topic) this.lastIncomingMessageId.set(conversationId, msg.message_id);
     this.lastIncomingMessageId.set(chatId, msg.message_id);
 
     // Extract content based on message type
@@ -7056,7 +7031,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         this.downloadResource(msg.message_id, key, 'image'),
       ));
       if (warnings.length > 0) {
-        this.notifyUnsupportedInboundContent(chatId, msg.message_id, warnings);
+        this.notifyUnsupportedInboundContent(conversationId, msg.message_id, warnings);
       }
       for (const attachment of await imageDownloads) {
         if (attachment) attachments.push(attachment);
@@ -7088,10 +7063,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
       channelType: this.channelType,
       channelProvider: this.provider,
       channelAlias: this.alias,
-      chatId,
+      feishuTopic: topic,
+      chatId: conversationId,
       chatKind: isGroup ? 'group' as const : 'p2p' as const,
       userId,
     };
+
+    if (!this.isControlAuthorized(address) && (isBridgeCommandText(text) || text.trim().toLowerCase() === '//clear')) {
+      await this.sendAsPlainText(conversationId, '客服模式：只有控制白名单用户可以执行控制指令。');
+      return;
+    }
 
     const inbound: InboundMessage = {
       messageId: msg.message_id,

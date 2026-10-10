@@ -4726,6 +4726,12 @@ async function handleChannelLifecycleEvent(msg: InboundMessage): Promise<void> {
   if (!event || event.type !== 'chat_removed') return;
 
   const { store } = getBridgeContext();
+  // Physical group removal also retires every isolated customer-service topic.
+  const topics = store.listChannelChats().filter((item) => item.channelType === msg.address.channelType
+    && item.feishuTopic?.chatId === msg.address.chatId);
+  for (const topic of topics) {
+    await handleChannelLifecycleEvent({ ...msg, address: { ...msg.address, chatId: topic.chatId } });
+  }
   const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const reason = formatChannelEventReason(event.reason);
   if (!binding) {
@@ -4937,6 +4943,13 @@ async function handleMessage(
 
   if (msg.channelEvent) {
     await handleChannelLifecycleEvent(msg);
+    ack();
+    return;
+  }
+  // Check before every callback/command branch, including trusted local ingress.
+  const controlAuthorized = adapter.isControlAuthorized?.(msg.address) ?? true;
+  if (!controlAuthorized && (msg.callbackData || isBridgeCommandText(msg.text) || msg.text.trim().toLowerCase() === '//clear')) {
+    enqueueBridgeNotice(adapter, msg.address, '客服模式：只有控制白名单用户可以执行控制指令。', { replyToMessageId: msg.messageId });
     ack();
     return;
   }
@@ -5225,7 +5238,7 @@ async function handleMessage(
     addInboundGetReaction(adapter, msg, 'command_received');
   }
 
-  if (rawText && !hasAttachments) {
+  if (controlAuthorized && rawText && !hasAttachments) {
     const attachmentConfirmation = consumePendingAttachmentConfirmation(msg.address, rawText);
     if (attachmentConfirmation.reply === 'confirm' && attachmentConfirmation.commandText) {
       await handleCommand(

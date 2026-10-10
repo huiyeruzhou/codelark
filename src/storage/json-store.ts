@@ -529,6 +529,7 @@ export class JsonFileStore implements BridgeStore {
         channelProvider: data.channelProvider ?? existing.channelProvider,
         channelAlias: data.channelAlias ?? existing.channelAlias,
         cloudDocumentChat: data.cloudDocumentChat ?? existing.cloudDocumentChat,
+        ...(data.feishuTopic ? { feishuTopic: data.feishuTopic } : {}),
         updatedAt: now(),
       };
       if (chatKind) updated.chatKind = chatKind;
@@ -557,6 +558,7 @@ export class JsonFileStore implements BridgeStore {
       bridgeSessionId: data.bridgeSessionId,
       runtimeBridgeSessionIds,
       cloudDocumentChat: data.cloudDocumentChat,
+      ...(data.feishuTopic ? { feishuTopic: data.feishuTopic } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
       lastActivityAt: timestamp,

@@ -52,6 +52,7 @@ export interface UpsertChannelChatInput {
   bridgeSessionId: string;
   runtimeBridgeSessionIds?: ChannelChat['runtimeBridgeSessionIds'];
   cloudDocumentChat?: ChannelChat['cloudDocumentChat'];
+  feishuTopic?: ChannelChat['feishuTopic'];
 }
 
 export interface SettingsProvider {

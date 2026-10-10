@@ -15,6 +15,9 @@ import { expandHomePath } from '../../configuration/paths.js';
 import type { ConfigV2 } from '../../configuration/schema.js';
 import { getConfiguredChannelInstance } from '../../channels/adapter-runtime/channel-runtime.js';
 import type { RuntimeAgent } from '../../domain/session.js';
+import { getSessionActiveRuntime, getSessionSystemPrompt } from '../../domain/session-runtime.js';
+import { scopedConfigForRuntime } from './support.js';
+import { projectSessionConfiguration } from './command-use-cases/inherit-session-configuration.js';
 
 interface ChannelSessionDefaults {
   activeRuntime: RuntimeAgent;
@@ -63,6 +66,9 @@ export function resolve(address: ChannelAddress): ChannelChat {
       const updates: Partial<ChannelChat> = {};
       if (address.chatKind && address.chatKind !== existing.chatKind) {
         updates.chatKind = address.chatKind;
+      }
+      if (address.feishuTopic && JSON.stringify(address.feishuTopic) !== JSON.stringify(existing.feishuTopic)) {
+        updates.feishuTopic = { ...existing.feishuTopic, ...address.feishuTopic };
       }
       if (address.userId && address.userId !== existing.chatUserId) {
         updates.chatUserId = address.userId;
@@ -130,13 +136,32 @@ export function createBinding(
     store.updateSessionProviderId(session.id, defaultProviderId);
   }
 
-  return store.upsertChannelChat({
+  const binding = store.upsertChannelChat({
     channelType: address.channelType,
     chatId: address.chatId,
     chatKind: address.chatKind,
+    feishuTopic: address.feishuTopic,
     chatUserId: address.userId,
     bridgeSessionId: session.id,
   });
+  if (address.feishuTopic) {
+    const parent = store.getChannelChat(address.channelType, address.feishuTopic.chatId);
+    const parentSession = parent ? store.getSession(parent.bridgeSessionId) : null;
+    if (parentSession) {
+      const configService = createConfigService({ migrate: false });
+      const effective = scopedConfigForRuntime(parent, parentSession);
+      const runtime = getSessionActiveRuntime(parentSession) || defaults.activeRuntime;
+      const patch = projectSessionConfiguration(effective.config, expandHomePath(effective.config.session.workspace) || defaults.workspace, runtime);
+      if (patch.session) delete patch.session.requireMention;
+      configService.set({ kind: 'session', sessionId: session.id }, patch);
+      // Carry the service's configuration, never the parent's model thread/terminal.
+      store.updateSession(session.id, { runtime: { activeRuntime: runtime,
+        general: { systemPrompt: getSessionSystemPrompt(parentSession) } } }, { touch: false });
+      store.updateSessionProviderId(session.id, parentSession.provider_id || '');
+      store.updateChannelChat(binding.id, { runtimeBridgeSessionIds: { [runtime]: session.id } });
+    }
+  }
+  return store.getChannelChat(address.channelType, address.chatId) || binding;
 }
 
 /**

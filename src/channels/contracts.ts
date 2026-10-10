@@ -110,6 +110,9 @@ export abstract class BaseChannelAdapter {
   abstract validateConfig(): string | null;
   abstract isAuthorized(userId: string, chatId: string): boolean;
 
+  /** Separate control permissions from ordinary conversation access. */
+  isControlAuthorized(_address: ChannelAddress): boolean { return true; }
+
   onMessageStart?(_chatId: string, _streamKey?: string): void;
   onMessageEnd?(_chatId: string, _streamKey?: string): void;
   acknowledgeUpdate?(_updateId: number): void;

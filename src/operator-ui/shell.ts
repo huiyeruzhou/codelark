@@ -1622,6 +1622,12 @@ export function renderUiShellHtml(): string {
             allowedUsers: typeof draft.allowedUsers === 'string'
               ? draft.allowedUsers.split(',').map((item) => item.trim()).filter(Boolean)
               : (channel.config || {}).allowedUsers,
+            customerServiceChats: typeof draft.customerServiceChats === 'string'
+              ? draft.customerServiceChats.split(',').map((item) => item.trim()).filter(Boolean)
+              : (channel.config || {}).customerServiceChats,
+            customerServiceControlUsers: typeof draft.customerServiceControlUsers === 'string'
+              ? draft.customerServiceControlUsers.split(',').map((item) => item.trim()).filter(Boolean)
+              : (channel.config || {}).customerServiceControlUsers,
             streamingEnabled: typeof draft.streamingEnabled === 'boolean'
               ? draft.streamingEnabled
               : (channel.config || {}).streamingEnabled,
@@ -2322,6 +2328,11 @@ export function renderUiShellHtml(): string {
             +   '</div>'
             + '</div>'
             + '<div class="editor-section">'
+            +   '<p class="editor-section-title">客服模式</p>'
+            +   '<label>客服群 ID<input id="channelCustomerServiceChats" value="' + escapeHtml((feishu.customerServiceChats || []).join(', ')) + '" placeholder="oc_…，多个群用逗号分隔；留空关闭" /></label>'
+            +   '<label>控制用户白名单<input id="channelCustomerServiceControlUsers" value="' + escapeHtml((feishu.customerServiceControlUsers || []).join(', ')) + '" placeholder="ou_…，多个用户用逗号分隔" /></label>'
+            +   '<p class="hint">客服群内自动在话题中答复，是否需要 @ 遵循群聊现有设置；只有白名单用户能执行控制指令和操作卡片。白名单留空时禁用所有群内控制。若群聊允许不带 @ 提问，需要开通接收群内所有消息权限。</p>'
+            + '</div><div class="editor-section">'
             +   '<p class="editor-section-title">行为开关</p>'
             +   '<div class="checkbox-row">'
             +     '<label class="checkbox"><input id="channelStreamingEnabled" type="checkbox"' + (feishu.streamingEnabled !== false ? ' checked' : '') + ' /> 启用飞书流式响应卡片</label>'
@@ -3082,6 +3093,8 @@ export function renderUiShellHtml(): string {
         payload.appSecret = document.getElementById('channelAppSecret').value;
         payload.site = document.getElementById('channelSite').value;
         payload.allowedUsers = document.getElementById('channelAllowedUsers').value;
+        payload.customerServiceChats = document.getElementById('channelCustomerServiceChats').value;
+        payload.customerServiceControlUsers = document.getElementById('channelCustomerServiceControlUsers').value;
         payload.streamingEnabled = document.getElementById('channelStreamingEnabled').checked;
         payload.feedbackMarkdownEnabled = document.getElementById('channelFeedbackMarkdownEnabled').checked;
         payload.historyMessageLimit = document.getElementById('channelHistoryMessageLimit').value;

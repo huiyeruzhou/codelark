@@ -235,6 +235,16 @@
         "site": {
           "enum": ["feishu", "lark"]
         },
+        "customer_service_chats": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^oc_[a-zA-Z0-9]+$" },
+          "description": "启用客服话题回复的群 ID；空数组关闭。"
+        },
+        "customer_service_control_users": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^ou_[a-zA-Z0-9]+$" },
+          "description": "客服群控制指令与卡片操作的用户 open_id 白名单。"
+        },
         "allowed_users": {
           "type": "array",
           "items": {

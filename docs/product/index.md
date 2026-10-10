@@ -9,9 +9,10 @@
 1. [命令体系](commands.md)：IM 命令如何按用户任务分组。
 2. [运行时与提供方](runtime-providers.md)：Codex 的 app-server/tmux 分工，以及 Claude Code / Kimi Code 等运行时的 provider 能力边界。
 3. [通道](channels-ui.md)：飞书、多实例配置、流式卡片和云文档入口。
-4. [Web 工作台](operator-ui.md)：本地管理面的能力矩阵、信息架构、视觉方向和测试合同。
-5. [数据、可观测性与验证](data-observability.md)：本地文件、日志、状态、真实飞书 E2E。
-6. [开发者源码地图](developer-map.md)：按功能查源码和测试。
+4. [客服模式](customer-service.md)：自动以话题回复、独立上下文和控制白名单。
+5. [Web 工作台](operator-ui.md)：本地管理面的能力矩阵、信息架构、视觉方向和测试合同。
+6. [数据、可观测性与验证](data-observability.md)：本地文件、日志、状态、真实飞书 E2E。
+7. [开发者源码地图](developer-map.md)：按功能查源码和测试。
 
 ## 产品主线
 

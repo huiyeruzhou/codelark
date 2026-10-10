@@ -106,6 +106,36 @@ it('current common form and command share the session field; global/channel edit
   assert.throws(() => createConfigService({ migrate: false }).set({ kind: 'home' }, { session: { requireMention: true } }), /不能|不允许/);
 });
 
+it('topic commands edit the parent group while current shows its live rule without a separate setting', async () => {
+  const store = initBridgeTestContext();
+  const group = router.createBinding(address('oc_group'), CODELARK_HOME);
+  const topicId = 'feishu-topic:oc_group:om_root';
+  const topic = router.createBinding({ ...address(topicId), feishuTopic: { chatId: 'oc_group', rootMessageId: 'om_root' } }, CODELARK_HOME);
+  const config = createConfigService({ migrate: false });
+  const groupScope = { kind: 'session' as const, sessionId: group.bridgeSessionId };
+  const topicScope = { kind: 'session' as const, sessionId: topic.bridgeSessionId };
+  assert.equal(config.resolve('session.requireMention', topicScope).source, 'defaults');
+  // A stored topic override from an old version must never take precedence.
+  config.set(topicScope, { session: { requireMention: false } });
+  const adapter = new RecordingAdapter();
+  const updated = await command(adapter, topicId, '/require-at on');
+  assert.match(updated.text, /所属群.*全部话题/);
+  assert.equal(config.get('session.requireMention', groupScope), true);
+  assert.equal(config.get('session.requireMention', topicScope), false);
+  assert.equal(sessionRequiresMention(store, address(topicId)), true);
+  assert.match((await command(adapter, topicId, '/require-at')).text, /当前值.*on/);
+  const card = (await command(adapter, topicId, '/current common')).richCard;
+  assert(card);
+  assert(!card.form?.selects?.some((select) => select.elementId === 'requireMention'));
+  assert.match(JSON.stringify(card.sections), /on（跟随所属群）/);
+  const rejected = await command(adapter, topicId, '/current-config common', { req_mention: 'off', cap_lines: '321' });
+  assert.match(rejected.text, /配置未保存.*跟随所属群/);
+  assert.equal(config.get('session.requireMention', groupScope), true);
+  await command(adapter, 'oc_group', '/current-config common', { req_mention: 'off' });
+  assert.equal(sessionRequiresMention(store, address(topicId)), false);
+  assert.match(JSON.stringify((await command(adapter, topicId, '/current common')).richCard?.sections), /off（跟随所属群）/);
+});
+
 for (const action of ['clear', 'new'] as const) for (const value of [true, false]) {
   it(`${action} inherits session require-at=${value} independently of legacy channel value and reload`, async () => {
     initBridgeTestContext();

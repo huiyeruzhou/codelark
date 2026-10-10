@@ -17,6 +17,7 @@
 | 新建/重命名群聊 | 支持 |
 | 云文档聊天入口 | 支持 |
 | `/require-at` | 支持 |
+| [客服话题模式](customer-service.md) | 支持；按群启用，控制用户独立白名单 |
 
 通道能力不是写死在命令层，而是通过 [BaseChannelAdapter](https://github.com/huiyeruzhou/codelark/blob/main/src/channels/contracts.ts) 的可选方法表达。命令层会优先使用平台能力，不支持时给出退化提示。
 

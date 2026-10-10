@@ -73,6 +73,16 @@
           },
           "additionalProperties": false
         },
+        "feishuTopic": {
+          "type": "object",
+          "required": ["chatId", "rootMessageId"],
+          "properties": {
+            "chatId": { "type": "string", "pattern": "^oc_" },
+            "rootMessageId": { "type": "string", "pattern": "^om_" },
+            "threadId": { "type": "string", "pattern": "^omt_" }
+          },
+          "additionalProperties": false
+        },
         "cloudDocumentChat": {
           "type": "object",
           "required": ["provider", "fileToken", "fileType"],

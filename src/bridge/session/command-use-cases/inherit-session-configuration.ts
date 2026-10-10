@@ -35,6 +35,7 @@ export function inheritSessionConfiguration(options: {
   if (sourceSession && newSession) {
     const { config } = scopedConfigForRuntime(sourceBinding, sourceSession);
     const patch = projectSessionConfiguration(config, workDir, activeRuntime);
+    if (newBinding.feishuTopic && patch.session) delete patch.session.requireMention;
     createConfigService({ migrate: false }).set({ kind: 'session', sessionId: newSession.id }, patch);
     const endpoint = sourceSession.runtime?.codex?.appServerEndpoint;
     store.updateSession(newSession.id, {
