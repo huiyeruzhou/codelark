@@ -923,6 +923,12 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/customer': {
+      await adapter.prepareControlAuthorization?.(msg.address, '/customer');
+      response = adapter.manageCustomerServiceMode?.(msg, args) || '当前通道不支持客服模式管理。';
+      break;
+    }
+
     case '/whitelist': {
       await adapter.prepareControlAuthorization?.(msg.address, '/whitelist');
       response = adapter.manageCustomerServiceWhitelist?.(msg, args) || '当前通道不支持客服控制白名单管理。';

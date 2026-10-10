@@ -1,5 +1,35 @@
 import type { FeishuChannelConfig } from '../types.js';
-import { canControlCustomerService, customerServiceControllers } from './customer-service.js';
+import type { ChannelAddress } from '../../domain/channel.js';
+import { canControlCustomerService, customerServiceControllers, parseTopicConversationId } from './customer-service.js';
+
+export function isCustomerServiceManagementCommand(text: string): boolean {
+  return /^\/(?:whitelist|service-admin|customer)(?:\s|$)/i.test(text.trim());
+}
+
+export function editCustomerServiceMode(options: {
+  config: FeishuChannelConfig; address: ChannelAddress; args: string; creatorId?: string | null;
+}): { text: string; chats?: string[] } {
+  const { config, address } = options;
+  if (!canControlCustomerService(config, address.userId || '', options.creatorId)) {
+    return { text: '只有客服控制白名单用户（留空时为 bot 创始人）可以管理客服模式。' };
+  }
+  const topic = parseTopicConversationId(address.chatId);
+  const chatId = topic?.chatId || address.chatId;
+  if (address.chatKind === 'p2p' || (!topic && address.chatKind !== 'group') || !/^oc_[a-zA-Z0-9]+$/.test(chatId)) {
+    return { text: '请在需要设置的飞书群或群内话题中使用 /customer。' };
+  }
+  const action = options.args.trim().toLowerCase();
+  const help = '用法：/customer 查看；/customer on 开启当前群；/customer off 关闭当前群。';
+  const current = [...new Set(config.customerServiceChats || [])];
+  const enabled = current.includes(chatId);
+  const scope = '设置作用于整个群；是否需要 @ 沿用群聊 /require-at 设置。白名单用 /whitelist 管理。';
+  if (!action || action === 'status') return { text: `当前群客服模式：${enabled ? 'on（已开启）' : 'off（未开启）'}。\n${help}\n${scope}` };
+  if (action !== 'on' && action !== 'off') return { text: `参数无效，配置未修改。\n${help}` };
+  const next = action === 'on';
+  if (next === enabled) return { text: `当前群客服模式已是 ${action}，无需修改。\n${scope}` };
+  return { chats: next ? [...current, chatId] : current.filter((id) => id !== chatId),
+    text: `${next ? '已开启当前群客服模式，后续问题将在话题中答复' : '已关闭当前群客服模式，后续消息按普通群聊处理'}。\n${scope}` };
+}
 
 const USER_ID = /^ou_[a-zA-Z0-9]+$/;
 export const WHITELIST_HELP = '用法：/whitelist 查看；/whitelist add @成员 添加；/whitelist remove @成员 移除（可同时 @ 多人）。空名单默认 bot 创始人拥有权限。';

@@ -114,6 +114,7 @@ export abstract class BaseChannelAdapter {
   prepareControlAuthorization?(_address: ChannelAddress, _commandText?: string): Promise<void>;
   isControlAuthorized(_address: ChannelAddress, _commandText?: string): boolean { return true; }
   manageCustomerServiceWhitelist?(_msg: InboundMessage, _args: string): string;
+  manageCustomerServiceMode?(_msg: InboundMessage, _args: string): string;
 
   onMessageStart?(_chatId: string, _streamKey?: string): void;
   onMessageEnd?(_chatId: string, _streamKey?: string): void;

@@ -600,6 +600,8 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示策略；工具调用详情始终展示。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/require-at on|off</code></div><div class="command-col-original"><code>/require-at</code></div><div class="command-col-desc">查看或切换当前会话是否要求群聊 @bot，也支持 <code>/require_at</code>；默认 <code>off</code>，即群聊不 @bot 也会接收。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/customer on|off</code></div><div class="command-col-original"><code>/customer</code></div><div class="command-col-desc">查看、开启或关闭当前群客服模式；话题内执行也作用于所属群，是否需要 @ 沿用群设置。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/whitelist add|remove @成员</code></div><div class="command-col-original"><code>/whitelist</code></div><div class="command-col-desc">查看或管理客服控制白名单；空名单默认 bot 创始人拥有权限，可直接添加成员。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Codex 共享 thread 只允许查看，Claude Code 会保存为后续 TUI 启动参数。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-original"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-desc">把当前 IM 会话绑定到一个远程 tmux session。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-new [session]</code></div><div class="command-col-original"><code>/tmux-new [session]</code></div><div class="command-col-desc">新建并绑定 tmux session；如果已存在，会提示并直接绑定。</div></div>
@@ -2329,7 +2331,7 @@ export function renderUiShellHtml(): string {
             + '</div>'
             + '<div class="editor-section">'
             +   '<p class="editor-section-title">客服模式</p>'
-            +   '<label>客服群 ID<input id="channelCustomerServiceChats" value="' + escapeHtml((feishu.customerServiceChats || []).join(', ')) + '" placeholder="oc_…，多个群用逗号分隔；留空关闭" /></label>'
+            +   '<label>客服群 ID<input id="channelCustomerServiceChats" value="' + escapeHtml((feishu.customerServiceChats || []).join(', ')) + '" placeholder="oc_…，多个群用逗号分隔；也可在群内 /customer on|off" /></label>'
             +   '<label>控制用户白名单<input id="channelCustomerServiceControlUsers" value="' + escapeHtml((feishu.customerServiceControlUsers || []).join(', ')) + '" placeholder="ou_…，多个用户用逗号分隔；也可在群内 /whitelist add @成员" /></label>'
             +   '<p class="hint">客服群内自动在话题中答复，是否需要 @ 遵循群聊现有设置；只有白名单用户能执行控制指令和操作卡片。白名单留空时，bot 创始人默认拥有控制权限，可直接 /whitelist add @成员。若群聊允许不带 @ 提问，需要开通接收群内所有消息权限。</p>'
             + '</div><div class="editor-section">'

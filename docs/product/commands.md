@@ -8,7 +8,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | runtime 设置 | `/runtime`、`/provider`、`/model`、`/mode`、`/reasoning`、`/sandbox`、`/network`、`/cd` | 修改当前会话的运行参数 |
 | 状态和诊断 | `/`、`/status`、`/check`、`/doctor`、`/his` | 查看状态、健康检查、历史和排障 |
 | 终端和文件 | `/shell`、`/tmux-*`、`/pty-screen`、`/cat`、`/file` | 执行命令、观察终端、发送文件 |
-| 自动化和管理 | `/every`、`/then`、`/require-at`、`/ui`、`/set`、`/hot-update` | 定时输入、后续输入、会话触发策略、显示和全局设置 |
+| 自动化和管理 | `/every`、`/then`、`/require-at`、`/customer`、`/whitelist`、`/ui`、`/set`、`/hot-update` | 定时输入、后续输入、会话触发策略、客服群与管理员、显示和全局设置 |
 
 从本机 `audit.jsonl` 的匿名聚合看，普通消息占绝大多数；命令使用主要集中在 `/tmux-screen`、`/p tmux`、`/new`，随后是 `/clear`、`/every`、`/runtime`、`/t` 和 `/set`。用户教程据此优先讲“新建任务—直接对话—观察 tmux—继续或切换会话”，详见 [5 分钟上手：日常工作流](../guide/daily-workflow.md)。
 
@@ -48,3 +48,5 @@ IM 内 `/h` 的文案由 [src/bridge/command/help.ts](https://github.com/huiyeru
 模块边界：生产代码中只有 `bridge/host` 直接调用 `bridge/command`；通道、turn、runtime 等横向 owner 不直接 import command，command 也不反向 import `bridge/host/*`。跨 turn 和 command 共用的 agent question 回调协议位于 [src/bridge/callbacks/agent-question.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/callbacks/agent-question.ts)。命令需要的聊天绑定和 startup target 共享入口分别是 [src/bridge/session/channel-router.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/session/channel-router.ts) 和 [src/bridge/startup-notice-target.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/startup-notice-target.ts)。
 
 `/require-at on|off|status`（别名 `/require_at`）只控制当前绑定会话的群聊 @bot 要求，也可在 `/current common` 修改。私聊不受影响；`/clear`、`/new` 和首次切换到新 runtime 会话会继承设置，切回已有会话保留其自身设置。
+
+`/customer` 查看当前群客服模式，`/customer on|off` 开启或关闭；已有话题内执行也修改所属群。`/whitelist` 查看客服管理员，`/whitelist add|remove @成员` 管理名单。两者均要求客服控制权限，空名单默认 bot 创始人，是否需要 @ 仍遵循群设置。详见 [客服模式](./customer-service.md)。

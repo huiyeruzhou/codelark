@@ -1,21 +1,24 @@
 import '../../../setup/test-setup.js';
 import { afterEach, beforeEach, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { editCustomerServiceWhitelist } from '../../../../channels/feishu/customer-service-admin.js';
+import { editCustomerServiceMode, editCustomerServiceWhitelist } from '../../../../channels/feishu/customer-service-admin.js';
 import { FeishuAdapter } from '../../../../channels/feishu/adapter.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { initBridgeTestContext, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
 import { _testOnly as manager } from '../../../../bridge/host/manager.js';
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { topicConversationId } from '../../../../channels/feishu/customer-service.js';
+import { isKnownBridgeCommand } from '../../../../bridge/command/aliases.js';
+import { sessionRequiresMention } from '../../../../bridge/session/require-mention.js';
+import { getBridgeContext } from '../../../../bridge/context.js';
 
 beforeEach(() => { manager.resetStateForTests(); resetBridgeTestState(); initBridgeTestContext(); });
 afterEach(() => { manager.resetStateForTests(); resetBridgeTestState(); });
 const chatId = 'oc_service';
 const config = { appId: 'cli_self', customerServiceChats: [chatId], customerServiceControlUsers: ['ou_admin'], allowedUsers: ['ou_legacy'] };
 const address = (userId = 'ou_admin') => ({ channelType: 'feishu-admin-test', chatId, chatKind: 'group' as const, userId });
-function setup() {
-  const instance = { id: address().channelType, alias: '客服管理测试', provider: 'feishu' as const, enabled: true, config: { ...config } };
+function setup(overrides: Partial<typeof config> = {}) {
+  const instance = { id: address().channelType, alias: '客服管理测试', provider: 'feishu' as const, enabled: true, config: { ...config, ...overrides } };
   createConfigService({ migrate: false }).set({ kind: 'home' }, { channels: [instance,
     { id: 'feishu-unrelated', provider: 'feishu', config: { customerServiceControlUsers: ['ou_other'] } }] });
   const a = new FeishuAdapter(instance);
@@ -35,6 +38,99 @@ const event = (id: string, text: string, extra = {}, userId = 'ou_admin') => ({
     chat_type: 'group', message_type: 'text', content: JSON.stringify({ text }), create_time: String(Date.now()), ...extra },
 });
 const users = () => createConfigService({ migrate: false }).snapshot().config.channels.find((c) => c.id === address().channelType)!.config.customerServiceControlUsers;
+const chats = () => createConfigService({ migrate: false }).snapshot().config.channels.find((c) => c.id === address().channelType)!.config.customerServiceChats;
+
+it('customer mode edits only the current physical group and validates authority, scope and syntax', () => {
+  assert.equal(isKnownBridgeCommand('/customer'), true);
+  const base = { config: { ...config, customerServiceChats: ['oc_other'] }, address: address(), args: 'on' };
+  assert.deepEqual(editCustomerServiceMode(base).chats, ['oc_other', chatId]);
+  assert.equal(editCustomerServiceMode({ ...base, args: '' }).chats, undefined);
+  assert.match(editCustomerServiceMode({ ...base, args: 'status' }).text, /off（未开启）/);
+  assert.equal(editCustomerServiceMode({ ...base, args: 'off' }).chats, undefined);
+  for (const args of ['on oc_other', 'maybe', 'off all']) {
+    assert.match(editCustomerServiceMode({ ...base, args }).text, /配置未修改/);
+  }
+  assert.match(editCustomerServiceMode({ ...base, address: { ...address(), chatKind: 'p2p' } }).text, /请在/);
+  assert.match(editCustomerServiceMode({ ...base, address: address('ou_guest') }).text, /只有客服控制白名单/);
+  const topic = { ...address(), chatId: topicConversationId({ chatId, rootMessageId: 'om_root' }) };
+  assert.deepEqual(editCustomerServiceMode({ ...base, config, address: topic, args: 'off' }).chats, []);
+  assert.equal(editCustomerServiceMode({ ...base, config, args: 'on' }).chats, undefined);
+});
+
+it('creator enables an ordinary group without setup; old adapters route immediately and reply commands can reenable it', async () => {
+  const { a, instance, sent } = setup({ customerServiceChats: [], customerServiceControlUsers: [], allowedUsers: [] });
+  const old = new FeishuAdapter(instance);
+  (old as any).running = true;
+  (old as any).restClient = (a as any).restClient;
+  await (a as any).processIncomingEvent(event('om_enable', '/customer on', {}, 'ou_creator'));
+  const enable = await a.consumeOne(); assert(enable);
+  assert.equal(enable.address.chatId, chatId);
+  await manager.handleMessage(a, enable);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.deepEqual(chats(), [chatId]);
+  assert.deepEqual(users(), []);
+  assert.match(sent.at(-1).data.content, /已开启当前群客服模式/);
+  const question = event('om_question', 'hello', {}, 'ou_guest');
+  await (old as any).processIncomingEvent(question);
+  assert.equal((await old.consumeOne())?.address.chatId, topicConversationId({ chatId, rootMessageId: 'om_question' }));
+  await (a as any).processIncomingEvent(event('om_disable', '/customer off', { root_id: 'om_root', parent_id: 'om_parent' }, 'ou_creator'));
+  const disable = await a.consumeOne(); assert(disable);
+  assert.equal(disable.address.chatId, topicConversationId({ chatId, rootMessageId: 'om_root' }));
+  await manager.handleMessage(a, disable);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.deepEqual(chats(), []);
+  assert.equal(sent.at(-1).path.message_id, 'om_root');
+  await (old as any).processIncomingEvent(event('om_normal', 'normal again', {}, 'ou_guest'));
+  assert.equal((await old.consumeOne())?.address.chatId, chatId);
+  // With only parent_id, the existing ordinary reply chain must still resolve.
+  await (a as any).processIncomingEvent(event('om_reenable', '/customer on', { parent_id: 'om_parent' }, 'ou_creator'));
+  const reenable = await a.consumeOne(); assert(reenable);
+  assert.equal(reenable.address.chatId, topicConversationId({ chatId, rootMessageId: 'om_root' }));
+  await manager.handleMessage(a, reenable);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.deepEqual(chats(), [chatId]);
+  assert.equal(sent.at(-1).path.message_id, 'om_root');
+  assert.deepEqual(createConfigService({ migrate: false }).snapshot().config.channels.find(c => c.id === 'feishu-unrelated')?.config.customerServiceControlUsers, ['ou_other']);
+});
+
+it('customer commands cannot bypass controller checks before enable, after disable, or when already queued', async () => {
+  const { a, sent } = setup({ customerServiceChats: [], allowedUsers: [] });
+  await (a as any).processIncomingEvent(event('om_denied_on', '/customer on', {}, 'ou_guest'));
+  assert.equal((a as any).inboundQueue.length, 0);
+  assert.match(sent.at(-1).data.content, /只有控制白名单/);
+  await (a as any).processIncomingEvent(event('om_pending_on', '/customer on'));
+  const queued = await a.consumeOne(); assert(queued);
+  createConfigService({ migrate: false }).set({ kind: 'home' }, { channels: [{ id: address().channelType, config: { customerServiceControlUsers: ['ou_guest'] } }] });
+  await manager.handleMessage(a, queued);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.deepEqual(chats(), []);
+  assert.match(sent.at(-1).data.content, /只有控制白名单/);
+  assert.match(a.manageCustomerServiceMode(queued, 'on'), /只有客服控制白名单/);
+  await (a as any).processIncomingEvent(event('om_private_mode', '/customer on', { chat_type: 'p2p' }, 'ou_guest'));
+  const privateMsg = await a.consumeOne(); assert(privateMsg);
+  await manager.handleMessage(a, privateMsg);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.match(sent.at(-1).data.content, /请在/);
+  assert.deepEqual(chats(), []);
+});
+
+it('customer on and off follow the existing mention requirement without changing it', async () => {
+  const { a } = setup({ customerServiceChats: [], allowedUsers: [] });
+  const command = { address: address(), text: '/require-at on', messageId: 'require-on', timestamp: Date.now() };
+  await manager.handleMessage(a, command);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.equal(sessionRequiresMention(getBridgeContext().store, address()), true);
+  await (a as any).processIncomingEvent(event('om_no_at', '/customer on'));
+  assert.equal((a as any).inboundQueue.length, 0);
+  await (a as any).processIncomingEvent(event('om_with_at', '@_user_1 /customer on', { mentions: [mention('ou_bot', 1)] }));
+  const enable = await a.consumeOne(); assert(enable);
+  await manager.handleMessage(a, enable);
+  await _testOnlyWaitForDeliveryQueuesForTests(a);
+  assert.deepEqual(chats(), [chatId]);
+  a.manageCustomerServiceMode(enable, 'off');
+  assert.deepEqual(chats(), []);
+  assert.equal(sessionRequiresMention(getBridgeContext().store, address()), true);
+});
 
 it('defaults an empty whitelist to the verified app creator without legacy authorization or init', () => {
   for (const allowedUsers of [[], [chatId], ['ou_legacy']]) {
