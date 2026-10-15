@@ -315,11 +315,19 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 4. 把旧卡标为“已续接到下一条”，关闭streaming，再用实际成功写入的shadow生成静态卡。旧卡收尾失败也不把消息输出回滚到旧卡。
 5. 若仍有待送历史，继续安排下一次flush；runtime没有新事件时也会把积压页送完。收到终态时先送完剩余页，再关闭最终卡。
 
+后台 `cardElement.content` 请求发生上述错误时，错误 handler 必须返回并等待续卡 Promise，直到新卡接管与旧卡收尾完成，再由请求的 `finally` 清理当前卡上的 `backgroundFlushInFlight`。只启动续卡就返回，会让清理先发生在旧卡；随后新卡继承已经完成的 Promise，所有后续刷新都只设置 `flushQueued`，直到终态等待超时才集中补发。终态到达时也必须等待这个恢复过程，不能提前终结旧卡。续卡失败则释放后台请求，保留原卡并按退避重试。
+
+回归用例 `src/__tests__/unit/channels/feishu/feishu-stream-timeout-rollover.test.ts` 用 deferred CardKit 创建响应控制该时序，覆盖 200850/200860、创建期间新增内容、续卡后的 20 次实时更新、终态与续卡并发，以及续卡创建失败。使用 Node.js 24 运行 `node --import tsx --test src/__tests__/unit/channels/feishu/feishu-stream-timeout-rollover.test.ts`。2026-10-16 在修复前的 main 上，两个实时刷新用例均出现“已完成 Promise 留在新卡、刷新为零”，并发现终态提前结束旧卡；三项失败、一项通过，修正等待顺序后四项通过。离线测试缩短等待，不用截图中的 182 条消息或 10 张卡片数量作为通用判据。
+
+2026-10-16 真实飞书验证在隔离群中运行产品 adapter：仅注入一次 `200850` 错误，其余 CardKit 创建/更新、IM 发送均通过 `lark-cli` 访问真实 API，检查结果来自用户身份读取。续卡创建期间的新内容得以保留，20 次更新在结束前发出，用户回读进度从 1 到 10 再到 19；关闭流式并写终态后，最终卡包含全部 20 条进度和结束正文，旧卡标记已续接，该轮共两张卡。当前测试用户在群中，群保留供查看。
+
+本次流式用户回读会停留在前一版 snapshot：第 20 次请求成功后仍读到 19，关闭流式后才读到 20。即时逐帧相等的前三次手测判据失败记录保留，未用 API `code=0` 替代显示确认；最终检查以运行中可见进度持续前进、关闭流式后的完整卡片为准。证据位于该任务 worktree 的 `work/real-timeout-rollover-r4/report.json`。这验证 adapter 恢复和真实飞书卡片，不包含入站 WebSocket、模型执行或真实等待卡片过期的全链路场景。
+
 游标包含原始 `historyItemOffset`、组内 `historyToolCallOffset` 和必要时的 `historyTextOffset`，不能用卡片组件数代替。旧卡静态内容直接来自成功写入的元素shadow；因此大型详情拆页后，旧卡不会重新带回完整详情或后续页的内容。
 
 Mirror把最新读取位置保存在会话的 `mirror_read_position` 中，包含thread ID、最后一条事件的签名、时间、类型、角色、语义turn ID和事件数；不保存消息正文。解绑前保存该位置，新群绑定及bridge重启后都从它继续，已经在旧群读过的内容不会从本轮开头重放，解绑期间新增的事件仍会进入新群。事件签名用于区分时间戳相同的不同事件。Cursor Desktop transcript 是会整体重写和重排的snapshot，Cursor事件签名和turn ID因此只使用稳定内容身份，不能包含byte offset；重写时优先从上一语义turn之后恢复，同turn assistant revision只替换该turn的后续内容。升级前的offset签名无法可靠映射时先静默建立新基线，不能猜测并回放历史。`mirror_last_event_at` 继续表示完整轮次的投递进度，不能代替读取位置；旧数据尚无读取位置时优先使用 `last_progress_at` 接续。绑定变更不停止runtime。Mirror的stream key包含binding ID，旧群卡片的异步收尾不会影响新群卡片。批量新事件超过单卡容量时才使用上述分页流程。
 
-`code=200850` 和 `code=200860` 都按payload限制处理。首次建立卡片成功不代表mirror可用；应同时检查后续flush、续卡创建和最终状态写入结果。由于shadow不是客户端视觉确认，真实端手测仍是发布验收的一部分。
+`code=200850` 和 `code=200860` 都触发续接恢复；其中 `200850` 的消息也可能是 `card streaming timeout`，不能只凭该错误码判断为内容过大。首次建立卡片成功不代表mirror可用；应同时检查后续flush、续卡创建和最终状态写入结果。由于shadow不是客户端视觉确认，真实端手测仍是发布验收的一部分。
 
 ## 底层飞书 API
 

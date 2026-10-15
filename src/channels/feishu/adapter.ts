@@ -4787,11 +4787,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
                   this.markCardFlushQueued(current);
                 }
               },
-              onError: (err) => {
+              onError: async (err) => {
                 const current = this.activeCards.get(streamKey);
                 if (!current || current.cardId !== cardId) return;
                 if (isFeishuCardPayloadLimitError(err)) {
-                  void this.forceStreamingCardContinuationRollover(
+                  // Keep this request in flight through the state handoff. Otherwise
+                  // its cleanup runs on the source card before the continuation
+                  // installs the copied promise, permanently blocking future flushes.
+                  const rolled = await this.forceStreamingCardContinuationRollover(
                     streamKey,
                     current,
                     plan.snapshot.rawContent,
@@ -4800,13 +4803,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
                     plan.snapshot.actionRows,
                     plan.snapshot.metadata,
                     'feishu_payload_limit',
-                  ).then((rolled) => {
-                    if (rolled) return;
-                    const latest = this.activeCards.get(streamKey);
-                    if (!latest || latest.cardId !== cardId) return;
-                    this.markCardFlushFailure(latest, err);
-                    this.markCardFlushQueued(latest);
-                  });
+                  );
+                  if (rolled) return;
+                  const latest = this.activeCards.get(streamKey);
+                  if (!latest || latest.cardId !== cardId) return;
+                  this.markCardFlushFailure(latest, err);
+                  this.markCardFlushQueued(latest);
                   return;
                 }
                 this.markCardFlushFailure(current, err);
@@ -5757,7 +5759,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     operation: () => Promise<T>,
     handlers: {
       onSuccess?: (result: T) => void;
-      onError?: (error: unknown) => void;
+      onError?: (error: unknown) => void | Promise<void>;
     } = {},
   ): Promise<void> {
     const promise = this.withFeishuRequestTimeout(scope, target, operation)
@@ -5766,7 +5768,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         handlers.onSuccess?.(result);
       })
       .catch((error) => {
-        handlers.onError?.(error);
+        return handlers.onError?.(error);
       });
     return promise.catch((error) => {
       console.warn(
