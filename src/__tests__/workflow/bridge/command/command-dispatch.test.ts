@@ -1345,7 +1345,7 @@ describe('command-dispatch', () => {
           hotUpdateRunner: async (request) => ({
             stdout: [
               'Dispatched CodeLark hot update.',
-              'PID: 12345',
+              `PID: ${process.pid}`,
               `Hot update log: ${hotUpdateLog}`,
               `Bridge log: ${bridgeLog}`,
               'Pull requested: no',
@@ -1371,6 +1371,11 @@ describe('command-dispatch', () => {
       assert.doesNotMatch(sent[0].richCard?.sections.map((section) => section.title || '').join('\n'), /派发输出/);
       assert.equal(store.getChannelChat(address.channelType, address.chatId), null);
       assert.deepEqual(consumeStartupNoticeTarget()?.address, address);
+
+      // Let the monitor observe a live worker before publishing completion. A
+      // made-up PID can terminate the monitor before the test appends its log.
+      await waitForCondition(() => sent.length >= 2, 5_000);
+      assert.equal(sent[1].richCard?.title, 'CodeLark 热更新日志');
 
       fs.appendFileSync(hotUpdateLog, '\n[hot-update] completed 2026-05-31T23:43:10+08:00\n', 'utf-8');
       await waitForCondition(

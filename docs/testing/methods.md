@@ -254,6 +254,8 @@ npm run real:feishu:e2e -- --list-scenarios
 
 ## 维护原则
 
+日志监控的完成路径测试需要确定存活的 worker PID：仅做 `process.kill(pid, 0)` 存活查询时，可使用当前测试进程的 `process.pid`。先观察一轮运行中刷新，再追加完成标记，避免固定假 PID 被识别为退出后监控已经停止；退出路径使用单独用例覆盖。测试 runner 仍须注入，不能为了提供活 PID 执行真实热更新。
+
 - 新增测试时先判断它证明的是纯逻辑、本地 workflow、本地真实进程，还是外部平台契约；不要把真实飞书 E2E 当成本地测试的逐条镜像。
 - 工具调用测试以 scripted Mock 为协议回归基座，再用真实 Codex/Kimi fixture 验证协议 shape，最后才用隔离飞书 App 验证 CardKit 客户端边界；真模型输出不能替代确定性断言。
 - 命令密集型真实 E2E 按 runtime 压缩，不默认扩张完整 provider 矩阵；provider 差异只在 SDK/tmux 输出路径和真实风险足够高时增加。
