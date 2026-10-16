@@ -67,17 +67,17 @@ describe('SessionExecutor', () => {
       { sessionId: 'session-a', queued: 0 },
     ]);
 
-    await waitForCondition(() => {
-      const logText = fs.readFileSync(logPath, 'utf-8');
-      return logText.includes('"event":"session.executor.scheduled"')
-        && logText.includes('"event":"session.executor.started"')
-        && logText.includes('"event":"session.executor.finished"');
-    });
-
-    const entries = fs.readFileSync(logPath, 'utf-8')
-      .trim()
+    const readEntries = () => fs.readFileSync(logPath, 'utf-8')
       .split('\n')
+      .slice(0, -1) // Only complete lines from the asynchronous logger.
       .map((line) => JSON.parse(line) as Record<string, unknown>);
+    await waitForCondition(() => readEntries().some((entry) => (
+      entry.event === 'session.executor.finished'
+      && entry.session_id === 'session-a'
+      && entry.job_kind === 'provider-switch'
+    )));
+
+    const entries = readEntries();
     const queuedSchedule = entries.find((entry) => (
       entry.event === 'session.executor.scheduled'
       && entry.job_kind === 'provider-switch'
