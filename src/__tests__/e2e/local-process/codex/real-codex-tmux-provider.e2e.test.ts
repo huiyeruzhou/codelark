@@ -19,7 +19,7 @@ import {
 import { tmuxCore } from '../../../../bridge/tmux/core.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { OutboundMessage } from '../../../../domain/index.js';
-import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
+import { _testOnly, registerAdapter, stop as stopBridge } from '../../../../bridge/host/manager.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import {
@@ -558,6 +558,8 @@ describe('real codex tmux provider e2e', () => {
         1,
       );
     } finally {
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }
@@ -703,7 +705,8 @@ describe('real codex tmux provider e2e', () => {
       assert.ok(sendIndex >= 0 && endIndex > sendIndex);
     } finally {
       await _testOnly.waitForPendingTmuxSelectionPromptProbes();
-      bridgeState.running = false;
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }
@@ -890,6 +893,8 @@ describe('real codex tmux provider e2e', () => {
       });
       assert.equal(directTurnRequests.length, 1);
     } finally {
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }
@@ -1046,6 +1051,8 @@ describe('real codex tmux provider e2e', () => {
         ].join('\n'));
       }
     } finally {
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }
@@ -1211,6 +1218,8 @@ describe('real codex tmux provider e2e', () => {
         ].join('\n'));
       }
     } finally {
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }
@@ -1387,6 +1396,8 @@ describe('real codex tmux provider e2e', () => {
       }
     } finally {
       tmuxCore.sendActions = originalSendActions;
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }
@@ -1551,6 +1562,8 @@ describe('real codex tmux provider e2e', () => {
       );
       assert.equal(session?.runtime?.codex?.threadId, generatedThreadId);
     } finally {
+      // Cancel live turns before deleting their terminal and fixture store.
+      await stopBridge();
       if (tmuxSessionName) {
         await execFileAsync('tmux', ['kill-session', '-t', tmuxSessionName]).catch(() => undefined);
       }

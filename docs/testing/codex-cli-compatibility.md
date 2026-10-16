@@ -101,3 +101,7 @@ CODELARK_REAL_FEISHU_E2E=1 CODELARK_CODEX_CLI_PATH="$(command -v codex)" \
 真实飞书测试依然**不包含真人客户端按钮点击验收**。审批卡可以由用户身份读回；没有实际点击时，测试通过真实 `/stop` 取消审批并把 `acceptanceComplete` 保持为 false。凭据预检拒绝误传 lark-cli keychain 引用，避免把引用文本写成测试 app 的密钥。
 
 官方 Desktop GUI、本机生产 Bridge 热更新、远端平台 CI 未执行。生产进程保持原状；全局 CLI 当前为 0.163.0。
+
+## 真实进程测试的退出清理
+
+Codex tmux 用例在删除隔离终端、代理和临时目录之前，先调用测试实例的正常 Bridge 停止流程，取消仍在运行的 turn。仅清空测试状态无法代替取消任务，可能留下任务持有的资源，使所有断言完成后 Node worker 仍无法退出。测试继续要求进程自然退出，不使用强制退出参数或放宽分片超时。
