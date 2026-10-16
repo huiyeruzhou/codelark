@@ -87,7 +87,7 @@ CODELARK_REAL_FEISHU_E2E=1 npm run real:feishu:e2e -- \
   --scenario runtime-message --run-id app-server-local
 ```
 
-`.github/workflows/real-feishu.yml` 提供手动触发的 GitHub Actions 工作流，依次验证 direct（`sdk` 入口）和 mirror（`tmux` 入口）。CI 复用已经在本地授权的专用测试账号，不再为每次运行要求扫码。仓库需要 `FEISHU_E2E_APP_ID`、`FEISHU_E2E_APP_SECRET` 和 `FEISHU_E2E_LARK_AUTH_B64` 三个 Secrets。
+`.github/workflows/real-feishu.yml` 提供手动触发的 GitHub Actions 工作流，通过统一的 `tmux` 入口验证 app-server 执行及终端查看；已停用的 `/p sdk` 不再属于生命周期矩阵，harness 在授权、建群前拒绝该参数。CI 复用已经在本地授权的专用测试账号，不再为每次运行要求扫码。仓库需要 `FEISHU_E2E_APP_ID`、`FEISHU_E2E_APP_SECRET` 和 `FEISHU_E2E_LARK_AUTH_B64` 三个 Secrets。
 
 在已授权的专用测试目录执行下面命令即可更新登录态 Secret。脚本先核验身份，只打包单一测试 App/用户的配置、加密凭据和对应密钥，通过 stdin 传给 `gh secret set`，不会把凭据打印到终端或写进仓库：
 
@@ -105,7 +105,7 @@ Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实�
 
 如果 CI 在身份核验阶段失败、尚未执行业务故事，先核对已有身份核验记录与 CI 恢复的 Secret/缓存来源和代次。最近一次运行在 CI 时，本地副本可能已旧，不应先用它在线 `verify` 或重新 `publish`；需要回迁时先恢复匹配代次的最新密文，再在独占测试账号期间核验。只有证据表明需要恢复登录时才重新授权；身份核验失败本身不能证明 token 已过期，也不应直接要求用户重新扫码。记录已观察到的有效状态、发布来源和重跑结果；尚未查清的具体原因保持未确定。
 
-协议路径的 `/p tmux` 验证“共享线程已就绪、可直接发送消息”，随后以真实模型执行和消息回读确认可用；旧路径仍验证原 Provider 切换结果。本地真实飞书验收已通过 tmux 18 项、sdk 17 项检查，模型依赖为隔离的确定性响应服务，Codex 与飞书边界均为真实执行。
+协议路径的 `/p tmux` 验证“共享线程已就绪、可直接发送消息”，随后以真实模型执行和消息回读确认可用；旧路径仍验证原 Provider 切换结果。早期双入口验收曾通过 tmux 18 项、sdk 17 项检查；SDK 报告只作历史参考，当前入口验收见 [Codex CLI 兼容性](../codex-cli-compatibility.md)，模型依赖为隔离的确定性响应服务，Codex 与飞书边界均为真实执行。
 
 这里的真实飞书场景目前覆盖用户入站、协议执行、最终投递和消息回读。完整生命周期使用下面的独立故事验收；真实审批按钮点击与 Desktop GUI 分别报告，不能用 payload 或模拟 callback 冒充真实操作。
 
@@ -117,14 +117,14 @@ Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实�
 
 配置分栏独立于实际执行：当前 agent 是 Codex 时，查看 Kimi 配置仍显示当前 Codex 后端、标题与线程；保存目标仍是 Kimi 配置。状态查询不能创建或恢复线程、启动终端、修改配置或切换绑定。离线命令回归覆盖未启动、连接中、已连接、活动/等待/空闲、断开、旧版 tmux 及跨 runtime 配置预览；协议状态由受控 fixture 提供，不能据此宣称真实客户端展示已验收。
 
-真实验收应在专用隔离测试环境中，用真实用户 CLI 发送上述命令并回读卡片。在首次输入前、活动轮次、轮次完成、`/clear` 后未输入时分别检查状态；打开 `/p tmux` 后确认后端不变且终端用途为查看入口。只操作本次拥有的 fixture 来验证断开，禁止探测或停止生产后端。SDK/tmux 使用相同检查；现有显式 endpoint 故事不能作为默认私有后端自动启动的证据。客户端按钮回调需另行真实点击，未执行则记录 unverified。
+真实验收应在专用隔离测试环境中，用真实用户 CLI 发送上述命令并回读卡片。在首次输入前、活动轮次、轮次完成、`/clear` 后未输入时分别检查状态；打开 `/p tmux` 后确认后端不变且终端用途为查看入口。只操作本次拥有的 fixture 来验证断开，禁止探测或停止生产后端。当前统一使用 tmux 入口；现有显式 endpoint 故事不能作为默认私有后端自动启动的证据。客户端按钮回调需另行真实点击，未执行则记录 unverified。
 
 当最近一次运行在 CI，必要的本地身份恢复必须先确认授权包与最新加密缓存属于同一 App、用户和缓存代次，再在隔离目录组合并核验。`feishu-auth.py restore` 仅恢复授权包，不自动下载 CI 缓存；不可用可能过旧的本地副本覆盖最新 CI 授权。身份恢复与真实测试启动按测试账号的独占交接执行。
 
 状态检查已经接入同一个 `app-server-lifecycle` helper，本地与 CI 无需新增参数。故事新增七个 `backend_status_*` 检查点：
 
 1. `initial_unstarted` 在 `/p tmux` 等主动准备命令前查询 `/`、`/p`、`/status`，确认尚未建立且不分配线程。共享服务此时可能已经运行，不能把会话尚未建立解释为服务已停止。
-2. `ready_idle` 在首次真实输入完成后查询 `/`、三个配置分栏、`/p` 与 `/status`。实际后端应为 app-server、连接已确认、执行空闲；SDK/direct 验证没有终端记录，tmux 入口验证查看用途。两个入口都继续使用同一个后端，不把 sdk/tmux 配置值当成后端，也不在 SDK 故事中额外切换 Provider。
+2. `ready_idle` 在首次真实输入完成后查询 `/`、三个配置分栏、`/p` 与 `/status`。实际后端应为 app-server、连接已确认、执行空闲；tmux 入口验证终端用途为查看。执行始终使用同一个 app-server 后端，不能把 provider 配置值当成实际后端。
 3. `active` 在 steer 故事的原轮次保持模型等待时读取运行中；`waiting` 在真实原生问题卡出现后读取等待答复；`answered_idle` 在真实用户文字回答和本轮完成后读取空闲。
 4. `clear_unstarted` 和 `new_unstarted` 在新会话首次模型输入前再次查询，确认没有原生线程。每次查询前后对比会话、线程、配置和模型请求数，不能因读取而切换或执行。
 
@@ -132,11 +132,11 @@ Runner 在临时目录恢复登录态，核验实际 App/用户后执行真实�
 
 状态回读的离线样本位于 `src/__tests__/harness/real-feishu/fixtures/backend-status-readbacks.json`，保留真实 SDK1–3 消息格式，仅替换身份标识和本地路径。interactive 摘要可能把下一个 `**说明**` 标题紧接在字段末尾；解析器识别完整标题边界，字段值仍精确匹配。样本同时保留被 renderer 压缩掉必要状态的旧卡作为负例，不能将它当成成功回读。
 
-CI 继续沿用 `real-feishu.yml` 的串行 SDK/tmux、隔离授权、同代次缓存恢复/保存及清理。旧的生命周期报告没有这些检查点，不能算新状态验收通过。断开状态目前只有离线命令/共享投影测试覆盖：现有 lifecycle driver 没有关闭 owned 后端的接口，本次三文件增量没有增加后台控制能力。真实断开显示、独立服务面板链接点击和客户端按钮点击均未由这些自动检查证明；不得用关闭观察连接冒充 Bridge 断开。
+CI 使用 `real-feishu.yml` 的 tmux 生命周期故事，保留隔离授权、同代次缓存恢复/保存及清理。旧的生命周期报告没有这些检查点，不能算新状态验收通过。断开状态目前只有离线命令/共享投影测试覆盖：现有 lifecycle driver 没有关闭 owned 后端的接口，本次三文件增量没有增加后台控制能力。真实断开显示、独立服务面板链接点击和客户端按钮点击均未由这些自动检查证明；不得用关闭观察连接冒充 Bridge 断开。
 
 ### 完整 app-server 生命周期故事
 
-`app-server-lifecycle` 在 SDK/direct 与 tmux/mirror 两个入口运行同一条故事：真实用户配置与输入、模型运行中追加到原 turn、`/stop` 的原生 `interrupted` 与飞书卡片终态、另起活跃轮次后的 `/clear` 确认与新 thread、`/new` 产品路径新群、配置继承、Bridge 重启续用原 thread 且不重复发送（同时比对两个群的新增机器人消息，空 mirror 卡也算重复）、原生 Codex 问答与真实用户文字回答，最后进入原生审批步骤。
+`app-server-lifecycle` 使用当前唯一的 `--provider tmux` 入口运行完整故事：真实用户配置与输入、模型运行中追加到原 turn、`/stop` 的原生 `interrupted` 与飞书卡片终态、另起活跃轮次后的 `/clear` 确认与新 thread、`/new` 产品路径新群、配置继承、Bridge 重启续用原 thread 且不重复发送（同时比对两个群的新增机器人消息，空 mirror 卡也算重复）、原生 Codex 问答与真实用户文字回答，最后进入原生审批步骤。
 
 配置故事先验证 `/current-runtime kimi/common/codex` 只切换查看分栏，当前 agent 与绑定不变。随后保持真实原生轮次运行，通过真实用户命令修改 model、reasoning、cwd、sandbox、network 与 `/yolo on/off/status`；原轮次继续使用提交时的设置，下一轮才采用新配置。报告的 `configurationChanges` 保存前后会话与原生配置，`appliedSettings` 将隔离 `CODEX_HOME` 中精确 thread/turn 的 `turn_context` 与对应模型请求交叉核对，覆盖正常模式与 YOLO 往返，不能只凭保存成功回复宣称配置已经应用。
 

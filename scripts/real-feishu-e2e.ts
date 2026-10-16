@@ -1462,7 +1462,7 @@ function getScenarioDefinition(name: string): ScenarioDefinition {
 }
 
 function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
-  if (scenario.name === 'app-server-lifecycle') return ['sdk', 'tmux'].map((provider) => `${scenario.testNamePrefix}::codex-${provider}`);
+  if (scenario.name === 'app-server-lifecycle') return [`${scenario.testNamePrefix}::codex-tmux`];
   if (scenario.providerCoverage === 'runtime-parameterized') {
     return [
       `${scenario.testNamePrefix}::codex-sdk`,
@@ -7379,6 +7379,7 @@ async function main(): Promise<void> {
   getScenarioDefinition(options.scenario);
   if (options.codexAppServer && (!options.launchBridge || options.runtime !== 'codex' || !['runtime-message', 'message-only', 'app-server-lifecycle'].includes(options.scenario))) throw new Error('--codex-app-server requires an isolated Codex bridge and a supported message/card scenario.');
   if (options.scenario === 'app-server-lifecycle' && !options.codexAppServer) throw new Error('app-server-lifecycle requires --codex-app-server.');
+  if (options.scenario === 'app-server-lifecycle' && options.provider !== 'tmux') throw new Error('app-server-lifecycle requires --provider tmux; Codex no longer accepts /p sdk.');
   if (options.nativeRequestCards && options.scenario !== 'app-server-lifecycle') throw new Error('--native-request-cards requires app-server-lifecycle.');
   if ((options.approvalWaitMs || options.requireApproval) && options.scenario !== 'app-server-lifecycle') throw new Error('Approval options require app-server-lifecycle.');
   if (options.requireApproval && !options.approvalWaitMs) throw new Error('--require-approval requires --approval-wait-ms.');
@@ -7565,6 +7566,7 @@ async function main(): Promise<void> {
 
     if (!chatId) throw new Error('No real Feishu chat_id available.');
     if (lifecycleModel && protocolObserver) {
+      if (options.provider !== 'tmux') throw new Error('app-server-lifecycle requires --provider tmux');
       const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
       const sourceDirty = Boolean(execFileSync('git', ['diff', '--name-only'], { encoding: 'utf8' }).trim());
       const configuration = createConfigService({ codelarkHome: options.codelarkHome, env: {}, migrate: false });
@@ -7591,7 +7593,7 @@ async function main(): Promise<void> {
             configuration: { ...Object.fromEntries(fields.map((field) => [field, configuration.get(field, scope)])),
               systemPrompt: dump.session.runtime?.general?.systemPrompt || '' },
             streamKeys: dump.streamKeys,
-            terminal: findLatestProviderStreamTerminalState({ streamKeys: dump.streamKeys, logText: dump.logWindow?.text || '', streamPrefix: options.provider === 'sdk' ? 'im:' : 'mirror:' }),
+            terminal: findLatestProviderStreamTerminalState({ streamKeys: dump.streamKeys, logText: dump.logWindow?.text || '', streamPrefix: 'mirror:' }),
           };
         },
         findCreatedChat: (name) => extractScenarioCreatedChatIdsFromBridgeState(options, [name], [chatId])[0],

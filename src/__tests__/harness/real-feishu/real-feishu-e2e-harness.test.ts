@@ -887,7 +887,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     assert.ok(runtimeParameterized.length > 0);
     for (const scenario of runtimeParameterized) {
       if (scenario.scenario === 'app-server-lifecycle') {
-        assert.deepEqual(scenario.providerMatrix, ['sdk', 'tmux'].map((provider) => `real-feishu::app-server-lifecycle::codex-${provider}`));
+        assert.deepEqual(scenario.providerMatrix, ['real-feishu::app-server-lifecycle::codex-tmux']);
         continue;
       }
       assert.equal(scenario.testNamePattern, `real-feishu::${scenario.scenario}::<runtime>-<provider>`);
@@ -4433,17 +4433,16 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
 
 describe('app-server real Feishu execution selection', () => {
   it('keeps lifecycle approval opt-in and limits the story to the isolated native backend', () => {
-    for (const provider of ['sdk', 'tmux']) {
-      const report = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', provider, '--scenario', 'app-server-lifecycle']));
-      assert.equal(report.scenario, 'app-server-lifecycle');
-      assert.equal(report.keepGroup, false, '自动运行结束后默认解散测试群');
-      assert.equal(report.coverage.matrix.length, 2);
-      assert.match(report.coverage.testName, /::app-server$/);
-      const extended = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--native-request-cards', '--runtime', 'codex', '--provider', provider, '--scenario', 'app-server-lifecycle']));
-      assert.equal(extended.keepGroup, false);
-      assert.equal(extended.nativeRequestCards, true);
-    }
+    const report = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', 'tmux', '--scenario', 'app-server-lifecycle']));
+    assert.equal(report.scenario, 'app-server-lifecycle');
+    assert.equal(report.keepGroup, false, '自动运行结束后默认解散测试群');
+    assert.deepEqual(report.coverage.matrix, ['real-feishu::app-server-lifecycle::codex-tmux']);
+    assert.match(report.coverage.testName, /::app-server$/);
+    const extended = JSON.parse(runHarness(['--dry-run', '--launch-bridge', '--codex-app-server', '--native-request-cards', '--runtime', 'codex', '--provider', 'tmux', '--scenario', 'app-server-lifecycle']));
+    assert.equal(extended.keepGroup, false);
+    assert.equal(extended.nativeRequestCards, true);
     assert.match(runHarnessFailure(['--dry-run', '--scenario', 'app-server-lifecycle']), /requires --codex-app-server/);
+    assert.match(runHarnessFailure(['--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--provider', 'sdk', '--scenario', 'app-server-lifecycle'], { CODELARK_REAL_FEISHU_E2E: '' }), /requires --provider tmux; Codex no longer accepts \/p sdk/);
     assert.match(runHarnessFailure(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'codex', '--scenario', 'app-server-lifecycle', '--require-approval']), /requires --approval-wait-ms/);
     assert.match(runHarnessFailure(['--dry-run', '--approval-wait-ms', '1000']), /require app-server-lifecycle/);
     assert.match(runHarnessFailure(['--dry-run', '--native-request-cards']), /requires app-server-lifecycle/);

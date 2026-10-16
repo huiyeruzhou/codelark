@@ -51,7 +51,7 @@ npm run real:feishu:e2e -- --list-scenarios
 npm run prepublishOnly
 ```
 
-该命令包含 typecheck、完整测试、文档构建、生产构建和真实飞书 E2E。没有真实飞书测试环境时，发布检查会失败，这是预期行为；正式发布应在具备真实测试凭据的维护环境中执行。
+该命令包含 typecheck、完整测试、文档构建、生产构建和 npm 包内容检查。真实飞书 E2E 独立运行，不在 `prepublishOnly` 中；涉及飞书行为的发布还必须验证隔离测试群中的真实路径，并记录真人按钮点击等尚未验收的部分。可使用 `real-feishu.yml` 工作流执行当前 tmux 入口的 app-server 生命周期故事，授权与执行方法见 [真实飞书测试说明](docs/testing/real-feishu/index.md)。
 
 检查 npm 包内容：
 

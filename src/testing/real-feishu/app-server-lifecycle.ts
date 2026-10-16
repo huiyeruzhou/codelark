@@ -13,7 +13,7 @@ interface FixtureModel {
 /** 只有模型可编排；这些边界由真实 CLI、真实 Bridge 和只读后端观察连接提供。 */
 export interface LifecycleDriver {
   runId: string;
-  provider: 'sdk' | 'tmux';
+  provider: 'tmux';
   chatId: string;
   modelName: string;
   alternateModelName: string;
@@ -401,7 +401,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     await command(d.chatId, '/yolo off', 'normal');
     assert.equal((await state(d.chatId)).threadId, undefined, '首输入前应没有原生线程');
     await backendStatus(d.chatId, 'initial_unstarted', { backend: 'unstarted' }, ['/', '/p', '/status']);
-    await command(d.chatId, `/p ${d.provider}`, d.provider === 'tmux' ? '共享 Codex 线程已就绪' : 'sdk');
+    await command(d.chatId, '/p tmux', '共享 Codex 线程已就绪');
     await command(d.chatId, `/model ${d.modelName}`, d.modelName);
     await command(d.chatId, '/reasoning low', 'low');
     await command(d.chatId, '/sandbox read-only', 'read-only');
@@ -414,7 +414,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     assert.equal(original.configuration['runtime.codex.networkAccess'], false);
     check('real_user_input_and_readback', first);
     await backendStatus(d.chatId, 'ready_idle', { backend: 'app-server', activity: 'idle',
-      terminal: d.provider === 'tmux' ? 'view' : 'none', threadId: first.threadId },
+      terminal: 'view', threadId: first.threadId },
     ['/', '/current-runtime codex', '/current-runtime kimi', '/current-runtime common', '/p', '/status']);
 
     const configurationStory = { driver: d, report, wait, command, send, read, state, thread, completedPrompt, visible, check, save };

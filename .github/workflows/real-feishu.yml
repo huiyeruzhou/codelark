@@ -14,7 +14,7 @@ concurrency:
 jobs:
   feishu:
     runs-on: ubuntu-latest
-    # SDK/tmux 串行运行；加入活动配置、真实 mention、继承与隔离后，本地单入口约 10 分钟。
+    # Codex 对外统一为 tmux；app-server 执行与终端查看在同一故事中验证。
     timeout-minutes: 45
     env:
       CODELARK_REAL_FEISHU_E2E: '1'
@@ -70,16 +70,12 @@ jobs:
       - name: 真实飞书生命周期（自动部分；审批点击另行验收）
         run: |
           mkdir -p "$RUNNER_TEMP/feishu-evidence"
-          failed=0
-          for provider in sdk tmux; do
-            node --import tsx scripts/real-feishu-e2e.ts \
-              --test-env-file "$CODELARK_REAL_FEISHU_AUTH_HOME/test.env" \
-              --launch-bridge --codex-app-server --runtime codex --provider "$provider" \
-              --scenario app-server-lifecycle --native-request-cards --run-id "ci-${GITHUB_RUN_ID}-${provider}" \
-              --run-root "/tmp/clk-real-feishu-${GITHUB_RUN_ID}-${provider}" \
-              --output "$RUNNER_TEMP/feishu-evidence/${provider}.json" || failed=1
-          done
-          exit "$failed"
+          node --import tsx scripts/real-feishu-e2e.ts \
+            --test-env-file "$CODELARK_REAL_FEISHU_AUTH_HOME/test.env" \
+            --launch-bridge --codex-app-server --runtime codex --provider tmux \
+            --scenario app-server-lifecycle --native-request-cards --run-id "ci-${GITHUB_RUN_ID}-tmux" \
+            --run-root "/tmp/clk-real-feishu-${GITHUB_RUN_ID}-tmux" \
+            --output "$RUNNER_TEMP/feishu-evidence/tmux.json"
       # Only the encrypted user token file is cached. Its master key stays in Secrets.
       # Persist refresh-token rotation even when a later test fails.
       - name: Save the refreshed encrypted authorization
