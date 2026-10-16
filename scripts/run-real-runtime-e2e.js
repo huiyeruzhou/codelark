@@ -97,6 +97,9 @@ function runShard(shard) {
     windowsHide: true,
     env: isolation.env,
   });
+  child.once('exit', (code, signal) => {
+    fs.writeFileSync(path.join(logDir, `${shard.name}-runner-exit.json`), JSON.stringify({ pid: child.pid, code, signal }));
+  });
   child.stdout.pipe(output, { end: false });
   child.stderr.pipe(output, { end: false });
 

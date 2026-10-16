@@ -1,5 +1,5 @@
 import '../../../setup/test-setup.js';
-import { describe, it, type TestContext } from 'node:test';
+import { after, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,6 +39,26 @@ import {
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 import { codexFixtureStartupChoice } from '../../../helpers/runtime/codex-startup-selection.js';
+
+// Minimal exit diagnostics: no per-resource hooks or allocation-time stacks.
+if (process.platform === 'win32') {
+  const evidence = path.join(process.env.CODELARK_RUNTIME_E2E_LOG_DIR || os.tmpdir(), 'codex-worker-exit.jsonl');
+  const snapshot = (phase: string, code?: number) => {
+    const handles = (process as any)._getActiveHandles().map((handle: any) => ({
+      type: handle.constructor?.name, pid: handle.pid, fd: handle.fd,
+      connected: handle.connected, destroyed: handle.destroyed,
+      hasRef: handle.hasRef?.(),
+    }));
+    fs.appendFileSync(evidence, JSON.stringify({ phase, pid: process.pid, parent: process.ppid,
+      code, resources: process.getActiveResourcesInfo(), handles }) + '\n');
+  };
+  after(() => {
+    snapshot('after-tests');
+    setTimeout(() => snapshot('still-alive-5s'), 5_000).unref();
+  });
+  process.once('beforeExit', code => snapshot('before-exit', code));
+  process.once('exit', code => snapshot('exit', code));
+}
 
 const execFileAsync = promisify(execFile);
 const REAL_CODEX_E2E_MODEL_ENV = 'CODELARK_REAL_CODEX_E2E_MODEL';
