@@ -33,7 +33,7 @@
 
 升级后首次真实 TUI 验收为 4/7 通过。换用当前模型只使结果变为 5/7，不能归因于测试模型过期。三项现已适配：
 
-1. **停用模型通知卡住首条输入。** 新版不再显示编号选项，而是完整迁移说明和 `enter/esc continue`。严格匹配原生通知后转成“继续”选择，等用户确认后继续原输入；不自动更改用户模型配置。拒绝已进入 scrollback 的旧通知。依据：[model_migration.rs](https://github.com/openai/codex/blob/129b8ec7ee6f4511557a4856279f529025c25af4/codex-rs/tui/src/model_migration.rs)。
+1. **停用模型通知卡住首条输入。** 新版不再显示编号选项，而是完整迁移说明和 `enter/esc continue`。严格匹配原生通知后转成“继续”选择，等用户确认后继续原输入；不自动更改用户模型配置。退出键同时识别 macOS 的 `⌃c`、Linux 的 `^c` 和 `ctrl+c`；首轮 Linux CI 的实际屏幕暴露了仅覆盖 macOS 写法的问题。拒绝已进入 scrollback 的旧通知。依据：[model_migration.rs](https://github.com/openai/codex/blob/129b8ec7ee6f4511557a4856279f529025c25af4/codex-rs/tui/src/model_migration.rs)。
 2. **goal 浮层被底层 composer 游标遮蔽。** 按标题、选中项和 footer 提取浮层，排除左侧活动历史及下方输入框。支持高亮 Cancel 时正确执行选择，同时保留其他弹窗原来的保守识别条件。依据：[thread_goal_actions.rs](https://github.com/openai/codex/blob/129b8ec7ee6f4511557a4856279f529025c25af4/codex-rs/tui/src/app/thread_goal_actions.rs)。
 3. **模型恢复警告藏入 F2 导致漏报。** 原生恢复会比较上一轮 `turn_context` 模型，发送 Warning，再写入并 flush 本次 `thread_settings_applied`。CodeLark 捕获本次自己启动的 resume 前后检查点，核对线程、文件 identity 和追加 offset，读取实际生效模型；复用原警告卡和去重。保留旧屏幕检测，不操作 F2、不根据请求参数推测实际模型、不改写 rollout。依据：[session/mod.rs](https://github.com/openai/codex/blob/129b8ec7ee6f4511557a4856279f529025c25af4/codex-rs/core/src/session/mod.rs)、[rollout_reconstruction.rs](https://github.com/openai/codex/blob/129b8ec7ee6f4511557a4856279f529025c25af4/codex-rs/core/src/session/rollout_reconstruction.rs)。
 

@@ -464,7 +464,7 @@ function codexSelectionSurface(tail: string): string {
 
 function codexRetiredModelNotice(tail: string): CodexTuiSelectionPrompt | null {
   const lines = tail.split('\n');
-  const footer = lines.findLastIndex((line) => /^\s*enter\/esc continue\s*·\s*(?:⌃c|ctrl\+c) quit\s*$/i.test(line));
+  const footer = lines.findLastIndex((line) => /^\s*enter\/esc continue\s*·\s*(?:⌃c|\^c|ctrl\+c) quit\s*$/i.test(line));
   if (footer < 0 || lines.slice(footer + 1).some((line) => line.trim())) return null;
   const header = lines.findLastIndex((line, index) => index < footer && /^\s*\S.+ is no longer available\s*$/.test(line));
   if (header < 0 || footer - header > 12) return null;

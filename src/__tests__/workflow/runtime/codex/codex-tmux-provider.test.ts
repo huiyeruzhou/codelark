@@ -548,11 +548,11 @@ describe('codex-tmux-provider', () => {
     assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'not_selection'), []);
   });
 
-  it('recognizes a retired-model continue notice and waits for its explicit choice', async () => {
+  for (const quitKey of ['⌃c', '^c', 'ctrl+c']) it(`recognizes a retired-model continue notice with ${quitKey} and requires its explicit choice`, () => {
     const screen = [
       '  GPT-5.4 is no longer available', '',
       '  Codex now uses GPT-6 Sol in place of GPT-5.4. Switch to GPT-6 Sol to',
-      '  continue.', '  enter/esc continue · ⌃c quit', '',
+      '  continue.', `  enter/esc continue · ${quitKey} quit`, '',
     ].join('\n');
     const prompt = parseCodexTuiSelectionPrompt(screen);
     assert.ok(prompt);
@@ -561,7 +561,7 @@ describe('codex-tmux-provider', () => {
     assert.deepEqual(prompt.options.map((o) => o.label), ['继续']);
     assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'option_1'), [{ type: 'key', key: 'Enter' }]);
     assert.equal(parseCodexTuiSelectionPrompt(screen + '\n› Ask Codex to do anything'), null, 'a dismissed notice in scrollback is not active');
-    assert.equal(parseCodexTuiSelectionPrompt(screen.replace('enter/esc continue · ⌃c quit', 'quoted documentation')), null);
+    assert.equal(parseCodexTuiSelectionPrompt(screen.replace(`enter/esc continue · ${quitKey} quit`, 'quoted documentation')), null);
   });
 
   it('reads the goal overlay above its still-visible composer and excludes moving background text', () => {
