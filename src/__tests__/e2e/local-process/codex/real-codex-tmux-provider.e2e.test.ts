@@ -517,12 +517,14 @@ describe('real codex tmux provider e2e', () => {
       );
 
       let observedWarning: ReturnType<typeof parseCodexTuiModelMismatchWarning> = null;
+      let warningScreen = '';
       const expectedWarningKey = `${binding.bridgeSessionId}\u0000${recordedModel}\u0000${resumingModel}`;
       const sawMismatchNotice = await waitForCondition(async () => {
         const capture = await execFileAsync(
           'tmux',
           ['capture-pane', '-p', '-t', `${tmuxSessionName}:0.0`, '-S', '-80'],
         ).catch(() => ({ stdout: '', stderr: '' }));
+        warningScreen = capture.stdout;
         observedWarning = parseCodexTuiModelMismatchWarning(capture.stdout);
         await _testOnly.reconcileMirrorSubscriptions();
         return adapter.sent.some((message) => message.richCard?.title === 'Codex 恢复模型不一致')
@@ -533,11 +535,16 @@ describe('real codex tmux provider e2e', () => {
         recordedModel: string;
         resumingModel: string;
       } | null;
-      assert.ok(parsedWarning);
-      assert.equal(parsedWarning.recordedModel, recordedModel);
-      assert.equal(parsedWarning.resumingModel, resumingModel);
+      if (parsedWarning) {
+        assert.equal(parsedWarning.recordedModel, recordedModel);
+        assert.equal(parsedWarning.resumingModel, resumingModel);
+      } else {
+        assert.match(warningScreen, /warnings?\s*·\s*f2 to view/i, 'new Codex retains the native warning in its collapsed viewer');
+      }
       const mismatchNotices = adapter.sent.filter((message) => message.richCard?.title === 'Codex 恢复模型不一致');
       assert.equal(mismatchNotices.length, 1);
+      assert(mismatchNotices[0].text.includes(recordedModel));
+      assert(mismatchNotices[0].text.includes(resumingModel));
       assert.match(mismatchNotices[0].text, /\/clear/);
       assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, threadId);
       assert.equal(

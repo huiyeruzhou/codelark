@@ -277,8 +277,7 @@ export function readCodexSessionModel(threadId: string): string | undefined {
           type?: unknown;
           payload?: { model?: unknown };
         };
-        if (parsed.type !== 'turn_context') continue;
-        const model = typeof parsed.payload?.model === 'string' ? parsed.payload.model.trim() : '';
+        const model = codexRecordedModel(parsed, threadId);
         if (model) return model;
       } catch {
         // Continue past partial or unrelated rows.
@@ -288,6 +287,58 @@ export function readCodexSessionModel(threadId: string): string | undefined {
     // Display probing is best effort and must never break a turn.
   }
   return undefined;
+}
+
+function codexRecordedModel(parsed: { type?: unknown; payload?: { type?: unknown; thread_id?: unknown; model?: unknown; thread_settings?: { model?: unknown } } }, threadId: string): string | undefined {
+  const payload = parsed.payload;
+  const model = parsed.type === 'turn_context' ? payload?.model
+    : parsed.type === 'event_msg' && payload?.type === 'thread_settings_applied' && payload.thread_id === threadId
+      ? payload.thread_settings?.model : undefined;
+  return typeof model === 'string' ? model.trim() || undefined : undefined;
+}
+
+export interface CodexResumeModelCheckpoint {
+  threadId: string; filePath: string; offset: number; dev: number; ino: number; model: string;
+}
+
+/** Snapshot before an owned TUI resume; never infer the effective model from CLI arguments. */
+export function captureCodexResumeModelCheckpoint(threadId: string): CodexResumeModelCheckpoint | undefined {
+  const session = getCodexSessionByThreadId(threadId);
+  if (!session) return;
+  try {
+    const stat = fs.statSync(session.filePath);
+    const text = readFileUtf8Range(session.filePath, Math.max(0, stat.size - MAX_SESSION_MODEL_SCAN_BYTES), stat.size);
+    for (const line of text.split(/\r?\n/).reverse()) {
+      try {
+        const parsed = JSON.parse(line);
+        // Match core/session/rollout_reconstruction.rs: the warning compares
+        // the previous turn's model, not later standalone settings changes.
+        // Do not guess through a rollback/compaction boundary in a bounded tail.
+        if (parsed.type === 'compacted' || parsed.payload?.type === 'thread_rolled_back') return;
+        if (parsed.type !== 'turn_context') continue;
+        const model = codexRecordedModel(parsed, threadId);
+        if (model) return { threadId, filePath: session.filePath, offset: stat.size, dev: stat.dev, ino: stat.ino, model };
+      } catch { /* A bounded tail can start in a partial JSON row. */ }
+    }
+  } catch { /* Diagnostics must not prevent a resume. */ }
+}
+
+export function readCodexResumeModelMismatch(checkpoint: CodexResumeModelCheckpoint | undefined): { recordedModel: string; resumingModel: string } | undefined {
+  if (!checkpoint) return;
+  try {
+    const stat = fs.statSync(checkpoint.filePath);
+    if (stat.dev !== checkpoint.dev || stat.ino !== checkpoint.ino || stat.size < checkpoint.offset) return;
+    const text = readFileUtf8Range(checkpoint.filePath, Math.max(checkpoint.offset, stat.size - MAX_SESSION_MODEL_SCAN_BYTES), stat.size);
+    for (const line of text.split(/\r?\n/)) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.type !== 'event_msg' || parsed.payload?.type !== 'thread_settings_applied') continue;
+        const model = codexRecordedModel(parsed, checkpoint.threadId);
+        if (!model) continue;
+        return model === checkpoint.model ? undefined : { recordedModel: checkpoint.model, resumingModel: model };
+      } catch { /* Incomplete append; the legacy terminal warning remains available. */ }
+    }
+  } catch { /* Missing/truncated histories are not evidence of a model change. */ }
 }
 
 export function archiveCodexSession(threadId: string): CodexSessionSummary | null {

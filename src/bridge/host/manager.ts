@@ -191,6 +191,8 @@ import {
 } from '../../runtime/codex/tmux-provider.js';
 import {
   findNewCodexTuiDiagnostics,
+  getCodexTuiResumeModelWarning,
+  setCodexTuiResumeModelWarning,
   parseCodexTuiModelMismatchWarning,
   parseCodexTuiReconnectSignal,
   type CodexTuiDiagnostic,
@@ -1050,7 +1052,10 @@ function observeCodexTuiModelMismatchWarning(
   subscription: BridgeMirrorSubscription,
   screenText: string,
 ): void {
-  const warning = parseCodexTuiModelMismatchWarning(screenText);
+  const session = getBridgeContext().store.getSession(subscription.sessionId);
+  const terminal = session && getSessionRuntimeTmuxSessionName(session);
+  const warning = (terminal ? getCodexTuiResumeModelWarning(terminal) : undefined)
+    || parseCodexTuiModelMismatchWarning(screenText);
   if (!warning) return;
   const targets = new Map<string, BridgeMirrorSubscription>();
   for (const candidate of getState().mirrorSubscriptions.values()) {
@@ -1456,6 +1461,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
         );
         tmuxSelectionPromptFollowupUntil.delete(subscription.sessionId);
         tmuxSelectionPromptMonitors.delete(subscription.sessionId);
+        if (runtime === 'codex') setCodexTuiResumeModelWarning(tmuxSessionName);
         const latestSession = getBridgeContext().store.getSession(subscription.sessionId);
         if (getSessionRuntimeTmuxSessionName(latestSession) === tmuxSessionName) {
           getBridgeContext().store.updateSession(subscription.sessionId, clearSessionTmuxBindingUpdate());

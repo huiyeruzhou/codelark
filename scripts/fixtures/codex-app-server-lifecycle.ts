@@ -30,8 +30,9 @@ interface Step {
 }
 
 /** 只返回预先编排的 SSE；不转发任何请求，也不读取模型凭证。 */
-export async function startFixtureModel(options: { authorization?: string; rejectWebSockets?: boolean } = {}) {
+export async function startFixtureModel(options: { authorization?: string; rejectWebSockets?: boolean; respondToThreadTitles?: boolean } = {}) {
   const requests: Array<{ method: string; url: string; body: ModelBody }> = [];
+  const auxiliaryRequests: typeof requests = [];
   const unexpected: string[] = [];
   let rejectedWebSockets = 0;
   const steps: Step[] = [];
@@ -54,8 +55,23 @@ export async function startFixtureModel(options: { authorization?: string; rejec
       }
       let body: ModelBody;
       try { body = JSON.parse(raw); } catch { res.writeHead(400).end(); return; }
-      requests.push({ method: req.method, url: req.url!, body });
-      const step = steps.shift();
+      // Codex 0.163 TUI generates titles in a separate hidden feature thread.
+      // Keep those requests observable without consuming a user-turn fixture.
+      // Ordinary text quoting the instruction must still use the strict queue.
+      const format = (body.text as { format?: { type?: string; name?: string; strict?: boolean; schema?: { properties?: Record<string, unknown>; required?: string[] } } } | undefined)?.format;
+      const titleRequest = options.respondToThreadTitles && format?.type === 'json_schema'
+        && format.name === 'codex_output_schema' && format.strict === true
+        && Object.keys(format.schema?.properties || {}).join(',') === 'title'
+        && format.schema?.required?.join(',') === 'title'
+        && body.input?.some((item) => {
+          const message = item as { role?: string; content?: Array<{ type?: string; text?: string }> };
+          return message.role === 'user' && Array.isArray(message.content) && message.content.some((part) =>
+            part.type === 'input_text' && part.text?.startsWith('Generate a concise, single-line task title of at most '));
+        });
+      (titleRequest ? auxiliaryRequests : requests).push({ method: req.method, url: req.url!, body });
+      const step: Step | undefined = titleRequest
+        ? { output: { text: '{"title":"CodeLark compatibility test"}' }, gate: Promise.resolve(), release() {} }
+        : steps.shift();
       if (!step) {
         unexpected.push('没有编排的模型调用');
         res.writeHead(500, { 'content-type': 'application/json' });
@@ -91,7 +107,7 @@ export async function startFixtureModel(options: { authorization?: string; rejec
   const address = server.address();
   assert(address && typeof address !== 'string');
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`, requests, unexpected,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`, requests, auxiliaryRequests, unexpected,
     get rejectedWebSockets() { return rejectedWebSockets; },
     enqueue(output: Step['output'], hold = false) {
       let release!: () => void;

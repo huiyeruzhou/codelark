@@ -548,6 +548,45 @@ describe('codex-tmux-provider', () => {
     assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'not_selection'), []);
   });
 
+  it('recognizes a retired-model continue notice and waits for its explicit choice', async () => {
+    const screen = [
+      '  GPT-5.4 is no longer available', '',
+      '  Codex now uses GPT-6 Sol in place of GPT-5.4. Switch to GPT-6 Sol to',
+      '  continue.', '  enter/esc continue · ⌃c quit', '',
+    ].join('\n');
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'model_migration');
+    assert.equal(hasCodexTuiInputPrompt(screen), false);
+    assert.deepEqual(prompt.options.map((o) => o.label), ['继续']);
+    assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'option_1'), [{ type: 'key', key: 'Enter' }]);
+    assert.equal(parseCodexTuiSelectionPrompt(screen + '\n› Ask Codex to do anything'), null, 'a dismissed notice in scrollback is not active');
+    assert.equal(parseCodexTuiSelectionPrompt(screen.replace('enter/esc continue · ⌃c quit', 'quoted documentation')), null);
+  });
+
+  it('reads the goal overlay above its still-visible composer and excludes moving background text', () => {
+    const screen = [
+      '• completed background response', '    Worked for <1s',
+      '        Replace goal?', '  • cl  New objective: b', '    Wo',
+      '      › 1. Replace current goal  Set the new objective and start it now',
+      '  • cl  2. Cancel                Keep the current goal', '',
+      '    Wo  enter select · esc back', '• Working (0s • esc to interrupt)',
+      '› Ask Codex to do anything', 'GPT-6.1-Sol medium · Pursuing goal',
+    ].join('\n');
+    const prompt = parseCodexTuiSelectionPrompt(screen);
+    assert.ok(prompt);
+    assert.equal(prompt.kind, 'goal');
+    assert.deepEqual(prompt.options.map((o) => o.choice), ['replace_current_goal', 'cancel']);
+    assert.deepEqual(buildCodexTuiSelectionChoiceActions(prompt, 'cancel'), [{ type: 'key', key: 'Down' }, { type: 'key', key: 'Enter' }]);
+    assert.equal(hasCodexTuiInputPrompt(screen), false);
+    assert.doesNotMatch(prompt.summary, /• cl|Worked|Ask Codex/);
+    const moved = parseCodexTuiSelectionPrompt(screen.replace('› 1.', '  1.').replace('• cl  2.', '    › 2.'));
+    assert.ok(moved);
+    assert.equal(moved.selectedIndex, 1);
+    assert.deepEqual(buildCodexTuiSelectionChoiceActions(moved, 'cancel'), [{ type: 'key', key: 'Enter' }]);
+    assert.equal(parseCodexTuiSelectionPrompt(screen.replace('Replace goal?', 'Finished goal').replace('enter select · esc back', 'dialog dismissed')), null);
+  });
+
   it('parses Codex goal replacement selections from the current prompt block only', () => {
     const screen = [
       'Codex TUI appears to be waiting at an update selection prompt.',

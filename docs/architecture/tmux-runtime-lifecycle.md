@@ -72,9 +72,19 @@ Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作
 
 下面的 bootstrap、键盘输入、JSONL 轮询和屏幕就绪检查仅用于旧执行适配器；启用协议的线程使用本章的 app-server 生命周期。升级本身不会改写已有 thread 的后端；下一次输入或显式准备会话时，默认优先连接 app-server，确认可用后交接 CodeLark 创建的旧 writer，并恢复同一 thread。显式关闭自动选择或 CLI 明确不支持监听时继续使用旧适配器。已有 thread endpoint 始终指向原协议后端。
 
+### Codex 0.163 的执行进程归属
+
+对外 provider 仍统一称为 `tmux`，内部按已绑定 endpoint 和启动参数识别执行者。app-server 绑定的终端通过 `codex --remote <endpoint> resume <threadId>` 查看同一后端；普通输入、steer、stop 由协议执行，关闭查看窗口不应终止后端任务。旧 tmux 路径没有 remote endpoint，由 TUI 执行；目前传递的 reasoning/base URL 等 `-c` 参数会使 0.163 选择内嵌后端。
+
+0.163 原生 TUI 另有自动发现、安装和启动 managed daemon 的入口，但有配置覆盖、profile、`--no-daemon` 等排除条件。不能因为升级了磁盘上的 CLI，就认定现有 Desktop、daemon、tmux 或 Bridge 后端已切换版本；诊断需要记录实际 endpoint、CODEX_HOME、启动参数和进程归属。CodeLark 只关闭自己创建的后端或终端，不以全局进程名清理原生 daemon。源码出处与验收见 [Codex CLI 兼容性](../testing/codex-cli-compatibility.md)。
+
+0.163 TUI 可能为未命名聊天创建 `ThreadSource::Feature("thread_title")` 临时隐藏线程生成标题。诊断额外模型请求时应核对原生 thread/turn/source；不要把这些请求归入当前用户 turn，也不要只凭模型请求总数判断重复输入。
+
 ### 1. thread 获取和注入
 
 当用户把当前 Codex runtime 切到 `/provider tmux` 时，`src/bridge/command/provider-settings.ts` 先从 `BridgeSession.runtime.codex.threadId` 或 binding 推导已有 Codex thread。若没有 thread，会通过 `bootstrapCodexThreadLocally` 本地预创建 Codex thread，并把结果写回 `BridgeSession`。
+
+旧适配器的 bootstrap `exec` 临时指定内建 `model_provider="openai"` 和 loopback `openai_base_url`，避免占位提示落到用户配置的自定义模型服务。只设置 `openai_base_url` 无法覆盖自定义 provider。这个临时参数不写入用户配置，也不传给后续 TUI；恢复线程仍使用原配置的 provider。普通用户配置场景已由两个真实 CLI 版本验证；这不是覆盖管理员强制 provider 要求的机制。
 
 完成 thread 解析后，`codexTmuxSessionName(threadId)` 生成 `codex_<threadId>`，`startCodexResumeTmuxSession` 用 `codex resume <threadId>` 启动 TUI。启动参数来自 `resolveSessionRuntimeConfig`，包括 model、sandbox、network、reasoning effort、mode 和 skipGitRepoCheck。
 
@@ -117,6 +127,10 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 `app-server-local.ts` 使用当前安装的普通 `codex app-server --listen`，不调用要求 managed standalone 安装的 `app-server daemon start`，不替用户安装或复制二进制。各平台的 npm 入口解析到同一安装自带的原生 Codex（包括 Windows 的 `codex.exe`），避免只持有命令或 Node 包装层的句柄。私有启动保留 `CODELARK_CODEX_BASE_URL` 与 `CODELARK_CODEX_API_KEY > CODEX_API_KEY > OPENAI_API_KEY` 的既有优先级。原生 app-server 不自动读取环境中的登录 key；有显式 key 时，私有子进程使用官方 `cli_auth_credentials_store="ephemeral"`，核对有效配置后通过 `account/login/start` 注入内存认证。密钥不放进命令参数，不写入或替换用户的 `auth.json`；已有服务复用不修改其认证。没有显式 key 时沿用原有 Codex 登录配置。
 
 地址由规范化的 `CODELARK_HOME` 哈希确定；目录尚不存在时先解析最近存在父路径的 realpath，再拼接未创建的后缀，确保 macOS `/tmp` 与 symlink 父目录不会使创建前后的地址改变。Unix 使用 `/tmp/codelark-codex-<hash>/rpc.sock`，目录属于当前用户且权限为 `0700`；Windows 使用确定的 `127.0.0.1` 高位端口。准备时先以 `initialize` 核对 `CODEX_HOME`，再查询 `thread/loaded/list`；同地址已有兼容后端就连接它。地址已被其他程序或不同 `CODEX_HOME` 使用、握手/鉴权/协议失败均直接报错。已有但不可连接、且没有本进程创建证据的 Unix socket 不会被删除或替换；确定的端口冲突也不会改选另一个地址。
+
+本机版本升级的已验证范围与 legacy TUI 未通过项见 [Codex CLI 兼容性验收](../testing/codex-cli-compatibility.md)。
+
+Codex 0.163.0 在 Unix 上可将 `--listen` 指定路径发布为指向原生管理 socket 的符号链接。协议与 `CODEX_HOME` 校验成功后，CodeLark 同时接受普通 socket 和目标确为 socket 的符号链接；记录的是入口自身的类型、dev/ino。子进程退出后的清理仅删除未被替换且已无监听者的入口，不跟随链接删除 Codex 管理的目标。
 
 同一 Bridge 内的并发准备复用一个 Promise，多个聊天共用一个后端。没有新增 PID 文件、进程出生时间检查、磁盘锁或独立守护。只有真正启动进程的一方持有其 `ChildProcess`；`closeCodexAppServerSessions()` 会同步发出关闭请求，并返回可等待进程退出的 Promise。其他进程复用的后端、显式外部服务和 Desktop LaunchAgent 不归该关闭操作管理。manager.stop 等待该关闭 Promise，再结束 Bridge。私有后端跟随 Bridge；Bridge 意外退出可能遗留可用服务，下次只按同地址协议核对并复用，不扫描 PID 或猜测归属。若本进程持有的后端异常退出，仅允许清理本次成功启动后记录、dev/ino 未变、且已无监听者的自有 socket。若路径被替换，或是跨 Bridge 重启留下且无法确认归属的残留，保持原样并报错。
 
@@ -210,7 +224,7 @@ WebSocket 握手和 `initialize` 默认各有 5 秒期限；建立连接后的�
 
 `waitForCodexResumeTmuxReady` 现在委托给 `waitForRuntimeTmuxReady(runtime='codex')` 周期性 `capturePane`，直到看到 Codex TUI ready prompt，或者达到 `CODELARK_CODEX_RESUME_TMUX_READY_TIMEOUT_MS`。如果启动时停在 update、goal、permission 或 generic selection，shared readiness 会把完整 selection prompt 发给 IM handler；没有 handler 时只返回未 ready，不自动按默认项。IM 下拉默认项来自 TUI 当前选择游标，若无法识别游标则使用 TUI 选项第一项；不会再把 update 固定成 `skip`，也不会把 goal 固定成 `cancel`。用户回调的 choice 会转换成 tmux 上的上下移动和 Enter，发送后继续 ready 检测，直到真正可输入才注入消息。
 
-Codex/Claude 公共的终端控制字符清理和 Enter footer 检测集中在 `src/runtime/tui-screen.ts`；Codex TUI 的 Enter footer 检测统一支持 `Press enter to confirm ... esc ...` 和 `Press enter to continue`，但 selection parser 仍要求屏幕中存在选择游标和可解析选项，避免把普通 TUI 输出误判成 selection。没有 handler 时返回启动失败，避免误把 selection prompt 当作 idle prompt。Kimi 的 prompt 注入在 provider 内完成；idle editor 只用 Enter 创建 turn，已有 active turn 时才额外发送 `Ctrl-S` 触发 steer。
+Codex/Claude 公共的终端控制字符清理和 Enter footer 检测集中在 `src/runtime/tui-screen.ts`；Codex TUI 的 Enter footer 检测统一支持 `Press enter to confirm ... esc ...` 和 `Press enter to continue`，但 selection parser 仍要求屏幕中存在选择游标和可解析选项，避免把普通 TUI 输出误判成 selection。没有 handler 时返回启动失败，避免误把 selection prompt 当作 idle prompt。Kimi 的 prompt 注入在 provider 内完成；idle editor 只用 Enter 创建 turn，已有 active turn 时才额外发送 `Ctrl-S` 触发 steer。 0.163 的 goal confirmation 会覆盖在仍然可见的 composer 之上；解析器按 `Replace goal?`、实际选中项及 `enter select · esc back` 截取浮层，避免底层输入游标和左侧历史文字干扰。停用模型通知虽然没有编号选项，但只有完整的原生标题、迁移正文和 `enter/esc continue · ⌃c quit` 尾部同时匹配才转成单项“继续”选择，等待用户回调；已经进入 scrollback 的旧通知不作为活动弹窗。
 
 如果启动期 Codex update selection 选择了 `update_now`，真实 Codex CLI 通常会执行全局更新并以 status 0 退出当前 TUI。`startCodexResumeTmuxSession` 把“用户选择 `update_now` 后 provider-owned tmux session 消失”或“tmux 因 `remain-on-exit` 继续存活，但 pane 报告 `status 0`”都视为可恢复的更新完成信号：向用户发送一次强制可见 notice，然后最多重新启动同名 tmux session 一次，并重新进入 ready 检测。非零 pane status 仍是启动失败。只有重启后的 TUI 进入 `ready`，调用方才会继续 provider 切换或 auto-forward 原始输入；如果重启仍失败，则按普通 launch failure 报告，避免重复循环。
 
@@ -294,7 +308,9 @@ Codex TUI 写入本地 JSONL 后，`src/runtime/codex/session-index/*` 负责发
 
 运行期屏幕只补充 JSONL 没有稳定表达的 TUI 状态，不作为最终答案来源。Codex transport retry 在底部显示 `Reconnecting... n/m` 时，host manager 复用已有 selection capture，把当前卡 status note 临时改成“正在重连 n/m”；该行消失后，仅当 status note 仍是监控自己写入的值时恢复旧状态，不能覆盖后来到达的模型状态。parser 不匹配完整行、颜色、动态耗时、快捷键 footer 或随机 composer placeholder。
 
-Codex 恢复旧 session 时还可能发送模型不一致 `WarningEvent`。Codex TUI 会把这类事件渲染成行首 `⚠ ` history cell，正文包含 session 记录模型和本次恢复模型；该信号当前不会稳定进入 mirror JSONL。CodeLark 复用同一 screen probe，只识别 warning cell 行首和两个反引号模型名，不依赖后半段完整英文或终端换行。命中后向该 session 唯一绑定的聊天发送一张橙色提醒卡，建议用 `/clear` 新建 session；不自动清空、不改变 turn 终态。相同 binding + session + 模型组合在 delivery 期间内存去重，发送成功后持久化到 binding，bridge 重启和历史 scrollback 重扫也不会重复提醒；发送失败则允许后续 probe 重试。重复 binding 属于持久化污染，由存储约束拒绝，mirror 订阅规划也不会为它建立第二条投递路径。
+Codex 恢复旧 session 时可能发送模型不一致 `WarningEvent`。旧 TUI 在行首 `⚠ ` history cell 显示，0.163 则收进 F2 warnings 面板。CodeLark 在自己启动 legacy TUI resume 前记录该线程最近一次 `turn_context` 的模型，以及文件 dev/ino/offset；ready 后只读取新增、同 thread 的 `thread_settings_applied`，得到本次实际恢复模型。上游在 resume 返回前持久化并 flush 该事件。比较对象必须是上一轮模型，不能用启动参数或此前单独的 settings checkpoint 代替。文件替换/截断或扫描遇到 rollback/compaction 边界时不猜测；未命中则仍保留旧终端 warning cell 检测，不自动打开 F2。
+
+`readCodexSessionModel` 同时接受同 thread 的 `thread_settings_applied`，使新轮次开始前也能显示实际生效模型。恢复警告只保存在对应终端的本次启动观察中，重新启动、显式清理和观察到终端消失都会清除；不触发额外模型请求。命中后复用原来的橙色提醒卡和 binding/session/模型组合去重，发送成功后持久化去重标记，失败允许重试；不自动清空或改写 turn 终态。
 
 selection/reconnect probe 必须由活动状态驱动：只覆盖当前 hot chat、有 pending turn，或刚完成 tmux 输入后的短 follow-up window。cold 且没有 pending/follow-up 的历史 subscription 不做周期性 `display-message` / `capture-pane`；completed 后的异常方块由 finalized-status 路径单独抓屏，idle baseline 也只在建立 checkpoint 时抓一次。建立 baseline 前必须先用一次共享的 `tmux list-sessions` 获取真实存活集合，不能为每个历史 subscription 单独试探 `capture-pane`；只有集合内的 session 才抓屏。idle checkpoint 在共享列表里发现缺失时，hot/cold 分别退避 5 秒/60 秒；selection probe 的 `capture-pane` 失败再经 `has-session` 确认不存在时，则直接把统一 input lifecycle 标为 `stopped`、清除持久化 tmux binding，并把当前 pending mirror turn 一次性收口为 `error`。错误卡说明 tmux 会话已退出并提示 `/p tmux`，随后清空 pending turn，footer heartbeat 不得继续把旧卡刷新成“处理中”；若飞书终态投递暂时失败，终态保留在 delivery queue 重试，但不恢复运行态。后续抓屏保持停止，直到新输入或显式 `/p tmux` 建立新 lifecycle。这样 cold 但仍在终端运行的 session 仍有错误基线，已经退出的历史 session 不会在每轮 reconcile 反复创建进程或刷 `can't find session`。probe 只用于观测选择、重连和异常，不能另写一套发送 readiness。
 

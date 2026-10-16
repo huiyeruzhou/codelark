@@ -14,9 +14,19 @@ on:
       - src/bridge/session/command-use-cases/*.ts
       - src/__tests__/workflow/bridge/session/*.test.ts
       - src/__tests__/workflow/bridge/permission/app-server.test.ts
+      - src/__tests__/workflow/runtime/codex/app-server-default.test.ts
       - scripts/verify-codex-desktop-macos.ts
       - scripts/verify-codex-app-server-lifecycle.ts
+      - scripts/verify-codex-default-app-server.ts
+      - scripts/verify-codex-local-bootstrap.ts
+      - src/runtime/codex/thread-bootstrap.ts
       - scripts/fixtures/codex-app-server-*
+      - scripts/fixtures/codex-tmux-app-server.ts
+      - src/runtime/codex/tmux-provider.ts
+      - src/runtime/codex/tui-runtime-signals.ts
+      - src/runtime/codex/session-index/**
+      - src/bridge/tmux/runtime.ts
+      - src/__tests__/e2e/local-process/codex/real-codex-tmux-provider.e2e.test.ts
       - scripts/fixtures/desktop-gui*.ts
       - .github/workflows/codex-desktop.yml
 
@@ -31,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex: ['0.145.0', '0.153.4', '0.160.0']
+        codex: ['0.145.0', '0.153.4', '0.160.0', '0.163.0']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,15 +50,42 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm install --global @openai/codex@${{ matrix.codex }}
+      - name: Install tmux for current CLI compatibility
+        if: matrix.codex == '0.163.0'
+        run: sudo apt-get update && sudo apt-get install -y tmux
       - name: 检查验收代码
         run: |
-          npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-app-server-lifecycle.ts scripts/verify-codex-desktop-macos.ts scripts/fixtures/codex-app-server-provider-client.ts
+          npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-app-server-lifecycle.ts scripts/verify-codex-default-app-server.ts scripts/verify-codex-local-bootstrap.ts scripts/verify-codex-desktop-macos.ts scripts/fixtures/codex-app-server-provider-client.ts
+      - name: 验证本地 bootstrap 不调用自定义模型服务
+        if: matrix.codex == '0.153.4' || matrix.codex == '0.163.0'
+        run: >-
+          node --import tsx scripts/verify-codex-local-bootstrap.ts
+          --cli "$(command -v codex)"
+          --evidence '${{ runner.temp }}/codex-protocol-evidence/local-bootstrap'
       - name: 真实 CLI + 隔离 mock 模型验证 lifecycle
         run: >-
           node --import tsx scripts/verify-codex-app-server-lifecycle.ts
           --cli "$(command -v codex)"
           --expect-version '${{ matrix.codex }}'
           --evidence '${{ runner.temp }}/codex-protocol-evidence'
+      - name: 真实 CLI 验证默认后端与退出后恢复
+        run: >-
+          node --import tsx scripts/verify-codex-default-app-server.ts
+          --cli "$(command -v codex)"
+          --evidence '${{ runner.temp }}/codex-protocol-evidence/default-backend'
+      - name: 验证 remote tmux 同轮 steer 与关闭后 stop
+        if: matrix.codex == '0.163.0'
+        run: >-
+          node --import tsx scripts/verify-codex-default-app-server.ts
+          --cli "$(command -v codex)" --tmux-view
+          --evidence '${{ runner.temp }}/codex-protocol-evidence/remote-view'
+      - name: 验证当前 CLI 的 legacy tmux 交互
+        if: matrix.codex == '0.163.0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-tmux"
+          env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$RUNNER_TEMP/codex-tmux" \
+            CODELARK_REAL_CODEX_E2E_EXECUTABLE="$(command -v codex)" \
+            node --import tsx --test src/__tests__/e2e/local-process/codex/real-codex-tmux-provider.e2e.test.ts
       - name: 保存原生协议证据
         if: always()
         uses: actions/upload-artifact@v4

@@ -56,6 +56,10 @@ function buildLocalBootstrapArgs(options: LocalCodexThreadBootstrapOptions): str
     args.push('--config', `sandbox_workspace_write.network_access=${options.networkAccessEnabled}`);
   }
   args.push('--config', 'preferred_auth_method="apikey"');
+  // openai_base_url only affects the built-in OpenAI provider. A configured
+  // custom provider would otherwise receive this synthetic bootstrap prompt.
+  // This override belongs only to the short-lived exec, never the resumed TUI.
+  args.push('--config', 'model_provider="openai"');
   args.push('--config', `openai_base_url="${LOCAL_BOOTSTRAP_BASE_URL}"`);
   args.push(LOCAL_BOOTSTRAP_PROMPT);
   return args;
@@ -297,6 +301,7 @@ export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstr
 }
 
 export const _testOnlyCodexThreadBootstrap = {
+  buildLocalBootstrapArgs,
   readThreadIdFromCodexExecLine,
   isBootstrapSessionFileReady,
   waitForSessionFileByThreadId,

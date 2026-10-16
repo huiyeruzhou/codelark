@@ -130,6 +130,13 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1000): Pro
 }
 
 describe('runtime settings internals', () => {
+  it('pins synthetic bootstrap to the loopback OpenAI provider instead of a configured custom provider', () => {
+    const args = _testOnlyCodexThreadBootstrap.buildLocalBootstrapArgs({ mode: 'code' });
+    const config = args.flatMap((arg, index) => arg === '--config' ? [args[index + 1]] : []);
+    assert.ok(config.includes('model_provider="openai"'));
+    assert.ok(config.includes('openai_base_url="http://127.0.0.1:9/v1"'));
+  });
+
   it('allows a loaded hosted runner enough time to start Codex bootstrap', () => {
     assert.equal(_testOnlyCodexThreadBootstrap.LOCAL_BOOTSTRAP_TIMEOUT_MS, 15_000);
   });
@@ -3087,7 +3094,7 @@ describe('command-dispatch', () => {
     }
   });
 
-  it('imports an unbound Claude Code JSONL session from /t global list', async () => {
+  it('imports an unbound Claude Code JSONL session from /t claude list', async () => {
     const store = initTestContext();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-claude-import-home-'));
     const previousClaudeHome = process.env.CODELARK_CLAUDE_HOME;
@@ -3121,9 +3128,9 @@ describe('command-dispatch', () => {
     try {
       await handleBridgeCommand(adapter, {
         address,
-        text: '/t',
+        text: '/t claude',
         messageId: 'incoming-claude-import-list',
-      } as any, '/t', {
+      } as any, '/t claude', {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
         diagnoseAllActiveSessions: async () => [],
@@ -3159,7 +3166,7 @@ describe('command-dispatch', () => {
     }
   });
 
-  it('imports an unbound Kimi Code wire session from /t global list', async () => {
+  it('imports an unbound Kimi Code wire session from /t kimi list', async () => {
     const store = initTestContext();
     const kimiHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-command-kimi-import-home-'));
     const previousKimiHome = process.env.KIMI_CODE_HOME;
@@ -3189,9 +3196,9 @@ describe('command-dispatch', () => {
     try {
       await handleBridgeCommand(adapter, {
         address,
-        text: '/t',
+        text: '/t kimi',
         messageId: 'incoming-kimi-import-list',
-      } as any, '/t', {
+      } as any, '/t kimi', {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
         diagnoseAllActiveSessions: async () => [],

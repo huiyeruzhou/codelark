@@ -17,6 +17,8 @@ import {
   type CodexTuiSelectionPromptKind,
 } from '../../runtime/codex/tmux-provider.js';
 import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
+import { captureCodexResumeModelCheckpoint, readCodexResumeModelMismatch } from '../../runtime/codex/session-index.js';
+import { setCodexTuiResumeModelWarning } from '../../runtime/codex/tui-runtime-signals.js';
 import {
   buildClaudeBypassPermissionsChoiceKeys,
   buildClaudePtyCommand,
@@ -1085,6 +1087,9 @@ export async function startCodexResumeTmuxSession(
   params: StartCodexResumeTmuxSessionParams,
   core: TmuxCore = tmuxCore,
 ): Promise<StartCodexResumeTmuxSessionResult> {
+  setCodexTuiResumeModelWarning(params.sessionName);
+  const modelCheckpoint = params.threadId && !params.remoteEndpoint
+    ? captureCodexResumeModelCheckpoint(params.threadId) : undefined;
   transitionRuntimeTmuxInputState(
     'codex',
     params.sessionName,
@@ -1134,6 +1139,7 @@ export async function startCodexResumeTmuxSession(
     commands.push(...startedCheck.commands);
     if (startedCheck.selectionPrompts) selectionPrompts.push(...startedCheck.selectionPrompts);
     if (startedCheck.ready) {
+      setCodexTuiResumeModelWarning(params.sessionName, readCodexResumeModelMismatch(modelCheckpoint));
       cleanupLaunchLog(launchLogPath);
       return {
         existed: started.existed,
@@ -1532,6 +1538,7 @@ export async function cleanupRuntimeTmuxSession(params: {
   try {
     const command = await core.killSession(params.sessionName, { ignoreMissing: params.ignoreMissing !== false });
     commands.push(command);
+    setCodexTuiResumeModelWarning(params.sessionName);
     if (params.runtime) {
       transitionRuntimeTmuxInputState(
         params.runtime,

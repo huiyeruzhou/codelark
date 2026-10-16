@@ -2055,6 +2055,11 @@ function requireRealGuard(options: CliOptions): void {
   if (options.launchBridge && (!options.testFeishuAppId || !options.testFeishuAppSecret)) {
     throw new Error('Set CODELARK_REAL_FEISHU_TEST_APP_ID and CODELARK_REAL_FEISHU_TEST_APP_SECRET, or pass --test-feishu-app-id/--test-feishu-app-secret.');
   }
+  let secretReference: { source?: unknown; id?: unknown } | undefined;
+  try { secretReference = JSON.parse(options.testFeishuAppSecret); } catch { /* Normal app secrets are not JSON. */ }
+  if (secretReference?.source === 'keychain' && typeof secretReference.id === 'string') {
+    throw new Error('Test app secret is a lark-cli keychain reference, not an app secret. Provide the actual test app secret before initializing isolated credentials.');
+  }
 }
 
 function validateScriptedBasicDialogueOptions(options: CliOptions): void {
@@ -7440,7 +7445,7 @@ async function main(): Promise<void> {
     startupChatCleanup = await cleanupRegisteredTestChats(options);
     appLock = acquireAppLock(options);
     if (options.scenario === 'app-server-lifecycle' && !options.dryRun) {
-      lifecycleModel = await startFixtureModel();
+      lifecycleModel = await startFixtureModel({ respondToThreadTitles: true });
       options.codexProxyBaseUrl = lifecycleModel.baseUrl;
     } else if ((options.codexAppServer || usesProxyBackedBasicDialogue(options)) && !options.dryRun) {
       codexResponsesProxy = await startSharedLocalCodexResponsesProxy(options.codexAppServer ? `APP_SERVER_REPLY ${options.message}` : options.fakeCcrResponseText);
@@ -7575,7 +7580,7 @@ async function main(): Promise<void> {
         approvalWaitMs: options.approvalWaitMs, nativeRequestCards: options.nativeRequestCards, workspace: options.workDir, model: lifecycleModel, observer: protocolObserver,
         botAppId: options.testFeishuAppId,
         send: (id, text) => sendUserText(id, text, options),
-        read: (id) => options.nativeRequestCards ? readAllUserPages((token) => listChatMessages(id, options, 25, token)) : listChatMessages(id, options, 50),
+        read: (id) => readAllUserPages((token) => listChatMessages(id, options, options.nativeRequestCards ? 25 : 50, token)),
         state: (id) => {
           const dump = latestDump(options, id);
           if (!dump.session) return undefined;
@@ -7609,6 +7614,8 @@ async function main(): Promise<void> {
           lifecycleEvidence = { ...report,
           sourceRevision, sourceDirty,
           codexVersion: protocolObserver?.serverInfo.userAgent,
+          auxiliaryModelRequests: lifecycleModel?.auxiliaryRequests || [],
+          unexpectedModelRequests: lifecycleModel?.unexpected || [],
           runRoot: options.runRoot, codelarkHome: options.codelarkHome,
           coverage: scenarioCoverage(options),
           canonicalEligibility: canonicalReportEligibility(options, runtimeEnvironment),

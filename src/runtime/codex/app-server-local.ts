@@ -63,7 +63,7 @@ interface OwnedBackend {
   status: CodexLocalAppServerStatus;
   exited: Promise<void>;
   stop?: Promise<void>;
-  socket?: { path: string; dev: number; ino: number };
+  socket?: { path: string; dev: number; ino: number; symbolicLink: boolean };
 }
 const owned = new Map<string, OwnedBackend>();
 export interface CodexLocalAppServerStatus {
@@ -142,7 +142,8 @@ async function releaseOwnedSocket(backend: OwnedBackend, endpoint: string, codex
   const unchanged = () => {
     try {
       const stat = fs.lstatSync(identity.path);
-      return stat.isSocket() && stat.dev === identity.dev && stat.ino === identity.ino;
+      return (identity.symbolicLink ? stat.isSymbolicLink() : stat.isSocket())
+        && stat.dev === identity.dev && stat.ino === identity.ino;
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
   };
   if (!unchanged()) return;
@@ -150,6 +151,8 @@ async function releaseOwnedSocket(backend: OwnedBackend, endpoint: string, codex
   // to unlink after our own child exited, even if it passed the readiness probe.
   try { await probe(endpoint, codexHome); return; }
   catch (error) { if (!unavailable(error)) return; }
+  // Newer Codex publishes a symlink to its managed control socket. Only unlink
+  // our unchanged publication entry, never the resolved socket owned by Codex.
   if (unchanged()) fs.unlinkSync(identity.path);
 }
 
@@ -285,8 +288,11 @@ export function prepareCodexLocalAppServer(options: {
           if (child.exitCode !== null || child.signalCode !== null) throw new Error('私有 app-server 在准备期间退出，未认领监听地址。');
           if (socket) {
             const stat = fs.lstatSync(socket);
-            if (!stat.isSocket()) throw new Error('app-server 未创建预期的 Unix socket。');
-            backend.socket = { path: socket, dev: stat.dev, ino: stat.ino };
+            const symbolicLink = stat.isSymbolicLink();
+            if (!stat.isSocket() && !(symbolicLink && fs.statSync(socket).isSocket())) {
+              throw new Error('app-server 未创建预期的 Unix socket。');
+            }
+            backend.socket = { path: socket, dev: stat.dev, ino: stat.ino, symbolicLink };
           }
           if (apiKey) {
             const client = await CodexAppServerClient.connect(endpoint);

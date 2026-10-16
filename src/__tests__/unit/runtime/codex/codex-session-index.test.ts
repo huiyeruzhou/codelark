@@ -10,6 +10,8 @@ import {
   getCodexSessionByThreadId,
   listCodexSessions,
   readCodexSessionModel,
+  captureCodexResumeModelCheckpoint,
+  readCodexResumeModelMismatch,
   readCodexSessionJsonlHistoryStreamByFilePath,
   readCodexSessionMessagesByFilePath,
   readCodexSessionEventDeltaByFilePath,
@@ -29,6 +31,47 @@ afterEach(() => {
 });
 
 describe('listCodexSessions', () => {
+  it('compares an owned resume with only its new native settings checkpoint', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-resume-'));
+    process.env.CODEX_HOME = root;
+    const threadId = '019d1e3a-74f9-7e43-92ef-e206eec01f99';
+    const directory = path.join(root, 'sessions', '2026', '10', '16'); fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, `rollout-2026-10-16T13-04-00-${threadId}.jsonl`);
+    const settings = (id: string, model: string) => ({ type: 'event_msg', payload: { type: 'thread_settings_applied', thread_id: id, thread_settings: { model } } });
+    const append = (value: unknown) => fs.appendFileSync(file, JSON.stringify(value) + '\n');
+    append({ type: 'session_meta', payload: { id: threadId, cwd: root, originator: 'codex_cli', timestamp: '2026-10-16T00:00:00Z' } });
+    append({ type: 'turn_context', payload: { model: 'old-model' } });
+    try {
+      const checkpoint = captureCodexResumeModelCheckpoint(threadId); assert(checkpoint);
+      append(settings('foreign-thread', 'foreign-model'));
+      assert.equal(readCodexSessionModel(threadId), 'old-model');
+      assert.equal(readCodexResumeModelMismatch(checkpoint), undefined);
+      append(settings(threadId, 'actual-model'));
+      assert.deepEqual(readCodexResumeModelMismatch(checkpoint), { recordedModel: 'old-model', resumingModel: 'actual-model' });
+      assert.equal(readCodexSessionModel(threadId), 'actual-model', 'effective settings are available even before a new turn');
+      assert.equal(captureCodexResumeModelCheckpoint(threadId)?.model, 'old-model', 'native warning compares the previous turn, not standalone settings');
+      append({ type: 'turn_context', payload: { model: 'actual-model' } });
+      const next = captureCodexResumeModelCheckpoint(threadId); assert(next);
+      assert.equal(readCodexResumeModelMismatch(next), undefined, 'old resume checkpoints must not be replayed');
+      append(settings(threadId, 'actual-model'));
+      assert.equal(readCodexResumeModelMismatch(next), undefined, 'an unchanged model has no mismatch');
+      fs.renameSync(file, file + '.old');
+      fs.writeFileSync(file, fs.readFileSync(file + '.old'));
+      assert.equal(readCodexResumeModelMismatch(checkpoint), undefined, 'a replaced history is not the owned resume');
+      const replacement = captureCodexResumeModelCheckpoint(threadId); assert(replacement);
+      fs.truncateSync(file, 0);
+      assert.equal(readCodexResumeModelMismatch(replacement), undefined, 'a truncated history is not resume evidence');
+      append({ type: 'session_meta', payload: { id: threadId, cwd: root, originator: 'codex_cli', timestamp: '2026-10-16T00:00:00Z' } });
+      append({ type: 'turn_context', payload: { model: 'before-compaction' } });
+      append({ type: 'compacted', payload: {} });
+      assert.equal(captureCodexResumeModelCheckpoint(threadId), undefined, 'do not guess across a compaction boundary');
+      append({ type: 'turn_context', payload: { model: 'after-compaction' } });
+      assert.equal(captureCodexResumeModelCheckpoint(threadId)?.model, 'after-compaction');
+      append({ type: 'event_msg', payload: { type: 'thread_rolled_back', num_turns: 1 } });
+      assert.equal(captureCodexResumeModelCheckpoint(threadId), undefined, 'do not compare a rolled-back turn');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('reads the latest model from turn_context without exposing the resume sentinel', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-codex-session-model-'));
     process.env.CODEX_HOME = tempRoot;

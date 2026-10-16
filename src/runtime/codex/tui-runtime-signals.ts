@@ -10,6 +10,17 @@ export interface CodexTuiModelMismatchWarning {
   resumingModel: string;
 }
 
+// Only owned launches populate this observation. Starting or removing that
+// terminal replaces it; display polling never starts a backend or opens F2.
+const resumedModels = new Map<string, CodexTuiModelMismatchWarning>();
+export function setCodexTuiResumeModelWarning(sessionName: string, warning?: CodexTuiModelMismatchWarning): void {
+  if (warning) resumedModels.set(sessionName, warning);
+  else resumedModels.delete(sessionName);
+}
+export function getCodexTuiResumeModelWarning(sessionName: string): CodexTuiModelMismatchWarning | undefined {
+  return resumedModels.get(sessionName);
+}
+
 export type CodexTuiDiagnosticImpact = 'operation' | 'turn' | 'session';
 
 export interface CodexTuiDiagnostic {

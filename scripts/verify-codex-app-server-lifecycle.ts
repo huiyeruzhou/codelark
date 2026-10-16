@@ -51,7 +51,8 @@ export async function verifyLifecycle(executable: string, evidence: string, expe
         const client = await CodexAppServerClient.connect(endpoint, 15_000);
         const connection = clients.push(client);
         let hidingLostReplyEvents = false;
-        assert.equal(client.serverInfo.codexHome, env.CODEX_HOME, '旧版也必须返回服务端 codexHome');
+        assert(client.serverInfo.codexHome, '服务端必须返回 codexHome');
+        assert.equal(fs.realpathSync(client.serverInfo.codexHome), fs.realpathSync(env.CODEX_HOME!), '服务端 codexHome 必须匹配隔离测试目录');
         const send = client.send.bind(client);
         client.send = (message) => { wire.push({ direction: 'sent', connection, message }); send(message); };
         const onMessage = client.onMessage.bind(client);

@@ -57,7 +57,13 @@ wss.on('connection', socket => socket.on('message', data => {
   } else if (['thread/resume', 'thread/read'].includes(m.method)) reply({ thread: threads[m.params.threadId] });
   else reply({ status: 'unsubscribed' });
 }));
-if (endpoint.startsWith('unix://')) server.listen(endpoint.slice(7));
+if (endpoint.startsWith('unix://')) {
+  const entry = endpoint.slice(7);
+  if (mode === 'symlink-socket') {
+    const target = entry + '.' + process.pid;
+    server.listen(target, () => fs.symlinkSync(target, entry));
+  } else server.listen(entry);
+}
 else { const url = new URL(endpoint); server.listen(Number(url.port), url.hostname); }
 process.on('SIGTERM', () => { for (const s of wss.clients) s.terminate(); server.close(() => process.exit(0)); });
 `;
@@ -117,9 +123,13 @@ test('default registry selects one private backend without an endpoint and resto
   if (a.endpoint.startsWith('unix://')) fs.rmSync(path.dirname(a.endpoint.slice(7)), { recursive: true, force: true });
 });
 
-test('concurrent prepares reuse one child; another process reuses the server and cannot close its owner', async (t) => {
-  const f = fixture(t);
+for (const mode of ['ok', 'symlink-socket']) test(`concurrent prepares and external reuse preserve ownership (${mode})`, { skip: mode === 'symlink-socket' && process.platform === 'win32' }, async (t) => {
+  const f = fixture(t, mode);
   assert.deepEqual(await Promise.all([f.prepare(), f.prepare(), f.prepare()]), [f.endpoint, f.endpoint, f.endpoint]);
+  if (mode === 'symlink-socket') {
+    assert(fs.lstatSync(f.endpoint.slice(7)).isSymbolicLink());
+    assert(fs.statSync(f.endpoint.slice(7)).isSocket());
+  }
   const module = new URL('../../../../runtime/codex/app-server-local.ts', import.meta.url).href;
   const script = `import { prepareCodexLocalAppServer, closeCodexLocalAppServers, getCodexLocalAppServerStatuses } from ${JSON.stringify(module)};
 const endpoint = await prepareCodexLocalAppServer({ executable: 'must-not-execute', env: process.env, codelarkHome: ${JSON.stringify(f.root)} });
@@ -133,6 +143,7 @@ await closeCodexLocalAppServers(); console.log(JSON.stringify({ endpoint, status
   assert.equal(f.records().filter((m) => m.started).length, 1);
   await closeCodexLocalAppServers();
   await assert.rejects(CodexAppServerClient.connect(f.endpoint));
+  if (f.endpoint.startsWith('unix://')) assert.throws(() => fs.lstatSync(f.endpoint.slice(7)), { code: 'ENOENT' });
 });
 
 for (const mode of ['no-app-server', 'no-listen'] as const) test(`only definite unsupported CLI falls back: ${mode}`, async (t) => {
@@ -228,8 +239,9 @@ test('private startup status is observable before readiness and status reads do 
   assert.equal(status().state, 'stopped');
 });
 
-test('unexpected owned child exit permits same-address reconnect without changing its threads', async (t) => {
-  const f = fixture(t); await f.prepare();
+for (const mode of ['ok', 'symlink-socket']) test(`unexpected owned child exit permits same-address reconnect (${mode})`, { skip: mode === 'symlink-socket' && process.platform === 'win32' }, async (t) => {
+  const f = fixture(t, mode); await f.prepare();
+  const target = mode === 'symlink-socket' ? fs.realpathSync(f.endpoint.slice(7)) : undefined;
   const client = await CodexAppServerClient.connect(f.endpoint);
   const before = await client.request<{ thread: { id: string } }>('thread/start');
   await assert.rejects(client.request('fixture/exit')); client.close();
@@ -237,6 +249,10 @@ test('unexpected owned child exit permits same-address reconnect without changin
   const failed = getCodexLocalAppServerStatuses().find((s) => s.endpoint === f.endpoint)!;
   assert.equal(failed.state, 'failed'); assert.match(failed.error!, /7/);
   assert.equal(await f.prepare(), f.endpoint);
+  if (target) {
+    assert(fs.lstatSync(target).isSocket(), 'Bridge must not unlink Codex-managed target sockets');
+    assert.notEqual(fs.realpathSync(f.endpoint.slice(7)), target, 'the restarted child publishes its own listener');
+  }
   const resumed = await CodexAppServerClient.connect(f.endpoint);
   try {
     const after = await resumed.request<{ thread: { id: string } }>('thread/resume', { threadId: before.thread.id });
@@ -247,11 +263,15 @@ test('unexpected owned child exit permits same-address reconnect without changin
   assert.equal(restarted.state, 'running'); assert.notEqual(restarted.pid, failed.pid); assert.equal(restarted.error, undefined);
 });
 
-test('exited owner does not delete a replaced socket path', { skip: process.platform === 'win32' }, async (t) => {
-  const f = fixture(t); await f.prepare();
+for (const mode of ['ok', 'symlink-socket']) test(`exited owner does not delete a replaced endpoint (${mode})`, { skip: process.platform === 'win32' }, async (t) => {
+  const f = fixture(t, mode); await f.prepare();
   const client = await CodexAppServerClient.connect(f.endpoint);
   const socket = f.endpoint.slice(7);
-  fs.renameSync(socket, socket + '.original'); fs.writeFileSync(socket, 'replacement');
+  fs.renameSync(socket, socket + '.original');
+  if (mode === 'symlink-socket') {
+    fs.writeFileSync(socket + '.replacement', 'replacement');
+    fs.symlinkSync(socket + '.replacement', socket);
+  } else fs.writeFileSync(socket, 'replacement');
   const replacement = fs.lstatSync(socket);
   await assert.rejects(client.request('fixture/exit')); client.close();
   await closeCodexLocalAppServers();

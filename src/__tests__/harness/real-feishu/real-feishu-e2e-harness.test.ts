@@ -21,6 +21,17 @@ const RUNTIME_PROVIDER_MATRIX_SUFFIXES = [
   'zcode-tmux',
 ];
 
+it('rejects a copied keychain reference before initializing or overwriting app credentials', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-secret-reference-'));
+  try {
+    const output = runHarnessFailure(['--launch-bridge', '--runtime', 'codex', '--run-root', root,
+      '--test-feishu-app-id', 'cli_isolated_reference', '--test-feishu-app-secret',
+      JSON.stringify({ source: 'keychain', id: 'appsecret:cli_isolated_reference' })], { CODELARK_REAL_FEISHU_E2E: '1' });
+    assert.match(output, /keychain reference, not an app secret/);
+    assert.equal(fs.existsSync(path.join(root, 'runtime-home', '.lark-cli', 'config.json')), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 describe('unit::real-feishu-e2e-harness::reply-evidence', () => {
   it('does not accept a marker that appears only in the echoed user history', () => {
     const marker = 'CODELARK_CURSOR_REPLY_EVIDENCE';

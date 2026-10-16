@@ -103,6 +103,13 @@ try {
     return turnId;
   };
   result.firstTurn = await reply(first, 'DEFAULT_PRIVATE_NATIVE_REPLY');
+  let viewModelRequests = 0;
+  if (args.includes('--tmux-view')) {
+    const { verifyCodexTmuxAppServerView } = await import('./fixtures/codex-tmux-app-server.js');
+    const view = await verifyCodexTmuxAppServerView(first, model, root);
+    result.tmuxView = view;
+    viewModelRequests = view.extraModelRequests;
+  }
   const registryUrl = new URL('../src/runtime/codex/app-server-registry.ts', import.meta.url).href;
   const childSource = `import { prepareCodexAppServerSession, closeCodexAppServerSessions } from ${JSON.stringify(registryUrl)};
 try {
@@ -150,7 +157,7 @@ try {
   assert.equal(await prepareCodexLocalAppServer({ executable, env }), endpoint);
   await restored.lifecycle.refresh(restored.threadId);
   result.afterUnexpectedExitTurn = await reply(restored, 'DEFAULT_PRIVATE_AFTER_EXIT_REPLY');
-  assert.equal(model.requests.length, 4, 'exactly one model request for each explicit turn');
+  assert.equal(model.requests.length, 4 + viewModelRequests, 'only the planned turns and optional steer reached the model');
   assert.deepEqual(model.unexpected, []);
   assert.equal(process.env.CODEX_APP_SERVER_WS_URL, undefined);
   assert.equal(fs.readFileSync(authPath, 'utf8'), originalAuth, 'private key injection must preserve existing login');

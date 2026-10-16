@@ -448,12 +448,48 @@ function trimBlankSummaryEdges(lines: string[]): string[] {
   return lines.slice(start, end);
 }
 
+function codexSelectionSurface(tail: string): string {
+  const lines = tail.split('\n');
+  // Codex 0.163 renders goal selection as an overlay. Its underlying composer
+  // still has a chevron; crop the observed modal instead of choosing that row.
+  const footer = lines.findLastIndex((line) => /\benter select\s*·\s*esc back\s*$/i.test(line));
+  if (footer < 0) return tail;
+  const header = lines.findLastIndex((line, index) => index < footer && /^\s+Replace goal\?\s*$/.test(line));
+  if (header < 0 || footer - header > 15) return tail;
+  const selected = lines.slice(header, footer).find((line) => /^\s+›\s*\d+[.)]\s+(?:Replace current goal|Cancel)\b/.test(line));
+  if (!selected) return tail;
+  const column = selected.indexOf('›');
+  return lines.slice(header, footer + 1).map((line) => line.slice(column)).join('\n');
+}
+
+function codexRetiredModelNotice(tail: string): CodexTuiSelectionPrompt | null {
+  const lines = tail.split('\n');
+  const footer = lines.findLastIndex((line) => /^\s*enter\/esc continue\s*·\s*(?:⌃c|ctrl\+c) quit\s*$/i.test(line));
+  if (footer < 0 || lines.slice(footer + 1).some((line) => line.trim())) return null;
+  const header = lines.findLastIndex((line, index) => index < footer && /^\s*\S.+ is no longer available\s*$/.test(line));
+  if (header < 0 || footer - header > 12) return null;
+  const body = lines.slice(header + 1, footer).join(' ').replace(/\s+/g, ' ').trim();
+  if (!/^Codex now uses .+ in place of .+\. Switch to .+ to continue\.$/.test(body)) return null;
+  const summary = `${lines[header].trim()}\n\n${body}`;
+  return {
+    kind: 'model_migration', selectedIndex: 0, summary,
+    options: [{ index: 0, choice: 'option_1', label: '继续', selected: true }],
+    fingerprint: `model_migration:continue:${summary}`,
+  };
+}
+
 export function parseCodexTuiSelectionPrompt(screenText: string): CodexTuiSelectionPrompt | null {
-  const tail = normalizeTerminalScreenText(screenText).slice(-20_000);
-  if (!hasCodexTuiSelectionPromptCursor(tail)) {
+  const normalized = normalizeTerminalScreenText(screenText).slice(-20_000);
+  const notice = codexRetiredModelNotice(normalized);
+  if (notice) return notice;
+  const tail = codexSelectionSurface(normalized);
+  // A recognized goal overlay already validates its selected row, including
+  // Cancel. Keep the existing first-row guard for all other screen surfaces.
+  if (tail === normalized && !hasCodexTuiSelectionPromptCursor(tail)) {
     return null;
   }
   const hasSafeFooter = hasTuiEnterActionFooter(tail, { requireEscapeForConfirm: true })
+    || /^\s*enter select\s*·\s*esc back\s*$/im.test(tail)
     || (hasCodexModelMigrationPrompt(tail) && hasTuiEnterConfirmFooter(tail));
   if (!hasSafeFooter && !hasClaudeCodeTuiSelectionPromptCursor(tail)) {
     return null;
