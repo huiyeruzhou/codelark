@@ -2,9 +2,44 @@
 
 ## Unreleased
 
-- Cursor Desktop 镜像与直接执行共用只读原生会话来源，补齐工具完成状态和保留的结果；展开工具卡可查看完整保留输出，已被 Cursor 裁剪的内容明确标注。飞书 CardKit 创建失败后保留工具历史，改用可分页的静态结构化卡片；静态卡也失败时保留镜像重试，不降级成普通 Markdown。
+- 暂无。
 
-- Cursor transcript 中仅含时间戳、空白或结束标记的 user 记录不再开启新回合，避免后台任务期间连续发送空卡；真实提问、图片输入及后台任务结果继续正常同步。
+## v0.5.0
+
+发布日期：2026-10-16
+
+`0.5.0` 新增客服话题模式和通用附件输入，完善 Cursor Desktop 的原生控制与持续同步，并适配 Codex CLI 0.163.0。
+
+### 客服群与附件
+
+- 普通群和话题群均可用 `/customer on` 开启客服模式；追问沿多层回复链续接同一话题，不同话题隔离会话。是否需要 @ 机器人沿用群的 `/require-at` 设置。
+- `/whitelist` 支持通过飞书 @ 选择器管理控制用户。空名单默认授权机器人创始人；普通客户可提问，控制命令、表单和按钮仅向管理员开放。
+- 图片、文件和引用附件适用于普通会话与客服话题。引用文件会自动解析类型并下载，附件通过 `<local_attachments>` XML 和 Codex 原生图片输入交给模型，不再为附件额外创建 SDK 执行卡。
+- 合并转发保留嵌套关系和资源信息。飞书不支持直接下载合并子消息资源时，尝试读取可访问的原消息；无法获取时明确保留附件信息和补发提示。
+- 模型输出的本地 Markdown 图片、文件链接与 `<clk-send>` 均交付为真实飞书附件，兼容带空格和编码的路径；富文本图片的 width、height 字段不再被误报为不支持。
+
+### Cursor Desktop 与 CLI
+
+- `/t` 可接管并继续 Cursor Desktop 的原对话，旧绑定自动恢复正确来源。Desktop 与 CLI 对外统一为 `tmux`，实际输入仍交给各自原生执行入口。
+- 模型选择统一使用目标入口的实时能力；Desktop 模型切换遵循管理员禁用规则和原生切换回执，卡片区分保存的配置与实际执行模型。
+- 实验性 Desktop 增强支持 steer、Stop 和原生模型切换，默认不修改 Cursor.app；安装需显式允许，支持状态查询、卸载预览及完整卸载。修复服务访问器跨异步失效、已 steer 却误报排队和重复错误弹窗。
+- 思考和工具进度持续更新同一张结构化卡。直接执行与镜像共用只读会话数据库，补齐工具结果；已被 Cursor 裁剪的输出明确标注。流式卡创建失败时保留工具历史，使用静态结构化卡恢复。
+- 长时间未同步时先提供历史同步选择，可同步最近 20 条或跳过；修复重启后的历史重放、元数据引发的空回合，以及积压后无法继续读取最新对话的问题。
+
+### Codex 与投递可靠性
+
+- 兼容 Codex CLI 0.163.0 的 app-server socket 符号链接、模型迁移提示、goal 弹窗和恢复模型信息；Linux 与 macOS 的提示写法均覆盖。
+- 本地 bootstrap 不再向用户配置的模型服务发送占位请求，恢复后保持原自定义服务；tmux 查看窗口与 app-server 使用同一线程，关闭查看窗口不停止原生执行。
+- app-server MCP 工具调用显示可读名称、参数和结果，代码参数直接使用代码块；恢复会话保留实际模型，Bridge 重启不重放在途历史。
+- 修复飞书流式超时续卡的状态顺序，避免进度长期积压后集中补发；修复手动命令回复、同会话 Agent 回执，以及 macOS detached 热更新任务重复执行的问题。
+
+### 验证与升级
+
+功能提交已通过 Linux、macOS、Windows/psmux、Chromium、四版本 Codex 协议及官方 Desktop GUI 检查。真实飞书端到端自动检查 36/36 通过，测试群已清理；真人审批按钮点击仍未验收，自动通过不代表人工点击验收。详见 [Codex 兼容性记录](../testing/codex-cli-compatibility.md)、[客服模式](../product/customer-service.md)和[附件说明](../product/message-attachments.md)。
+
+```bash
+npm install -g codelark@0.5.0
+```
 
 ## v0.4.0
 
@@ -16,7 +51,7 @@
 
 - 新 Codex thread 默认由 CodeLark 管理的本地 app-server 执行；macOS Codex Desktop 可通过共享 endpoint 使用同一个 server，避免两个独立 writer 争抢同一 thread。
 - app-server 原生覆盖提交、流式事件、停止、清空、新建、恢复、问答、审批和 MCP 请求。只读状态查询不会隐式创建 thread，启动、连接和当前后端状态也会明确展示。
-- 补齐 app-server 事件兼容：原生 `fileChange` 复用旧链路已有的 patch 卡片，显示真实文件列表、分文件 diff 与语法高亮；`mcpToolCall` 优先使用调用方提供的可读标题，并在展开区按 server/tool、arguments、结果和错误展示；两者都不再暴露整段协议 JSON。上下文压缩也与旧版 `compacted` 使用相同提示与展示语义。
+- 补齐 app-server 事件兼容：原生 `fileChange` 复用旧链路已有的 patch 卡片，显示真实文件列表、分文件 diff 与语法高亮，不再暴露协议 JSON；上下文压缩也与旧版 `compacted` 使用相同提示与展示语义。
 - 升级前的 tmux 会话会在下一次输入前迁移到 app-server；只有确认 app-server 可连接后才释放 CodeLark 自己记录的旧 writer。迁移失败时不会发送输入、不会更新绑定，也不会静默回退。
 - 若旧 Codex Desktop 仍持有 writer，CodeLark 会停止重试并显示“重启并重试 / 取消”卡片。确认后使用脚本正常退出并重开 Desktop，再自动重试原文本；不会强制杀进程。
 - Codex `/provider`、全局配置和 Web UI 现在只支持 `tmux`。app-server 不再伪装成并列 provider；历史 `sdk/pty` 配置仍可读取，但统一归一为 `tmux`，不再进入对应执行路径。
@@ -24,13 +59,6 @@
 ### Runtime 与会话可靠性
 
 - 新增 ZCode tmux runtime，支持创建、接管、恢复、SQLite 结果同步、工具与 usage 展示，以及 tmux 丢失后的恢复。
-- `/t` 接管 Cursor Desktop 对话后，飞书输入会通过 Cursor 官方 Desktop Bridge 写入同一条可见对话，回复再由该对话的 transcript 只读镜像回来；不会再用 Cursor Agent tmux 另开一条同 ID 会话。Desktop Bridge 未启用、discovery 已过期或目标对话未打开时会明确失败，不会静默降级。
-- 旧版本已绑定的 Cursor Desktop 对话会按 Desktop conversation index 自动升级来源身份，无需重新执行 `/t`；显式设置过的会话级 `/provider tmux` 仍会保留。
-- Cursor runtime 的 `/model` 无参数调用现在直接读取 `cursor agent models` 的账号实时列表，并以带 current 初始值的分页下拉卡展示；Cursor 的 `/current` 与 `/set` 配置卡也使用同一动态列表，选项继续复用原有 session/global 配置命令，不新增额外 slash command。
-- Cursor Desktop 回合不再把 transcript 暂时无增量误判为失败：只要 Desktop Bridge 的真实 thread 状态仍为 `running` 就继续等待。无需修改 Cursor.app，CodeLark 用一个共享异步 hook tailer（`fs.watch` 即时唤醒 + 低频异步 reconcile 兜底）接收本轮 Cursor hooks，不再让每个 turn 每 500ms 同步扫描日志目录；实时 thought 会作为弱化引用进入正文历史，超过阈值时完整放入默认收起的思考面板而不截断，footer 只留简短状态。工具开始和结果按原生工具 ID 更新同一张飞书卡并复用 Codex 的公共 Shell、文件与 MCP 工具展示，泛化 shell 步骤不会抢在工具块前显示“已完成”，base model 也不会让模型标签来回跳变。transcript 继续收取正文与终态并按工具身份去重。`/tmux-screen [seconds]s` 在 Desktop provider 下会显示并刷新后端状态、generation、模型、hook 与 transcript 诊断；异常终态卡会保留具体错误正文。
-- MCP 工具卡标题同时显示 `server/tool` 和操作说明；`code` 参数直接呈现为代码块，其余参数保留，详情不再重复标题与 MCP 名称。
-- tmux 自动发现补齐 Apple Silicon Homebrew `/opt/homebrew/bin/tmux` 与 Linuxbrew 路径；即使 launchd 的 PATH 不包含 Homebrew，也不会把已安装的 tmux 误报为 ENOENT。
-- Cursor Desktop direct turn 以“提交前已有 turn”的签名建立边界，不再要求 Cursor 持久化的 user row 与原始 wire prompt 逐字一致；兼容输入包装、归一化和 transcript 原子重写。实验性可选 Desktop v4 增强提供 steer、Stop、客户端事件和原生模型切换。默认不修改 Cursor.app，v1 普通消息按 queue 收发；增强可用时请求 steer。安装须显式 --allow-app-modification，支持只读 status、卸载预览及沿历史备份完整 uninstall。`/model` 使用目标 Desktop 的原生列表、管理员过滤和切换回执，不写假应用配置。修复增强 action 跨 await 使用失效服务访问器、事件异常被吞导致反复弹窗、已 steer 的消息被误报排队；新 bridge 不再轮询有缺陷的旧 v2/v3 事件接口。修复尚未在真实安装部署验收。Codex app-server 在 Bridge 重启后也从当前协议 sequence 建立新基线，不再把整段在途历史拆成多张 continuation 卡重放。
 - 修复 Claude Code 的首次启动、信任与 YOLO 确认流程，并适配当前 TUI 状态和嵌套工具输出；高风险启动必须经过明确确认。
 - `/clear`、`/new`、runtime 切换和配置继承使用更严格的 session owner 边界。旧任务的取消、停止、终态和 stale tmux 清理不会污染替换后的会话。
 - mirror 可从已保存进度和已绑定卡片页继续恢复；Bridge 重启只恢复当前最新 turn，不再重放历史 orphan 或把它错误显示为 interrupted；已终结 turn 的迟到工具、消息、计划和 usage 事件也不会重新创建幽灵卡。
