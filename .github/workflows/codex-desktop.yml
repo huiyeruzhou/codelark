@@ -88,7 +88,7 @@ jobs:
             node --import tsx --test src/__tests__/e2e/local-process/codex/real-codex-tmux-provider.e2e.test.ts
       - name: 保存原生协议证据
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-protocol-${{ matrix.codex }}
           if-no-files-found: warn
@@ -139,7 +139,7 @@ jobs:
         run: node --import tsx scripts/verify-codex-desktop-macos.ts
       - name: Upload verification evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-desktop-macos
           if-no-files-found: warn
