@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { runOutboundImages } from './outbound-images.js';
 import { assertAppliedSettings, runActiveConfiguration, runMentionFilter, type NativeTurnSettings } from './session-configuration.js';
 import { runNativeRequestCards, type NativeCardReport } from './native-request-cards.js';
 import { CodexAppServerClient, type AppServerMessage } from '../../runtime/codex/app-server-client.js';
@@ -418,6 +419,8 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     ['/', '/current-runtime codex', '/current-runtime kimi', '/current-runtime common', '/p', '/status']);
 
     const configurationStory = { driver: d, report, wait, command, send, read, state, thread, completedPrompt, visible, check, save };
+    stage('本地链接、Markdown 附图与 /file 图片发送');
+    const verifyOutboundImages = await runOutboundImages(configurationStory);
     stage('活动轮次配置保存与下轮原生应用');
     await runActiveConfiguration(configurationStory);
     await runMentionFilter(configurationStory, d.chatId, 'original');
@@ -605,6 +608,7 @@ export async function runAppServerLifecycle(d: LifecycleDriver): Promise<Lifecyc
     assertNoOldClearDelivery(report, d.chatId, d.botAppId, report.readbacks[d.chatId]);
     check('active_clear_no_old_delivery', { threadId: report.activeClear.threadId, turnId: report.activeClear.turnId });
     check('all_inputs_user_readback');
+    await verifyOutboundImages();
     assert.deepEqual(d.model.unexpected, [], '模型收到未编排调用');
     assert(d.model.requests.every((r) => [d.modelName, d.alternateModelName].includes(String(r.body.model))
       && ['low', 'high'].includes(String((r.body.reasoning as { effort?: string })?.effort))), '模型请求只能使用本次fixture的两种配置');

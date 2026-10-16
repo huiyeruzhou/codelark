@@ -9803,8 +9803,36 @@ enabled = true
       },
     );
 
-    assert.ok(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length === 1));
+    assert.deepEqual(sent.find(m => m.attachments?.length)?.attachments, [{ kind: 'file', path: filePath, name: 'hello.txt' }]);
     assert.match(String(sent.at(-1)?.text || ''), /已发送文件/);
+  });
+
+  it('sends /file images as native images and preserves the reply target', async () => {
+    initTestContext();
+    const sent: any[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default', provider: 'feishu',
+      send: async (message: any) => { sent.push(message); return { ok: true, messageId: `reply-${sent.length}` }; },
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-file-image' } as const;
+    const tempRoot = fs.mkdtempSync(path.join(DATA_DIR, 'clk-image-'));
+    router.createBinding(address, tempRoot);
+    for (const name of ['photo.png', 'photo.JPEG', 'photo.webp', 'animation.gif']) {
+      const filePath = path.join(tempRoot, name);
+      fs.writeFileSync(filePath, 'image upload fixture');
+      sent.length = 0;
+      await handleBridgeCommand(adapter, {
+        address, text: `/file ${name}`, messageId: 'incoming-image',
+      } as any, `/file ${name}`, {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      });
+      const delivery = sent.find(m => m.attachments?.length);
+      assert.deepEqual(delivery?.attachments, [{ kind: 'image', path: filePath, name }]);
+      assert.equal(delivery?.replyToMessageId, 'incoming-image');
+      assert.match(String(sent.at(-1)?.text || ''), /已发送图片/);
+    }
   });
 
   it('prompts before uploading a large local file with /file', async () => {

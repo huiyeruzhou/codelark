@@ -31,24 +31,28 @@ describe('outbound-artifacts', () => {
     }]);
   });
 
-  it('treats local Markdown links as uploadable file attachments', () => {
-    const parsed = parseOutboundArtifacts([
+  it('preserves ordinary local links without attaching any files, including image paths', () => {
+    const markdown = [
       '完整稿件：',
       '[打开报告](/opt/tiger/project/work/reports/report.html)',
+      '[图片链接](/tmp/photo.png)',
+      '[源码](/tmp/app.ts:12)',
+      '[Windows 文件](C:\\work\\report.pdf)',
+      '[带空格](</tmp/report one.pdf>)',
       '[远程报告](https://example.com/report.html)',
-    ].join('\n'));
+    ].join('\n');
+    const parsed = parseOutboundArtifacts(markdown);
+    assert.equal(parsed.cleanText, markdown);
+    assert.deepEqual(parsed.attachments, []);
+    assert.equal(stripOutboundArtifactBlocksForStreaming(markdown), markdown);
+  });
 
-    assert.equal(parsed.cleanText, [
-      '完整稿件：',
-      '',
-      '[远程报告](https://example.com/report.html)',
-    ].join('\n'));
-    assert.deepEqual(parsed.attachments, [{
-      kind: 'file',
-      path: '/opt/tiger/project/work/reports/report.html',
-      caption: undefined,
-      name: undefined,
-    }]);
+  it('uploads images from encoded paths and file URLs', () => {
+    const imagePath = path.resolve('image one.png');
+    const parsed = parseOutboundArtifacts(`![URL](${pathToFileURL(imagePath).href})\n![编码](/tmp/image%20two.png)`);
+    assert.deepEqual(parsed.attachments.map(a => a.path), [imagePath, '/tmp/image two.png']);
+    assert(parsed.attachments.every(a => a.kind === 'image'));
+    assert.equal(parsed.cleanText, '');
   });
 
   it('leaves local Markdown image examples inside code blocks untouched', () => {
@@ -293,10 +297,10 @@ describe('outbound-artifacts', () => {
     );
   });
 
-  it('hides local Markdown file links from streaming text while they upload separately', () => {
+  it('keeps local Markdown file links visible while streaming', () => {
     assert.equal(
       stripOutboundArtifactBlocksForStreaming('报告如下：\n\n[打开报告](/tmp/report.html)'),
-      '报告如下：',
+      '报告如下：\n\n[打开报告](/tmp/report.html)',
     );
   });
 
@@ -313,10 +317,11 @@ describe('outbound-artifacts', () => {
   });
 });
 
-it('normalizes image and file Markdown destinations with angle brackets, encoded spaces and file URLs', () => {
+it('normalizes Markdown images but preserves ordinary file URLs', () => {
   const reportPath = path.resolve('report one.pdf');
   const parsed = parseOutboundArtifacts(`![图](</tmp/a b.png> "图标题")\n[报告](${pathToFileURL(reportPath).href})\n![转义](/tmp/a\\(1\\).png)`);
   assert.deepEqual(parsed.attachments.map(({ kind, path }) => ({ kind, path })), [
-    { kind: 'image', path: '/tmp/a b.png' }, { kind: 'file', path: reportPath }, { kind: 'image', path: '/tmp/a(1).png' },
+    { kind: 'image', path: '/tmp/a b.png' }, { kind: 'image', path: '/tmp/a(1).png' },
   ]);
+  assert.equal(parsed.cleanText, `[报告](${pathToFileURL(reportPath).href})`);
 });

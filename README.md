@@ -8,7 +8,7 @@
 
 - 代码仓库：[GitHub](https://github.com/huiyeruzhou/codelark)
 - 文档站：[使用文档](https://huiyeruzhou.github.io/site/codelark/)
-- 当前 npm 版本：`codelark@0.5.0`
+- 当前 npm 版本：`codelark@0.5.1`
 
 ## 核心能力
 
@@ -96,6 +96,10 @@ npx --yes --package=npm@11.6.2 -c 'codelark_pkg=$(npm pack "git+https://github.c
 ```
 
 命令临时使用 npm 11.6.2，在当前目录生成源码构建包后全局安装；不会替换系统 npm。先打包可以避免 Git 依赖准备阶段继承全局安装配置的问题，也兼容系统 npm 12 默认禁止直接安装 Git 来源的行为。
+
+## v0.5.1
+
+`0.5.1` 修正附件发送语义：仅 Markdown 附图自动上传，普通文件链接保留在正文；`/file` 发送图片时使用飞书原生图片消息。
 
 ## v0.5.0
 

@@ -58,7 +58,7 @@ export function buildHelpCommandResponse(): string {
     '- `/pty-screen stop` 停止当前聊天的 pty 屏幕定时刷新',
     '- `/tmux pwd<Enter>` 向当前 tmux session 发送按键并自动截屏返回',
     '- `/cat <path> [start] [end]` 打印文件内容（默认前 200 行）',
-    '- `/file <path>` 发送本地文件；超过 20 MB 时先发确认卡，确认后后台上传并回链接',
+    '- `/file <path>` 发送本地文件（图片直接发为图片）；超过 20 MB 时先发确认卡，确认后后台上传并回链接',
     '',
     '**SessionRuntime 配置**',
     '- `/runtime codex|claude|kimi|cursor|zcode` 切换当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode；不会改变对应 runtime 已记住的 `/provider` 选择',

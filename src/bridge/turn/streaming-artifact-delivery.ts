@@ -17,7 +17,7 @@ export interface StreamingArtifactDeliveryControllerOptions {
 }
 
 /**
- * Delivers complete clk-send blocks and local Markdown attachments as soon as
+ * Delivers complete clk-send blocks and local Markdown images as soon as
  * they appear in answer text.
  *
  * Observations are synchronous and non-blocking. Delivery is serialized in the

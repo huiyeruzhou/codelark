@@ -1,5 +1,11 @@
 # 图片、文件与合并消息验证
 
+## 图片出站语义回归（0.5.1）
+
+`Real Feishu app-server E2E` 工作流在原有 `app-server-lifecycle` 故事中额外覆盖：模型同时输出普通文件链接、普通图片链接和 Markdown 附图；真实用户发送 `/file delivery photo.PNG` 与 `/file delivery report.txt`。夹具使用真实 PNG 和文本文件，包含空格及大写扩展名。
+
+消息通过真实 `lark-cli --as user` → WebSocket → 原生 Codex/命令分发 → 自动飞书投递，再由用户身份读回。要求普通链接仍在实际卡片正文、Markdown 附图只发送一次并回复对应模型卡片、图片命令返回 `image` 且带图片 key、文本命令返回 `file` 且带文件 key，原生线程不变。故事结束时再次检查迟到重复附件。模型输出由隔离 fixture 编排，飞书和 Bridge 不模拟；真人视觉评价仍需另外查看。
+
 ## 可重复运行的完整端到端测试
 
 `npm run real:feishu:attachments` 连接一个专用测试 CodeLark 实例。该实例必须配置独立于正式环境的飞书 App，并已通过 `lark-cli` 完成该 App 的用户授权。测试经产品建群流程创建新的用户所属测试群，保留该群供查看。建群 helper 使用产品 adapter 调用飞书 API；消息收发仅由实际运行的 bridge 监听，不另起 WebSocket、不重放 SDK 事件，也不代替模型发送答案。

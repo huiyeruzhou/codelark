@@ -19,7 +19,6 @@ const ASK_BLOCK_OPEN_REGEX = /^[ \t]*<clk-ask>[ \t]*(?=$|[\[{])/im;
 const INPUT_BLOCK_REGEX = /^[ \t]*<clk-input>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-input>[ \t]*$/gim;
 const INPUT_BLOCK_OPEN_REGEX = /^[ \t]*<clk-input>[ \t]*(?=$|[\[{])/im;
 const LOCAL_MARKDOWN_IMAGE_REGEX = /!\[([^\]\n]*)\]\((<[^>\n]+>|(?:\\.|[^)\\\n])+)\)/gu;
-const LOCAL_MARKDOWN_FILE_LINK_REGEX = /(?<!!)\[([^\]\n]+)\]\((<[^>\n]+>|(?:\\.|[^)\\\n])+)\)/gu;
 
 interface RawSendInstruction {
   type?: unknown;
@@ -238,7 +237,7 @@ function localMarkdownPath(destination: string): string | null {
   return (path.isAbsolute(value) || path.win32.isAbsolute(value)) && !/[\r\n\0]/.test(value) ? value : null;
 }
 
-function extractLocalMarkdownAttachments(text: string): {
+function extractLocalMarkdownImages(text: string): {
   text: string;
   attachments: OutboundAttachment[];
 } {
@@ -258,24 +257,13 @@ function extractLocalMarkdownAttachments(text: string): {
     }
     if (/^(?: {4}|\t)/u.test(line)) return line;
 
-    const withoutLocalImages = line.replace(LOCAL_MARKDOWN_IMAGE_REGEX, (match, altText: string, destination: string) => {
+    return line.replace(LOCAL_MARKDOWN_IMAGE_REGEX, (match, altText: string, destination: string) => {
       const filePath = localMarkdownPath(destination);
       if (!filePath) return match;
       attachments.push({
         kind: 'image',
         path: filePath,
         caption: altText.trim() || undefined,
-        name: undefined,
-      });
-      return '';
-    });
-    return withoutLocalImages.replace(LOCAL_MARKDOWN_FILE_LINK_REGEX, (match, _label: string, destination: string) => {
-      const filePath = localMarkdownPath(destination);
-      if (!filePath) return match;
-      attachments.push({
-        kind: 'file',
-        path: filePath,
-        caption: undefined,
         name: undefined,
       });
       return '';
@@ -355,7 +343,7 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
     return '';
   });
 
-  const localMarkdownAttachments = extractLocalMarkdownAttachments(mutated);
+  const localMarkdownAttachments = extractLocalMarkdownImages(mutated);
   mutated = localMarkdownAttachments.text;
   attachments.push(...localMarkdownAttachments.attachments);
 
@@ -383,7 +371,7 @@ export function stripOutboundArtifactBlocksForStreaming(text: string): string {
     stripped = stripped.slice(0, openMatch.index);
   }
 
-  stripped = extractLocalMarkdownAttachments(stripped).text;
+  stripped = extractLocalMarkdownImages(stripped).text;
   return stripped.replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 

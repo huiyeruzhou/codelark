@@ -27,7 +27,7 @@ describe('streaming artifact delivery', () => {
     }]]);
   });
 
-  it('uploads a completed local Markdown file link once', async () => {
+  it('never uploads an ordinary local link during streaming or final delivery', async () => {
     const delivered: OutboundAttachment[][] = [];
     const controller = createStreamingArtifactDeliveryController({
       async deliver(attachments) {
@@ -40,12 +40,8 @@ describe('streaming artifact delivery', () => {
     controller.observeAnswerText('完整稿件：[打开报告](/opt/tiger/project/work/reports/report.html)');
     await controller.close();
 
-    assert.deepEqual(delivered, [[{
-      kind: 'file',
-      path: '/opt/tiger/project/work/reports/report.html',
-      caption: undefined,
-      name: undefined,
-    }]]);
+    assert.deepEqual(delivered, []);
+    assert.deepEqual(controller.withoutDelivered([]), []);
   });
 
   it('delivers a completed answer block once and removes it from final delivery', async () => {

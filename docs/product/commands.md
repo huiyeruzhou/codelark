@@ -7,7 +7,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 | 会话和线程 | `/t`、`/new`、`/clear`、`/t rename`、`/t unbind` | 接管、新建、云文档群聊模式、切换、归档、重命名、解绑会话 |
 | runtime 设置 | `/runtime`、`/provider`、`/model`、`/mode`、`/reasoning`、`/sandbox`、`/network`、`/cd` | 修改当前会话的运行参数 |
 | 状态和诊断 | `/`、`/status`、`/check`、`/doctor`、`/his` | 查看状态、健康检查、历史和排障 |
-| 终端和文件 | `/shell`、`/tmux-*`、`/pty-screen`、`/cat`、`/file` | 执行命令、观察终端、发送文件 |
+| 终端和文件 | `/shell`、`/tmux-*`、`/pty-screen`、`/cat`、`/file` | 执行命令、观察终端、发送文件（图片直接发为图片） |
 | 自动化和管理 | `/every`、`/then`、`/require-at`、`/customer`、`/whitelist`、`/ui`、`/set`、`/hot-update` | 定时输入、后续输入、会话触发策略、客服群与管理员、显示和全局设置 |
 
 从本机 `audit.jsonl` 的匿名聚合看，普通消息占绝大多数；命令使用主要集中在 `/tmux-screen`、`/p tmux`、`/new`，随后是 `/clear`、`/every`、`/runtime`、`/t` 和 `/set`。用户教程据此优先讲“新建任务—直接对话—观察 tmux—继续或切换会话”，详见 [5 分钟上手：日常工作流](../guide/daily-workflow.md)。

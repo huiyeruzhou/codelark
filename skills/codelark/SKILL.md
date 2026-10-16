@@ -54,7 +54,7 @@ Upload a local image or file with CodeLark's `local_path` extension. The path mu
 <clk-send>{"msg_type":"file","local_path":"/absolute/report.pdf"}</clk-send>
 ```
 
-When the user asks to receive, see, or be sent a local image or file, complete the delivery with `<clk-send>` in the final response. Calling `view_image`, rendering a Markdown image, or showing a local path is only local inspection and does not deliver the artifact. Do not claim that the artifact was sent before CodeLark accepts the control block.
+When the user asks to receive, see, or be sent a local image or file, complete the delivery with `<clk-send>` in the final response. Calling `view_image` or showing a local path is only local inspection. CodeLark also delivers local Markdown images (`![caption](/absolute/image.png)`) as native images, but ordinary Markdown links never upload files. Do not claim that the artifact was sent before CodeLark accepts the control block.
 
 Check that the local path exists before sending, but do not call `view_image` by default. If the user reports that an image is wrong, broken, stale, or visually incorrect, inspect that image and subsequent corrected images with `view_image` before sending them again during that task.
 

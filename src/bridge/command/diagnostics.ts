@@ -754,6 +754,9 @@ export function handleCatCommand(options: {
   }
 }
 
+// Formats accepted by Feishu's image upload API; unsupported formats remain files.
+const IMAGE_FILE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff']);
+
 export async function handleFileCommand(options: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
@@ -803,7 +806,7 @@ export async function handleFileCommand(options: {
       return '目标不是文件。';
     }
     const attachment: OutboundAttachment = {
-      kind: 'file',
+      kind: IMAGE_FILE_EXTENSIONS.has(path.extname(resolvedPath).toLowerCase()) ? 'image' : 'file',
       path: resolvedPath,
       name: path.basename(resolvedPath),
     };
@@ -832,7 +835,7 @@ export async function handleFileCommand(options: {
       options.msg.messageId,
       [attachment],
     );
-    return `已发送文件：${path.basename(resolvedPath)}`;
+    return `已发送${attachment.kind === 'image' ? '图片' : '文件'}：${path.basename(resolvedPath)}`;
   } catch (error) {
     return `读取文件失败：${error instanceof Error ? error.message : String(error)}`;
   }
