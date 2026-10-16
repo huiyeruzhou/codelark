@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 
 import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
@@ -195,6 +195,55 @@ export function trimLocalBootstrapSessionToContextPrefix(filePath: string, threa
   fs.writeFileSync(filePath, `${keptLines.join('\n')}\n`, 'utf-8');
 }
 
+async function waitForBootstrapClose(closed: Promise<void>, timeoutMs: number): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      closed.then(() => true),
+      new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function stopBootstrapProcess(
+  child: ChildProcess,
+  closed: Promise<void>,
+  isClosed: () => boolean,
+): Promise<void> {
+  if (isClosed()) return;
+  try {
+    if (process.platform === 'win32' && child.pid) {
+      // Killing cmd.exe alone leaves the npm launcher/native Codex descendants
+      // holding our output pipes and potentially writing the session after trim.
+      await new Promise<void>((resolve, reject) => {
+        execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+          windowsHide: true,
+          timeout: 5_000,
+        }, (error) => {
+          if (error && !isClosed()) reject(error);
+          else resolve();
+        });
+      });
+    } else {
+      child.kill('SIGTERM');
+      if (await waitForBootstrapClose(closed, 500)) return;
+      child.kill('SIGKILL');
+    }
+    if (!await waitForBootstrapClose(closed, 5_000)) {
+      throw new Error('bootstrap process output pipes did not close');
+    }
+  } catch (error) {
+    // Report cleanup failure instead of handing a still-written session to TUI.
+    // Release our pipe handles even if the OS refused termination.
+    child.kill('SIGKILL');
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    throw new Error('本地 Codex thread bootstrap 子进程清理失败。', { cause: error });
+  }
+}
+
 export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstrapOptions): Promise<string> {
   const env = buildLocalBootstrapEnv();
   const executable = resolveCodexCliExecutable({ env: env as Record<string, string> });
@@ -217,47 +266,33 @@ export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstr
     let settled = false;
     let resolvingThread = false;
     let childClosed = false;
-    const settle = (fn: () => void) => {
+    const closed = new Promise<void>((resolveClose) => {
+      child.once('close', () => { childClosed = true; resolveClose(); });
+    });
+    // Reserve exactly one outcome, then complete cleanup before resolving or
+    // rejecting. The timeout and session discovery can race while stopping.
+    const finish = (result: { threadId: string; sessionFile: string } | Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      fn();
-    };
-    const waitForChildClose = async () => {
-      if (childClosed) return;
-      await new Promise<void>((resolveClose) => {
-        const closeTimeout = setTimeout(resolveClose, 500);
-        closeTimeout.unref?.();
-        child.once('close', () => {
-          clearTimeout(closeTimeout);
-          resolveClose();
-        });
-      });
+      void stopBootstrapProcess(child, closed, () => childClosed).then(() => {
+        if (result instanceof Error) reject(result);
+        else resolve(result);
+      }, reject);
     };
     const resolveAfterSessionFile = (foundThreadId: string) => {
       if (settled || resolvingThread) return;
       resolvingThread = true;
-      void (async () => {
-        const foundSessionFile = await waitForSessionFileByThreadId(foundThreadId);
+      void waitForSessionFileByThreadId(foundThreadId).then((foundSessionFile) => {
         if (!foundSessionFile) {
-          settle(() => {
-            child.kill('SIGTERM');
-            reject(new Error(`本地 Codex thread bootstrap 已创建 thread ${foundThreadId}，但未找到可用 session JSONL。`));
-          });
+          finish(new Error(`本地 Codex thread bootstrap 已创建 thread ${foundThreadId}，但未找到可用 session JSONL。`));
           return;
         }
-        child.kill('SIGTERM');
-        await waitForChildClose();
-        settle(() => {
-          resolve({ threadId: foundThreadId, sessionFile: foundSessionFile });
-        });
-      })();
+        finish({ threadId: foundThreadId, sessionFile: foundSessionFile });
+      }, (error: Error) => finish(error));
     };
     const timeout = setTimeout(() => {
-      settle(() => {
-        child.kill('SIGTERM');
-        reject(new Error(`本地 Codex thread bootstrap 超时：未收到 thread.started。${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
-      });
+      finish(new Error(`本地 Codex thread bootstrap 超时：未收到 thread.started。${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
     }, LOCAL_BOOTSTRAP_TIMEOUT_MS);
     timeout.unref?.();
 
@@ -278,17 +313,17 @@ export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstr
       if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
     });
     child.on('error', (error) => {
-      settle(() => reject(error));
+      finish(error);
     });
     child.on('close', (code) => {
-      childClosed = true;
+      if (settled) return;
       const foundThreadId = readThreadIdFromCodexExecLine(pending);
       if (foundThreadId) {
         resolveAfterSessionFile(foundThreadId);
         return;
       }
       if (resolvingThread) return;
-      settle(() => reject(new Error(`本地 Codex thread bootstrap 失败：codex exec exited with ${code ?? 'unknown'}。${stderr.trim() ? `\n${stderr.trim()}` : ''}`)));
+      finish(new Error(`本地 Codex thread bootstrap 失败：codex exec exited with ${code ?? 'unknown'}。${stderr.trim() ? `\n${stderr.trim()}` : ''}`));
     });
   });
   trimLocalBootstrapSessionToContextPrefix(sessionFile, threadId);

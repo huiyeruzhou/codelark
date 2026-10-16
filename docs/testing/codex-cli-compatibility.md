@@ -101,3 +101,9 @@ CODELARK_REAL_FEISHU_E2E=1 CODELARK_CODEX_CLI_PATH="$(command -v codex)" \
 真实飞书测试依然**不包含真人客户端按钮点击验收**。审批卡可以由用户身份读回；没有实际点击时，测试通过真实 `/stop` 取消审批并把 `acceptanceComplete` 保持为 false。凭据预检拒绝误传 lark-cli keychain 引用，避免把引用文本写成测试 app 的密钥。
 
 官方 Desktop GUI、本机生产 Bridge 热更新、远端平台 CI 未执行。生产进程保持原状；全局 CLI 当前为 0.163.0。
+
+## bootstrap 进程回收回归
+
+`codex-bootstrap-process.test.ts` 使用隔离的假 CLI 验证成功和缺少 session 文件两条路径：函数返回前，启动的进程必须全部退出。Windows fixture 模拟 `.cmd → Node 包装器 → writer` 并继承输出管道；Linux/macOS fixture 忽略 SIGTERM，验证强制终止兜底。只清理该用例记录的 PID，不操作用户的 Codex 或 tmux 进程。
+
+Windows bootstrap 使用 PID 定位的进程树终止，并等待输出管道实际关闭，才修剪 JSONL 和交接给 TUI；超时或启动失败也经过同一清理流程。清理失败会拒绝交接，避免已返回的 bootstrap 继续写文件。CI 在真实运行时生命周期测试前执行此回归，真实 Codex 七个用例还必须自然退出，不能以断言通过替代进程退出。

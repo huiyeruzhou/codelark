@@ -58,6 +58,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Test bootstrap process cleanup
+        run: node --import tsx --test src/__tests__/unit/runtime/codex/codex-bootstrap-process.test.ts
+
       - name: Configure CI tool shims
         run: node scripts/setup-ci-tool-shims.js
 
@@ -148,6 +151,9 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Test bootstrap process cleanup
+        run: node --import tsx --test src/__tests__/unit/runtime/codex/codex-bootstrap-process.test.ts
 
       - name: Configure CI tool shims
         run: node scripts/setup-ci-tool-shims.js

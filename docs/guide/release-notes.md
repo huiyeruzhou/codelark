@@ -12,6 +12,8 @@
 - `/file <path>` 自动识别支持的图片扩展名，使用飞书图片消息发送；普通文件和大文件确认流程保持原有行为。
 - 显式 `<clk-send>` 文件发送继续支持。详见[图片与文件说明](../product/message-attachments.md)。
 
+- 修复 Windows tmux 初始化只结束 Codex 启动包装器、留下后台子进程和输出管道的问题；成功或失败都先回收本次 bootstrap 进程树，再交接会话。
+
 ```bash
 npm install -g codelark@0.5.1
 ```
