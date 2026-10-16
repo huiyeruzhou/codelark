@@ -53,7 +53,7 @@ jobs:
           target.chmod(0o600)
           PYENV
       - name: Restore the latest encrypted refresh state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ steps.auth-restore.outputs.token-file }}
           key: feishu-user-${{ steps.auth-restore.outputs.cache-generation }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -84,7 +84,7 @@ jobs:
       # Persist refresh-token rotation even when a later test fails.
       - name: Save the refreshed encrypted authorization
         if: always() && steps.auth-check.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ steps.auth-restore.outputs.token-file }}
           key: feishu-user-${{ steps.auth-restore.outputs.cache-generation }}-${{ github.run_id }}-${{ github.run_attempt }}
