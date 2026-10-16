@@ -1,5 +1,6 @@
 import '../../../setup/test-setup.js';
-import { describe, it, type TestContext } from 'node:test';
+import { after, describe, it, type TestContext } from 'node:test';
+import { createHook } from 'node:async_hooks';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -39,6 +40,30 @@ import {
   waitForCondition,
 } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 import { codexFixtureStartupChoice } from '../../../helpers/runtime/codex-startup-selection.js';
+
+// Report referenced resources only if this isolated worker is still alive
+// after every assertion and teardown has finished. The timer never keeps it alive.
+if (process.platform === 'win32') {
+  const resources = new Map<number, { type: string; stack: string; resource: WeakRef<object> }>();
+  const watched = new Set(['Timeout', 'PROCESSWRAP', 'TCPSERVERWRAP', 'TCPWRAP', 'PIPEWRAP', 'FSEVENTWRAP']);
+  createHook({
+    init(id, type, _triggerId, resource) {
+      if (watched.has(type)) resources.set(id, { type, stack: new Error().stack || '', resource: new WeakRef(resource) });
+    },
+    destroy(id) { resources.delete(id); },
+  }).enable();
+  after(() => {
+    setTimeout(() => {
+      const live = [...resources.values()].flatMap(entry => {
+        const resource = entry.resource.deref() as { hasRef?: () => boolean; _idleTimeout?: number; _onTimeout?: () => void } | undefined;
+        if (!resource || (resource.hasRef && !resource.hasRef())) return [];
+        return [{ type: entry.type, timeout: resource._idleTimeout, callback: resource._onTimeout?.toString().slice(0, 300), stack: entry.stack }];
+      });
+      console.error('[codex-e2e-exit] active resources', JSON.stringify(process.getActiveResourcesInfo()));
+      console.error('[codex-e2e-exit] creation stacks', JSON.stringify(live));
+    }, 5_000).unref();
+  });
+}
 
 const execFileAsync = promisify(execFile);
 const REAL_CODEX_E2E_MODEL_ENV = 'CODELARK_REAL_CODEX_E2E_MODEL';
