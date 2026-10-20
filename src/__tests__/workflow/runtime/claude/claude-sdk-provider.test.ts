@@ -33,6 +33,12 @@ async function withEnvOverride<T>(
 }
 
 describe('ClaudeSdkProvider helpers', () => {
+  it('does not inherit the launching Claude child-session marker', async () => {
+    const options = await withEnvOverride({ CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1' }, () =>
+      _testOnlyClaudeSdk.buildClaudeSdkOptions({ prompt: 'hello', sessionId: '7b2e7d9d-688a-4697-bf54-2bfdcfec85e9' }));
+    assert.equal(options.env?.CLAUDECODE, undefined);
+    assert.equal(options.env?.CLAUDE_CODE_CHILD_SESSION, undefined);
+  });
   it('runs every Windows batch action through cmd from the shim directory', () => {
     assert.deepEqual(
       buildClaudeCodeRouterStartInvocation('C:\\Program Files\\ccr.cmd', 'win32', 'C:\\Windows\\cmd.exe'),

@@ -48,3 +48,10 @@ CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-claude-binding.
 脚本结束时停止自己启动的 daemon，只在验证过的隔离 socket 上按实际绑定名删除 tmux 会话，并删除本轮创建的群。建群请求超时时，会按本轮随机标记、完整群名和当前用户 owner 查找遗漏的已创建群。删除失败使正例失败，报告保留群 ID 供后续清理；不会扫描删除其他任务群。
 
 2026-10-20 的真实对照中，旧版 `b77c490` 的 TNFA 输入写入独立 JSONL，但两个群镜像同一 IFNAR2 输出，身份断言失败；修复版 `6ba57a8` 完成两群四次用户回读，保持独立身份。该证据使用上述修改时间故障注入，不代表未经控制的线上竞态发生频率。
+
+
+## 旧窗口自动升级与污染环境
+
+追加 `--upgrade-legacy` 会让隔离 daemon 继承 `CLAUDECODE=1` 和 `CLAUDE_CODE_CHILD_SESSION=1`，先验证真实两群首轮仍能持久化和回读。随后停止隔离 daemon，将两个独占窗口用无 ID 参数启动，再通过 Claude 自己的 `/resume <id>` 恢复首轮对话。抓屏必须包含各自原回复，pane 启动命令必须没有 ID 参数，才重新启动 Bridge。
+
+两群并发第二轮必须触发 `tmux.provider.claude.existing.upgrade`，保持各自会话 ID，原始消息在 JSONL 中各出现一次，且用户身份读回不能含邻群输出。测试不修改原始 transcript，不把新窗口启动测试当作旧窗口升级测试。

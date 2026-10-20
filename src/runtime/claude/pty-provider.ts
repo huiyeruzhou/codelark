@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { clearClaudeParentSessionEnv } from './environment.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClaudeExecutable } from '../options.js';
@@ -323,7 +324,7 @@ export function buildClaudePtyEnv(): Record<string, string> {
     if (value !== undefined) env[key] = value;
   }
   env.TERM = env.TERM || 'xterm-256color';
-  return env;
+  return clearClaudeParentSessionEnv(env);
 }
 
 async function waitForClaudePtyBuffer(

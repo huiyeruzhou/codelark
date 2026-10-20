@@ -232,8 +232,9 @@ function Start-Fallback {
     foreach ($key in [System.Environment]::GetEnvironmentVariables().Keys) {
         $envClone[$key] = [System.Environment]::GetEnvironmentVariable($key)
     }
-    # Remove CLAUDECODE
+    # Remove parent Claude session flags
     [System.Environment]::SetEnvironmentVariable('CLAUDECODE', $null)
+    [System.Environment]::SetEnvironmentVariable('CLAUDE_CODE_CHILD_SESSION', $null)
     [System.Environment]::SetEnvironmentVariable('CODELARK_HOME', $CodelarkHome, 'Process')
 
     try {

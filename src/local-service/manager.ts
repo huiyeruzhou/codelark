@@ -652,6 +652,7 @@ function buildDaemonEnv(
     if (key === `${legacyEnvPrefix}_HOME` || key.startsWith(`${legacyEnvPrefix}_`)) delete env[key];
   }
   delete env.CLAUDECODE;
+  delete env.CLAUDE_CODE_CHILD_SESSION;
   return env;
 }
 

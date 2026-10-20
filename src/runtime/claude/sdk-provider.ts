@@ -10,6 +10,7 @@ import type { LLMProvider, StreamChatParams, TokenUsage } from '../contracts.js'
 import { sseEvent } from '../sse.js';
 import { prepareClaudeCodeRouterEnv } from './code-router.js';
 import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
+import { clearClaudeParentSessionEnv } from './environment.js';
 
 type ClaudeAgentSdkModule = typeof import('@anthropic-ai/claude-agent-sdk');
 
@@ -38,7 +39,7 @@ function buildClaudeSdkBaseEnv(): Record<string, string> {
     if (value !== undefined) env[key] = value;
   }
   env.CLAUDE_AGENT_SDK_CLIENT_APP = env.CLAUDE_AGENT_SDK_CLIENT_APP || 'codelark';
-  return env;
+  return clearClaudeParentSessionEnv(env);
 }
 
 async function buildClaudeSdkEnv(

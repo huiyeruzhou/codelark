@@ -13,6 +13,7 @@ import { appServerTurnOptions } from '../../runtime/codex/app-server-provider.js
 import {
   claudeTmuxSessionName,
   readClaudeTmuxSessionId,
+  ClaudeTmuxSessionIdentityError,
   cleanupRuntimeTmuxSession,
   codexTmuxSessionName,
   attachTmuxSession,
@@ -46,6 +47,10 @@ import {
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
+import { getClaudeSessionJsonlById } from '../../runtime/claude/session-jsonl.js';
+import { hasClaudePtyInputPrompt } from '../../runtime/claude/pty-provider.js';
+import { compactTerminalScreenText } from '../../runtime/tui-screen.js';
+import { tmuxCore } from '../tmux/core.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
@@ -99,6 +104,7 @@ import {
 import type { CodexTuiSelectionPromptChoice } from '../../runtime/codex/tmux-provider.js';
 import {
   inspectRuntimeTmuxInput,
+  transitionRuntimeTmuxInputState,
   resolveRuntimeTmuxSteerOperation,
   sendRuntimeTmuxInput,
 } from '../tmux/input-state-machine.js';
@@ -860,6 +866,7 @@ async function ensureRuntimeTmuxSessionForProvider(
       sessionName: target,
       hasSession: () => hasTmuxSession(target),
     });
+    let upgradeExisting = false;
     if (inspected.exists) {
       if (!configuredTarget) {
         store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
@@ -870,6 +877,7 @@ async function ensureRuntimeTmuxSessionForProvider(
         scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'existing Claude provider binding');
       }
       let readinessCommands: string[] = [];
+      let existingScreen: string | undefined;
       if (
         params.tmuxProviderAutoForward === true
         && inspected.needsReadiness
@@ -903,10 +911,51 @@ async function ensureRuntimeTmuxSessionForProvider(
           };
         }
         readinessCommands = readiness.commands;
+        existingScreen = readiness.lastScreen;
       }
-      const actualId = await readClaudeTmuxSessionId(target);
-      if (claudeSessionId && actualId !== claudeSessionId) throw new Error(`Claude tmux 窗口会话 ${actualId} 与保存的绑定 ${claudeSessionId} 不一致，未发送消息，请先修正绑定。`);
-      return { target, commands: [inspected.command || '', ...readinessCommands].filter(Boolean), recovered: false };
+      let legacyIdentityError: ClaudeTmuxSessionIdentityError | undefined;
+      try {
+        const actualId = await readClaudeTmuxSessionId(target);
+        if (claudeSessionId && actualId !== claudeSessionId) throw new Error(`Claude tmux 窗口会话 ${actualId} 与保存的绑定 ${claudeSessionId} 不一致，未发送消息，请先修正绑定。`);
+      } catch (error) {
+        // Only migrate an old Claude launch without identity arguments. Failed
+        // reads, malformed IDs and ambiguous commands are not legacy evidence.
+        if (!(error instanceof ClaudeTmuxSessionIdentityError)
+          || /--(?:session-id|resume)\b/u.test(error.launchCommand)
+          || !/\b(?:claude(?:\.exe|\.cmd)?|ccr)(?=[\s'"\\]|$)/iu.test(error.launchCommand)) throw error;
+        legacyIdentityError = error;
+      }
+      const compactScreen = compactTerminalScreenText(existingScreen || '');
+      const transcriptDisabled = compactScreen.includes('transcriptsavingisoff')
+        && compactScreen.includes('claude_code_child_session');
+      if (!legacyIdentityError && !transcriptDisabled) {
+        return { target, commands: [inspected.command || '', ...readinessCommands].filter(Boolean), recovered: false };
+      }
+      const cwd = getSessionWorkingDirectory(session) || session.runtime?.claude?.cwd;
+      const ownedTarget = target === claudeTmuxSessionName(session.id)
+        || Boolean(claudeSessionId && target === claudeTmuxSessionName(claudeSessionId));
+      const transcript = claudeSessionId && cwd ? getClaudeSessionJsonlById(claudeSessionId, cwd) : null;
+      const conflictingBinding = store.listSessions().some((other) => other.id !== session.id
+        && getSessionClaudeSessionId(other) === claudeSessionId
+        && Boolean(getSessionRuntimeTmuxSessionName(other))
+        && getSessionRuntimeTmuxSessionName(other) !== target);
+      if (params.tmuxProviderAutoForward !== true || params.autoRecoverProviderSession !== true
+        || !ownedTarget || !transcript || conflictingBinding
+        || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(claudeSessionId || '')) {
+        transitionRuntimeTmuxInputState('claude', target, 'failed', 'automatic upgrade needs a recoverable independent session');
+        throw legacyIdentityError || new Error('Claude 会话记录保存已关闭，且无法确认可恢复的独立会话记录，未自动重建窗口。');
+      }
+      existingScreen ||= (await tmuxCore.capturePane(`${target}:0.0`, 80)).screen;
+      if (!hasClaudePtyInputPrompt(existingScreen) || /esc\s+to\s+interrupt/iu.test(existingScreen)) {
+        transitionRuntimeTmuxInputState('claude', target, 'failed', 'automatic upgrade deferred while Claude is busy');
+        throw new Error('Claude 旧窗口仍在执行任务或等待交互，未自动重建；任务结束后的下一条消息会自动迁移。');
+      }
+      upgradeExisting = true;
+      console.log('[tmux-command] Automatically upgrading a legacy Claude window:', {
+        event: 'tmux.provider.claude.existing.upgrade', bridge_session_id: session.id,
+        tmux_session: target, claude_session_id: claudeSessionId,
+        reason: transcriptDisabled ? 'inherited child-session marker' : 'legacy launch without session ID',
+      });
     }
     if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
       return {
@@ -917,7 +966,7 @@ async function ensureRuntimeTmuxSessionForProvider(
       };
     }
     const claudeConfig = resolveClaudeRuntimeConfig(session, binding);
-    await params.notifyBackgroundOperation?.(
+    if (!upgradeExisting) await params.notifyBackgroundOperation?.(
       configuredTarget
         ? `tmux session \`${target}\` 不存在，正在后台重新启动 Claude Code TUI。`
         : `Claude tmux Provider 缺少 tmux session，正在后台启动 Claude Code TUI \`${target}\`。`,
@@ -955,6 +1004,9 @@ async function ensureRuntimeTmuxSessionForProvider(
           lastError: undefined,
         }, true),
       };
+    }
+    if (upgradeExisting && await readClaudeTmuxSessionId(target) !== claudeSessionId) {
+      throw new Error('Claude 自动迁移后的会话 ID 与原绑定不一致，未发送消息。');
     }
     store.updateSession(session.id, setSessionClaudeTmuxProviderUpdate({
       tmuxSessionName: target,

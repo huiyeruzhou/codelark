@@ -8,13 +8,14 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createConfigService } from '../src/configuration/service.js';
 import { AttachmentLarkClient } from '../src/testing/real-feishu/attachments.js';
+import { parseClaudeLaunchSessionId } from '../src/runtime/claude/session-identity.js';
 import { getSessionClaudeSessionId, getSessionTmuxSessionName } from '../src/domain/session-runtime.js';
 import { listClaudeSessionJsonlFiles, summarizeClaudeSessionJsonl } from '../src/runtime/claude/session-jsonl.js';
 
 const exec = promisify(execFile);
 const value = (key: string, fallback = '') => { const i = process.argv.indexOf(key); return i < 0 ? fallback : process.argv[i + 1]!; };
 if (process.argv.includes('--help')) {
-  console.log('Usage: CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-claude-binding.ts --test-home <dedicated CodeLark home> --profile <test app user profile> [--daemon dist/daemon.mjs] [--label fixed] [--output-dir work/report]');
+  console.log('Usage: CODELARK_REAL_FEISHU_E2E=1 node --import tsx scripts/real-feishu-claude-binding.ts --test-home <dedicated CodeLark home> --profile <test app user profile> [--daemon dist/daemon.mjs] [--label fixed] [--output-dir work/report] [--upgrade-legacy]');
   console.log('Runs two real Claude/tmux processes and real Feishu groups; changes only competing JSONL mtime to expose incorrect latest-file discovery. Requires a separate configured test app, user IM authorization and native Claude/tmux. Deletes only this run’s test groups. Run against old and fixed daemon bundles; only a repeated binding plus user-read wrong output counts as the negative control.');
   process.exit(0);
 }
@@ -24,6 +25,7 @@ assert(value('--test-home') && value('--profile'), '--test-home and --profile ar
 const testHome = path.resolve(value('--test-home'));
 const profile = value('--profile');
 const label = value('--label', 'fixed');
+const upgradeLegacy = process.argv.includes('--upgrade-legacy');
 assert(/^[a-zA-Z0-9_-]+$/.test(label), 'label must be a simple identifier');
 const daemon = path.resolve(value('--daemon', 'dist/daemon.mjs'));
 const runId = `${label}-${Date.now()}`;
@@ -38,7 +40,7 @@ const tmuxRoot = path.join(root, 'tmux');
 for (const p of [directory, home, runtimeHome, workspace, tmuxRoot]) fs.mkdirSync(p, { recursive: true, mode: 0o700 });
 const channel = 'feishu-binding-test';
 const nonce = crypto.randomBytes(5).toString('hex');
-const report: any = { runId, daemon, directory, root, workspace, passed: false, stage: 'preflight', groups: [], requests: [], readbacks: [], cleanup: [],
+const report: any = { runId, upgradeLegacy, daemon, directory, root, workspace, passed: false, stage: 'preflight', groups: [], requests: [], readbacks: [], cleanup: [],
   boundary: 'real user send -> Feishu WebSocket -> actual daemon -> real Claude/tmux -> automatic bot reply -> user_card_content readback',
   faultInjection: 'Only IFNAR2 JSONL mtime is held 2 seconds ahead during TNFA discovery. Contents, process identity, inputs and replies are never injected or rewritten.' };
 const save = () => fs.writeFileSync(path.join(directory, 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
@@ -121,6 +123,7 @@ async function main() {
     TMUX_TMPDIR:tmuxRoot,ANTHROPIC_BASE_URL:baseUrl,ANTHROPIC_AUTH_TOKEN:'isolated-fixture-token',ANTHROPIC_API_KEY:'',CLAUDE_CODE_SIMPLE:'1',CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1',
     CODELARK_CLAUDE_EXECUTABLE:'claude',CODELARK_CLAUDE_PROVIDER:'tmux',CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS:'0',CODELARK_DISABLE_DAILY_VERSION_CHECK:'1',CODELARK_CODEX_APP_SERVER:'0',CODELARK_CODEX_DESKTOP_REMOTE:'0',
     XDG_DATA_HOME:path.join(runtimeHome,'.local/share'),XDG_CONFIG_HOME:path.join(runtimeHome,'.config'),XDG_CACHE_HOME:path.join(runtimeHome,'.cache')};
+  if (upgradeLegacy) { env.CLAUDECODE = '1'; env.CLAUDE_CODE_CHILD_SESSION = '1'; }
   for(const k of ['TMUX','TMUX_PANE','NODE_OPTIONS','LARKSUITE_CLI_CONFIG_DIR','LARK_CHANNEL','LARK_CHANNEL_HOME','LARK_CHANNEL_CONFIG','CODELARK_CODEX_APP_SERVER_URL','CODELARK_CLAUDE_CLI_PATH','CODELARK_TMUX_EXECUTABLE']) delete env[k];
   stage('create two real groups via product /new');
   for(const lane of ['IFNAR2','TNFA']) {
@@ -170,6 +173,44 @@ async function main() {
   }
   assert.notEqual(bId,aId,'REGRESSION: distinct tmux groups saved the same Claude identity');
   await answer(b,1);
+  if (upgradeLegacy) {
+    stage('restart bridge around real legacy windows with inherited child-session markers');
+    child!.kill('SIGTERM');
+    await wait('isolated daemon stopped', () => child!.exitCode !== null || child!.signalCode !== null ? true : undefined, 15_000);
+    const socket = path.join(tmuxRoot, `tmux-${process.getuid?.()}`, 'default');
+    assert(fs.statSync(socket).isSocket());
+    const tmux = async (args: string[]) => (await exec('tmux', ['-S', socket, ...args], { env })).stdout;
+    report.legacyWindows = [];
+    for (const group of report.groups) {
+      const session = sessionFor(group);
+      const target = getSessionTmuxSessionName(session)!;
+      const id = getSessionClaudeSessionId(session)!;
+      // Resume via the CLI's own command, leaving pane_start_command in the old
+      // no-ID launch shape. The real transcript and conversation are unchanged.
+      await tmux(['respawn-pane', '-k', '-t', `${target}:0.0`, '-c', workspace,
+        'env', '-u', 'CLAUDECODE', '-u', 'CLAUDE_CODE_CHILD_SESSION', 'claude', '--model', 'claude-sonnet-4-5']);
+      await wait('legacy input ready', async () => {
+        const screen = await tmux(['capture-pane', '-p', '-t', `${target}:0.0`, '-S', '-80']);
+        return /❯/u.test(screen) && /for shortcuts/u.test(screen) ? true : undefined;
+      }, 20_000);
+      await tmux(['send-keys', '-t', `${target}:0.0`, '-l', `/resume ${id}`]);
+      await tmux(['send-keys', '-t', `${target}:0.0`, 'Enter']);
+      await wait('legacy original history restored', async () => {
+        const screen = await tmux(['capture-pane', '-p', '-t', `${target}:0.0`, '-S', '-80']);
+        fs.writeFileSync(path.join(directory, `legacy-${group.lane}.txt`), screen);
+        return screen.includes(marker(group.lane, 1)) ? true : undefined;
+      }, 20_000);
+      const command = (await tmux(['display-message', '-p', '-t', `${target}:0.0`, '#{pane_start_command}'])).trim();
+      assert(!/--(?:session-id|resume)\b/u.test(command));
+      const pid = (await tmux(['display-message', '-p', '-t', `${target}:0.0`, '#{pane_pid}'])).trim();
+      report.legacyWindows.push({ lane: group.lane, target, id, pid, command }); save();
+    }
+    const log = fs.openSync(path.join(directory, 'daemon.log'), 'a');
+    child = spawn(process.execPath, [daemon], { cwd: process.cwd(), env, stdio: ['ignore', log, log] });
+    fs.closeSync(log);
+    await wait('restarted bridge ready', () => { try { const state = JSON.parse(fs.readFileSync(path.join(home, 'runtime/status.json'), 'utf8')); return state.running && state.channels?.includes(channel) && state.pid === child!.pid ? true : undefined; } catch { return undefined; } });
+    await pause(1800);
+  }
   stage('concurrent followups in both groups');
   await Promise.all(report.groups.map((g:any)=>send(g,2)));
   await Promise.all(report.groups.map((g:any)=>answer(g,2)));
@@ -177,6 +218,26 @@ async function main() {
     const items=await readBot(g);const wrong=g.lane==='IFNAR2'?'TNFA':'IFNAR2';
     assert(!JSON.stringify(items).includes(`ANSWER_${wrong}_${nonce}`),'neighbor output leaked into real group');
     assert.equal(getSessionClaudeSessionId(sessionFor(g)),g.lane==='IFNAR2'?aId:bId,'followup changed process identity');
+  }
+  if (upgradeLegacy) {
+    const log = fs.readFileSync(path.join(home, 'logs/bridge.log'), 'utf8');
+    report.upgrades = log.split('\n').flatMap(line => { try { const entry = JSON.parse(line); return entry.event === 'tmux.provider.claude.existing.upgrade' ? [entry] : []; } catch { return []; } });
+    assert.equal(report.upgrades.length, 2, 'each real inbound lane must upgrade exactly once');
+    const socket = path.join(tmuxRoot, `tmux-${process.getuid?.()}`, 'default');
+    assert(fs.statSync(socket).isSocket());
+    for (const prior of report.legacyWindows) {
+      const result = await exec('tmux', ['-S', socket, 'display-message', '-p', '-t', `${prior.target}:0.0`, '#{pane_pid}\t#{pane_start_command}'], { env });
+      const [pid, ...command] = result.stdout.trim().split('\t');
+      assert.notEqual(pid, prior.pid, 'the legacy process must be replaced');
+      assert.equal(parseClaudeLaunchSessionId(command.join('\t')), prior.id);
+      assert(report.upgrades.some((entry:any) => entry.tmux_session === prior.target));
+    }
+    for (const group of report.groups) {
+      const id = getSessionClaudeSessionId(sessionFor(group))!;
+      const file = listClaudeSessionJsonlFiles(workspace, runtimeHome).find(f => summarizeClaudeSessionJsonl(f)?.sessionId === id)!;
+      const inputs = fs.readFileSync(file, 'utf8').split('\n').flatMap(line => { try { const r = JSON.parse(line); return r.type === 'user' ? [r] : []; } catch { return []; } });
+      assert.equal(inputs.filter(r => JSON.stringify(r.message?.content).includes('ROUND_2')).length, 1, 'original real Feishu input must be sent once');
+    }
   }
   report.jsonlFiles=listClaudeSessionJsonlFiles(workspace,runtimeHome).map(f=>({file:f,id:summarizeClaudeSessionJsonl(f)?.sessionId}));
   assert.equal(report.jsonlFiles.length,2);

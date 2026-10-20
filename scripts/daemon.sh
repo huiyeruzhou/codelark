@@ -39,7 +39,7 @@ ensure_built() {
 
 # Clean environment for subprocess isolation.
 clean_env() {
-  unset CLAUDECODE 2>/dev/null || true
+  unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION 2>/dev/null || true
 
   local mode="${CODELARK_ENV_ISOLATION:-inherit}"
   if [ "$mode" = "strict" ]; then

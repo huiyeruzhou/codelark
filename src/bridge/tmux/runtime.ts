@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { parseClaudeLaunchSessionId } from '../../runtime/claude/session-identity.js';
+import { CLAUDE_PARENT_SESSION_ENV } from '../../runtime/claude/environment.js';
 
 import {
   buildCodexTuiSelectionChoiceActions,
@@ -1279,17 +1280,24 @@ function buildClaudeTmuxShellCommand(
   options: { stderrLogPath?: string } = {},
 ): string | string[] {
   const snapshot = ensureShellSnapshot(env);
-  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot, options);
+  const launchArgs = buildShellSnapshotLaunchArgs(command, args, snapshot, { ...options, unsetEnv: CLAUDE_PARENT_SESSION_ENV });
   return process.platform === 'win32'
     ? launchArgs
     : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
+}
+
+export class ClaudeTmuxSessionIdentityError extends Error {
+  constructor(readonly launchCommand: string) {
+    super('无法确认 Claude tmux 窗口的会话 ID，已停止自动绑定输出。旧窗口需要先绑定正确的 Claude 会话，再用 /p tmux 重建；不会按工作目录猜测日志。');
+    this.name = 'ClaudeTmuxSessionIdentityError';
+  }
 }
 
 export async function readClaudeTmuxSessionId(sessionName: string, core: TmuxCore = tmuxCore): Promise<string> {
   const command = await core.readPaneStartCommand?.(`${sessionName}:0.0`);
   const sessionId = command ? parseClaudeLaunchSessionId(command) : null;
   if (!sessionId) {
-    throw new Error('无法确认 Claude tmux 窗口的会话 ID，已停止自动绑定输出。旧窗口需要先绑定正确的 Claude 会话，再用 /p tmux 重建；不会按工作目录猜测日志。');
+    throw new ClaudeTmuxSessionIdentityError(command || '');
   }
   return sessionId;
 }

@@ -343,7 +343,7 @@ Claude Code 现在提供与 Codex tmux 对齐的 provider：
 | 会话身份 | fresh provider 启动前生成 UUID 并传入 `--session-id`；恢复使用 `--resume`。输出仅关联该明确 ID 的 JSONL，不能用目录和修改时间推断归属。 |
 | 输出同步 | Claude pty/tmux 都依赖 `src/runtime/claude/session-jsonl.ts` 读取 Claude Code JSONL；SDK provider 继续走原生事件。 |
 
-Claude tmux 和 PTY 在新建进程前分配 UUID，经 `claude --session-id`（CCR 为 `ccr code --session-id`）交给 CLI。恢复时仍使用 `--resume`。tmux 复用和普通消息 auto-forward 从目标 pane 的实际 `pane_start_command` 读取唯一的明确 UUID，不能相信这次“拟启动”的命令，也不能按 cwd 中最近更新的文件猜测。已有绑定与窗口声明不一致时拒绝发送；旧窗口没有明确启动 ID 时必须先核实并绑定正确会话，再通过 `/p tmux` 重建。PTY 沿用内存中该进程的 ID。
+Claude tmux 和 PTY 在新建进程前分配 UUID，经 `claude --session-id`（CCR 为 `ccr code --session-id`）交给 CLI。恢复时仍使用 `--resume`。tmux 复用和普通消息 auto-forward 从目标 pane 的实际 `pane_start_command` 读取唯一的明确 UUID，不能相信这次“拟启动”的命令，也不能按 cwd 中最近更新的文件猜测。已有绑定与窗口声明不一致时拒绝发送；旧窗口没有明确启动 ID 时，普通消息会在确认 provider 所有权、原绑定的 JSONL、无其他窗口重复绑定及输入框空闲后，自动以 `--resume` 重建并继续发送原消息；有明确但不一致的 ID、歧义启动参数、手工窗口或缺少可恢复记录时不自动重建。PTY 沿用内存中该进程的 ID。
 
 Claude tmux 也必须支持和 Codex 相同的普通消息隐式初始化/恢复语义：如果当前聊天的有效 Claude provider 是 `tmux`，但还没有 `runtime.general.tmuxSessionName`，fresh 会话的第一条普通消息会生成 `claude_<BridgeSessionId>` 并启动 Claude Code TUI；已有 Claude identity 时则用该 identity 命名并执行 `--resume`。如果已记录 tmux session 但进程不存在，普通消息会用保存的 identity 重建同名 tmux session。两种情况都只在启动成功后写回 `runtime.claude.provider=tmux`、`runtime.general.tmuxSessionName` 和 tmux auto-enter 配置，然后再把消息注入 TUI。之后 `reconcileClaudeTmuxMirrorAfterAutoForward` 仅在 fresh 会话尚无 identity 时读取目标 pane 的启动 ID，并等待该 ID 的 JSONL 出现，校验文件内部 `sessionId` 后写回 `runtime.claude.sessionId/cwd`，prime 首个 turn 的 mirror delivery，并触发 Claude mirror reconcile。等待过程中若发生换 runtime、换 tmux 窗口或显式绑定，不得用迟到的发现结果覆盖新配置。
 
@@ -489,3 +489,12 @@ Kimi 入口补充：
 旧 JSONL 模式在读取恢复时单独恢复最后一个轮次的执行状态，即使该轮次的历史消息不再投递。runtime 的运行状态同时观察当前 runtime/thread 的 mirror 活跃轮次；健康记录核对 thread/turn，旧轮次的终态不能结束新轮次，旧工具也不能重新打开已完成的轮次。没有终态记录的 CLI 异常退出仍可能需要显式结束或重启；这种观察不完整不会阻止配置保存。
 
 显式 `/stop` 根据当前任务或本会话创建的终端发送中断，不以历史 idle 拒绝执行；任意手工附着的终端不算作本会话的执行进程。发送按键或取消信号只说明已请求停止，不伪造后端终态。SDK 取消同时释放 Bridge 内存中的请求锁；旧流后续的状态回调、消息保存和清理失效，不能将新任务写成 idle 或删除新任务。Codex 自己的会话文件锁仍由 Codex 管理。
+
+
+### Claude 启动环境与旧窗口迁移
+
+Bridge 启动器以及 Claude tmux、PTY、SDK 的环境边界清除 `CLAUDECODE` 和 `CLAUDE_CODE_CHILD_SESSION`，保留用户的认证及模型路由配置。tmux 还在读取 shell snapshot 后显式 unset，避免已经运行的 tmux server 重新注入标记。Windows PowerShell/cmd 采用对应的环境删除命令。此标记只描述启动者的子会话；CodeLark 管理的独立会话必须正常保存 transcript。
+
+旧窗口的自动迁移复用现有恢复流程，在就绪和会话 ID 再次验证后才转发原输入，后续输入不重复重建。自定义 statusLine/无快捷键页脚的输入框仍可识别。明确显示继承子会话标记导致 transcript 关闭的窗口，在原绑定记录可恢复且空闲时也会重建；没有保存的内容无法由已有 JSONL 重建，不以同目录其它日志代替。
+
+验证覆盖脏父进程及脏 tmux server 的真实 CLI 保存失败负对照、新版启动的 JSONL 落盘、无启动 ID 的旧 CLI 自动恢复原历史及连续两条原消息各发送一次。真实飞书回归可用 `scripts/real-feishu-claude-binding.ts --upgrade-legacy`：两个隔离群先完成首轮，重建为通过 CLI `/resume` 恢复历史的无启动 ID 窗口，重启 Bridge 后通过真实群消息触发自动迁移并以用户身份读回。

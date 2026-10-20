@@ -26,6 +26,8 @@ export interface ShellSnapshot {
 export interface ShellLaunchCommandOptions {
   platform?: NodeJS.Platform;
   stderrLogPath?: string;
+  /** Remove parent/server variables after loading the snapshot. */
+  unsetEnv?: readonly string[];
 }
 
 const EXCLUDED_EXPORT_VARS = new Set(['PWD', 'OLDPWD']);
@@ -301,41 +303,46 @@ export function buildShellSnapshotLaunchArgs(
   snapshot: ShellSnapshot,
   options: ShellLaunchCommandOptions = {},
 ): string[] {
+  const unsetEnv = options.unsetEnv || [];
+  if (unsetEnv.some((name) => !isValidEnvName(name))) throw new Error('Invalid environment variable name');
   switch (snapshot.shell.type) {
     case 'bash':
     case 'zsh':
     case 'sh': {
       const commandText = [command, ...args].map(posixShellQuote).join(' ');
+      const setup = [`. ${posixShellQuote(snapshot.path)}`, ...(unsetEnv.length ? [`unset ${unsetEnv.join(' ')}`] : [])].join('; ');
       const script = options.stderrLogPath
         ? [
-            `. ${posixShellQuote(snapshot.path)}`,
+            setup,
             `${commandText} 2> ${posixShellQuote(options.stderrLogPath)}`,
             'status=$?',
             `if [ "$status" -ne 0 ]; then printf '%s\\n' "[codelark] process exited with status $status" >> ${posixShellQuote(options.stderrLogPath)}; fi`,
             'exit "$status"',
           ].join('; ')
-        : `. ${posixShellQuote(snapshot.path)}; exec ${commandText}`;
+        : `${setup}; exec ${commandText}`;
       return [snapshot.shell.path, '-c', script];
     }
     case 'powershell': {
       const commandText = [command, ...args].map(powershellSingleQuote).join(' ');
+      const setup = [`. ${powershellSingleQuote(snapshot.path)}`, ...unsetEnv.map((name) => `Remove-Item Env:${name} -ErrorAction SilentlyContinue`)].join('; ');
       const script = options.stderrLogPath
         ? [
-            `. ${powershellSingleQuote(snapshot.path)}`,
+            setup,
             `& ${commandText} 2> ${powershellSingleQuote(options.stderrLogPath)}`,
             '$status = $LASTEXITCODE',
             'if ($null -eq $status) { $status = 0 }',
             `if ($status -ne 0) { Add-Content -LiteralPath ${powershellSingleQuote(options.stderrLogPath)} -Value ('[codelark] process exited with status ' + $status) }`,
             'exit $status',
           ].join('; ')
-        : `. ${powershellSingleQuote(snapshot.path)}; & ${commandText}`;
+        : `${setup}; & ${commandText}`;
       return [snapshot.shell.path, '-NoProfile', '-Command', script];
     }
     case 'cmd': {
       const commandText = [command, ...args].map(cmdArgQuote).join(' ');
+      const setup = [`call ${cmdArgQuote(snapshot.path)}`, ...unsetEnv.map((name) => `set "${name}="`)].join(' && ');
       const script = options.stderrLogPath
-        ? `call ${cmdArgQuote(snapshot.path)} && ${commandText} 2> ${cmdArgQuote(options.stderrLogPath)}`
-        : `call ${cmdArgQuote(snapshot.path)} && ${commandText}`;
+        ? `${setup} && ${commandText} 2> ${cmdArgQuote(options.stderrLogPath)}`
+        : `${setup} && ${commandText}`;
       return [snapshot.shell.path, '/c', script];
     }
   }

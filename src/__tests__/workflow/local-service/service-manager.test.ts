@@ -237,6 +237,7 @@ describe('service-manager startup config and daemon env', () => {
       'LARKSUITE_CLI_CONFIG_DIR',
       'PATH',
       'CLAUDECODE',
+      'CLAUDE_CODE_CHILD_SESSION',
     ];
     const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
 
@@ -244,6 +245,7 @@ describe('service-manager startup config and daemon env', () => {
       for (const key of envKeys) delete process.env[key];
       process.env.CODELARK_AGENT = 'user-env-agent';
       process.env.CLAUDECODE = 'legacy-flag';
+      process.env.CLAUDE_CODE_CHILD_SESSION = '1';
       process.env.LARK_CHANNEL = '1';
       process.env.LARK_CHANNEL_HOME = home;
       process.env.LARK_CHANNEL_CONFIG = path.join(home, 'runtime', 'lark-cli-source', 'config.json');
@@ -303,6 +305,7 @@ describe('service-manager startup config and daemon env', () => {
       assert.equal(pathEntries.includes(runtimeBinDir), false);
       assert.notEqual(pathEntries[0], runtimeBinDir);
       assert.equal(env.CLAUDECODE, undefined);
+      assert.equal(env.CLAUDE_CODE_CHILD_SESSION, undefined);
     } finally {
       if (previousToml === null) fs.rmSync(configTomlPath, { force: true });
       else fs.writeFileSync(configTomlPath, previousToml, 'utf-8');
