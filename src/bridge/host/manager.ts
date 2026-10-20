@@ -7,6 +7,7 @@
  * Uses globalThis to survive Next.js HMR in development.
  */
 
+import { readClaudeTmuxSessionId } from '../tmux/runtime.js';
 import { sendCursorDesktopMessage } from '../../runtime/cursor/desktop-bridge-client.js';
 import type {
   ChannelAddress,
@@ -1664,8 +1665,19 @@ async function reconcileClaudeTmuxMirrorAfterAutoForward(
 
   let discoveredNewClaudeSession = false;
   if (!getSessionClaudeSessionId(session)) {
-    const discovered = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs);
+    const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
+    if (!tmuxSessionName) return;
+    const expectedSessionId = await readClaudeTmuxSessionId(tmuxSessionName);
+    const discovered = await waitForClaudeSessionJsonlUpdatedAfter(cwd, startedAtMs, expectedSessionId);
     if (!discovered?.sessionId) return;
+    // The same tmux name may have been recreated while its JSONL was pending.
+    if (await readClaudeTmuxSessionId(tmuxSessionName) !== expectedSessionId) return;
+    // Discovery may outlive /new, a provider switch, or an explicit rebind.
+    const current = store.getSession(sessionId);
+    if (!current || getSessionActiveRuntime(current) !== 'claude'
+      || resolveEffectiveClaudeProvider(current) !== 'tmux'
+      || getSessionRuntimeTmuxSessionName(current) !== tmuxSessionName
+      || getSessionClaudeSessionId(current)) return;
     store.updateSession(sessionId, setSessionClaudeIdentityUpdate(
       discovered.sessionId,
       discovered.cwd || cwd,

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ClaudeExecutable } from '../options.js';
@@ -13,8 +14,6 @@ import {
 import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
 import {
   getClaudeSessionJsonlById,
-  listClaudeSessionJsonlFiles,
-  summarizeClaudeSessionJsonl,
   type ClaudeSessionJsonlSummary,
 } from './session-jsonl.js';
 import {
@@ -265,6 +264,7 @@ export function buildClaudePtyCommand(
   executable: ClaudeExecutable,
   options: {
     claudeSessionId?: string;
+    newSessionId?: string;
     model?: string;
     permissionMode?: string;
     reasoningEffort?: string;
@@ -278,6 +278,8 @@ export function buildClaudePtyCommand(
   const claudeSessionId = options.claudeSessionId?.trim();
   if (claudeSessionId) {
     args.push('--resume', claudeSessionId);
+  } else if (options.newSessionId) {
+    args.push('--session-id', options.newSessionId);
   }
   const model = options.model?.trim();
   if (model) {
@@ -326,7 +328,7 @@ async function waitForClaudePtyBuffer(
   return predicate(session.buffer);
 }
 
-export function findLatestClaudeSessionJsonlUpdatedAfter(
+export function findClaudeSessionJsonlUpdatedAfter(
   cwd: string,
   sinceMs: number,
   expectedSessionId?: string,
@@ -340,19 +342,9 @@ export function findLatestClaudeSessionJsonlUpdatedAfter(
       return null;
     }
   }
-  const candidates: Array<{ mtimeMs: number; summary: ClaudeSessionJsonlSummary }> = [];
-  for (const filePath of listClaudeSessionJsonlFiles(cwd)) {
-    try {
-      const stat = fs.statSync(filePath);
-      if (stat.mtimeMs + FILE_MTIME_SKEW_MS < sinceMs) continue;
-      const summary = summarizeClaudeSessionJsonl(filePath);
-      if (summary) candidates.push({ mtimeMs: stat.mtimeMs, summary });
-    } catch {
-      // Ignore files that disappear while Claude Code is writing.
-    }
-  }
-  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
-  return candidates[0]?.summary || null;
+  // A cwd and mtime establish recency, never ownership. Concurrent Claude
+  // processes can share both, so missing identity must remain unbound.
+  return null;
 }
 
 export async function waitForClaudeSessionJsonlUpdatedAfter(
@@ -360,6 +352,7 @@ export async function waitForClaudeSessionJsonlUpdatedAfter(
   sinceMs: number,
   expectedSessionId?: string,
 ): Promise<ClaudeSessionJsonlSummary | null> {
+  if (!expectedSessionId?.trim()) return null;
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_CLAUDE_PTY_JSONL_DISCOVERY_TIMEOUT_MS',
     DEFAULT_JSONL_DISCOVERY_TIMEOUT_MS,
@@ -367,7 +360,7 @@ export async function waitForClaudeSessionJsonlUpdatedAfter(
   );
   const deadline = Date.now() + timeoutMs;
   do {
-    const session = findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs, expectedSessionId);
+    const session = findClaudeSessionJsonlUpdatedAfter(cwd, sinceMs, expectedSessionId);
     if (session) return session;
     if (timeoutMs <= 0) break;
     await sleep(100);
@@ -514,7 +507,7 @@ async function getOrCreateSession(
     existing
     && !existing.exited
     && existing.executable === executable
-    && existing.claudeSessionId === claudeSessionId
+    && (!claudeSessionId || existing.claudeSessionId === claudeSessionId)
     && existing.cwd === cwd
     && existing.model === model
     && existing.permissionMode === permissionMode
@@ -526,10 +519,12 @@ async function getOrCreateSession(
     try { existing.child.kill(); } catch { /* best-effort cleanup */ }
   }
 
+  const ownedSessionId = claudeSessionId || randomUUID();
   const pty = await loadPtyModule();
   const baseEnv = buildClaudePtyEnv();
   const { command, args } = buildClaudePtyCommand(executable, {
     claudeSessionId,
+    newSessionId: claudeSessionId ? undefined : ownedSessionId,
     model,
     permissionMode,
     reasoningEffort,
@@ -555,7 +550,7 @@ async function getOrCreateSession(
   const session: ClaudePtySession = {
     child,
     executable,
-    claudeSessionId,
+    claudeSessionId: ownedSessionId,
     cwd,
     model,
     permissionMode,
@@ -656,7 +651,7 @@ export function streamClaudePtyTui(params: StreamChatParams, pendingPerms?: Pend
           const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(
             session.cwd,
             promptStartedAtMs,
-            params.claudeSessionId,
+            session.claudeSessionId,
           );
           if (startedClaudeJsonlSession) {
             session.claudeSessionId = startedClaudeJsonlSession.sessionId;
@@ -667,7 +662,7 @@ export function streamClaudePtyTui(params: StreamChatParams, pendingPerms?: Pend
             }));
           }
           const screen = await waitForQuietScreen(session);
-          const claudeJsonlSession = findLatestClaudeSessionJsonlUpdatedAfter(
+          const claudeJsonlSession = findClaudeSessionJsonlUpdatedAfter(
             session.cwd,
             promptStartedAtMs,
             session.claudeSessionId,
@@ -719,6 +714,7 @@ export const _testOnlyClaudePty = {
     claudePtySessions.set(sessionId, {
       child: session.child,
       executable: session.executable || 'claude',
+      claudeSessionId: session.claudeSessionId,
       cwd: session.cwd || process.cwd(),
       model: session.model,
       permissionMode: session.permissionMode,
@@ -735,7 +731,7 @@ export const _testOnlyClaudePty = {
   hasClaudePtyOnboardingPrompt,
   hasClaudePtyTrustPrompt,
   prepareClaudePtyForPrompt,
-  findLatestClaudeSessionJsonlUpdatedAfter,
+  findClaudeSessionJsonlUpdatedAfter,
   parseClaudeCodeRouterActivateEnv,
   parseClaudeCodeRouterStatus,
   clear: () => {

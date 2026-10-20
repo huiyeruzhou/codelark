@@ -728,6 +728,14 @@ function installFakeTmux(): { binDir: string; logPath: string; statePath: string
 printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 state="$TMUX_FAKE_STATE"
 case "$1" in
+  display-message)
+    if [[ "$*" == *pane_start_command* ]]; then
+      target="$4"
+      name="\${target%:0.0}"
+      cat "\${state}.\${name}.command" 2>/dev/null || true
+    fi
+    exit 0
+    ;;
   has-session)
     target="$3"
     if grep -Fx -- "$target" "$state" >/dev/null 2>&1; then
@@ -751,6 +759,7 @@ case "$1" in
     if [[ -n "$name" ]]; then
       safe_name="\${name//[^A-Za-z0-9_.-]/_}"
       rm -f "\${state}.\${safe_name}.captures"
+      printf '%s\\n' "$*" > "\${state}.\${name}.command"
     fi
     exit 0
     ;;
@@ -2761,10 +2770,11 @@ provider = "tmux"
         name: 'runtime-claude-tmux',
       });
       fs.writeFileSync(fakeTmux.statePath, `${tmuxSessionName}\n`, 'utf-8');
+      fs.writeFileSync(`${fakeTmux.statePath}.${tmuxSessionName}.command`, 'claude --resume 11111111-2222-4333-8444-555555555555');
       store.updateSession(binding.bridgeSessionId, {
         runtime: {
           activeRuntime: 'claude',
-          claude: { provider: 'tmux' },
+          claude: { provider: 'tmux', sessionId: '11111111-2222-4333-8444-555555555555', cwd: workDir },
           general: { tmuxSessionName },
         },
       });
@@ -2893,7 +2903,7 @@ provider = "tmux"
     bridgeState.running = true;
     const address = { channelType: 'feishu', chatId: 'chat-runtime-claude-tmux-auto-init' } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-auto-init-'));
-    const claudeSessionId = 'claude-tmux-auto-jsonl-session';
+    let claudeSessionId = '';
     let transcriptPath = '';
 
     try {
@@ -2909,6 +2919,7 @@ provider = "tmux"
       setSessionClaudeProviderToml(binding.bridgeSessionId, 'tmux');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'first claude tmux', 'incoming-claude-tmux-auto-init-plain'));
+      claudeSessionId = fs.readFileSync(`${fakeTmux.statePath}.claude_${binding.bridgeSessionId}.command`, 'utf8').match(/--session-id\s+([a-f0-9-]{36})/)![1]!;
       transcriptPath = appendClaudeMirrorTurn({
         homeDir: claudeHome,
         cwd: workDir,
@@ -2930,6 +2941,7 @@ provider = "tmux"
       assert.equal(session?.runtime?.general?.tmuxSessionName, expectedTmuxSessionName);
       assert.equal(session?.runtime?.claude?.provider, 'tmux');
       assert.equal(session?.runtime?.claude?.sessionId, claudeSessionId);
+      assert.doesNotMatch(JSON.stringify(adapter.streamEvents), /IFNAR2 PRIVATE OUTPUT|9e55ad25-ffac-4edb-b539-3da7e8d459cc/);
       assert.equal(session?.runtime?.claude?.cwd, workDir);
       assert.equal(getSessionTmuxAutoEnterToml(binding.bridgeSessionId), true);
       assert.equal(session?.mirror_status, 'watching');
@@ -3637,7 +3649,7 @@ provider = "tmux"
     const address = { channelType: 'feishu', chatId: 'chat-runtime-claude-tmux-mirror-forward' } as const;
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-runtime-claude-tmux-mirror-forward-'));
     const tmuxSessionName = 'claude_bridge_session';
-    const claudeSessionId = 'claude-tmux-jsonl-session';
+    const claudeSessionId = '7b2e7d9d-688a-4697-bf54-2bfdcfec85e9';
     let transcriptPath = '';
 
     try {
@@ -3654,6 +3666,7 @@ provider = "tmux"
       });
       setSessionClaudeProviderToml(binding.bridgeSessionId, 'tmux');
 
+      fs.writeFileSync(`${fakeTmux.statePath}.${tmuxSessionName}.command`, `claude --session-id ${claudeSessionId}`);
       await _testOnly.handleMessage(adapter, inboundMessage(address, 'hello claude tmux mirror', 'incoming-claude-tmux-mirror-plain'));
       transcriptPath = appendClaudeMirrorTurn({
         homeDir: claudeHome,
@@ -3663,6 +3676,13 @@ provider = "tmux"
         userText: 'hello claude tmux mirror',
         assistantText: 'Claude tmux mirror response',
       });
+
+      const neighborPath = appendClaudeMirrorTurn({
+        homeDir: claudeHome, cwd: workDir,
+        sessionId: '9e55ad25-ffac-4edb-b539-3da7e8d459cc',
+        timestampPrefix: '2026-06-02T05:00', userText: 'IFNAR2 task', assistantText: 'IFNAR2 PRIVATE OUTPUT',
+      });
+      fs.utimesSync(neighborPath, new Date(), new Date(Date.now() + 2000));
 
       await waitForMirrorCondition(() => adapter.streamEvents.some((event) => (
         event.kind === 'end'
@@ -3694,6 +3714,7 @@ provider = "tmux"
       assert.equal(calls.length, 0);
       const session = store.getSession(binding.bridgeSessionId);
       assert.equal(session?.runtime?.claude?.sessionId, claudeSessionId);
+      assert.doesNotMatch(JSON.stringify(adapter.streamEvents), /IFNAR2 PRIVATE OUTPUT|9e55ad25-ffac-4edb-b539-3da7e8d459cc/);
       assert.equal(session?.runtime?.claude?.cwd, workDir);
       assert.equal(session?.mirror_status, 'watching');
       const tmuxLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');

@@ -374,7 +374,10 @@ export function getClaudeSessionJsonlById(
   const trimmedSessionId = sessionId.trim();
   if (!trimmedSessionId) return null;
   const directPath = path.join(getClaudeProjectDir(cwd, homeDir), `${trimmedSessionId}.jsonl`);
-  if (fs.existsSync(directPath)) return summarizeClaudeSessionJsonl(directPath);
+  if (fs.existsSync(directPath)) {
+    const summary = summarizeClaudeSessionJsonl(directPath);
+    return summary?.sessionId === trimmedSessionId ? summary : null;
+  }
   return listClaudeSessionJsonlFiles(cwd, homeDir)
     .map((filePath) => summarizeClaudeSessionJsonl(filePath))
     .find((summary): summary is ClaudeSessionJsonlSummary => Boolean(summary && summary.sessionId === trimmedSessionId))

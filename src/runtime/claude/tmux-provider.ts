@@ -5,7 +5,7 @@ import type { BridgeMirrorRecord } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import { prepareClaudeCodeRouterEnv } from './code-router.js';
 import {
-  findLatestClaudeSessionJsonlUpdatedAfter,
+  findClaudeSessionJsonlUpdatedAfter,
   parsePositiveIntEnv,
   requestClaudeBypassPermissionsConfirmation,
   sleep,
@@ -328,7 +328,7 @@ export function streamClaudeTmuxTui(params: StreamChatParams, pendingPerms?: Pen
         try {
           params.abortController?.signal.addEventListener('abort', abortListener, { once: true });
           controller.enqueue(sseEvent('status', { reasoning: '正在启动或复用 Claude tmux。' }));
-          await startRuntimeTmuxSession({
+          const started = await startRuntimeTmuxSession({
             runtime: 'claude',
             sessionName,
             bridgeSessionId: params.sessionId,
@@ -341,6 +341,8 @@ export function streamClaudeTmuxTui(params: StreamChatParams, pendingPerms?: Pen
             controller,
             recreate: false,
           });
+          if (started.runtime !== 'claude') throw new Error('Unexpected tmux runtime');
+          context.claudeSessionId = started.claudeSessionId;
           const extendedKeysCommand = await tmuxCore.ensureExtendedKeys?.();
           if (extendedKeysCommand) {
             console.log('[claude-tmux] tmux extended keys enabled for Claude input:', extendedKeysCommand);
@@ -357,7 +359,7 @@ export function streamClaudeTmuxTui(params: StreamChatParams, pendingPerms?: Pen
           const startedClaudeJsonlSession = await waitForClaudeSessionJsonlUpdatedAfter(
             cwd,
             startedAtMs,
-            params.claudeSessionId,
+            context.claudeSessionId,
           );
           if (startedClaudeJsonlSession) {
             context.sessionFilePath = startedClaudeJsonlSession.filePath;
@@ -408,5 +410,5 @@ export const _testOnlyClaudeTmux = {
   tmuxSessionName: claudeTmuxSessionName,
   snapshotClaudeSessionFiles,
   enqueueClaudeTmuxRecordAsSse,
-  findLatestClaudeSessionJsonlUpdatedAfter,
+  findClaudeSessionJsonlUpdatedAfter,
 };

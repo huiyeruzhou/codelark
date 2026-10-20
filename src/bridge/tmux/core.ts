@@ -68,6 +68,8 @@ export interface TmuxCore {
   sendActions(target: string, actions: TmuxSendAction[], options?: TmuxSendActionsOptions): Promise<TmuxSendActionsResult>;
   sendInterrupt(target: string): Promise<string>;
   injectPromptIntoPane(targetPane: string, prompt: string, options?: Pick<TmuxSendActionsOptions, 'pasteNewlineKey'>): Promise<TmuxSendActionsResult>;
+  /** The command actually used to create this pane, not the proposed reuse command. */
+  readPaneStartCommand?(target: string): Promise<string>;
   /** Enable tmux's extended key protocol for TUIs that distinguish Enter from newline. */
   ensureExtendedKeys?(): Promise<string>;
   commandPreview(args: readonly string[]): string;
@@ -351,6 +353,11 @@ class TmuxCliCore implements TmuxCore {
     return this.genericCommandPreview
       ? tmuxCommandPreview(args)
       : tmuxCommandPreview(args, this.executable, this.prefixArgs);
+  }
+
+  async readPaneStartCommand(target: string): Promise<string> {
+    const result = await this.runTmux(['display-message', '-p', '-t', target, '#{pane_start_command}']);
+    return result.stdout.trim();
   }
 
   async ensureExtendedKeys(): Promise<string> {
@@ -680,6 +687,7 @@ let activeTmuxCore: TmuxCore = createTmuxCliCore();
 
 export const tmuxCore: TmuxCore = {
   commandPreview: (args) => activeTmuxCore.commandPreview(args),
+  readPaneStartCommand: (target) => activeTmuxCore.readPaneStartCommand?.(target) || Promise.resolve(''),
   ensureExtendedKeys: () => activeTmuxCore.ensureExtendedKeys?.() || Promise.resolve(''),
   hasSession: (name) => activeTmuxCore.hasSession(name),
   killSession: (name, options) => activeTmuxCore.killSession(name, options),

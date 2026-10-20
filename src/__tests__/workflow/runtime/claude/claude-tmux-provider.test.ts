@@ -119,11 +119,12 @@ describe('claude-tmux-provider', () => {
       fs.utimesSync(unrelatedPath, new Date(), new Date(sinceMs + 200));
 
       assert.equal(
-        _testOnlyClaudeTmux.findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs)?.sessionId,
-        unrelatedSessionId,
+        _testOnlyClaudeTmux.findClaudeSessionJsonlUpdatedAfter(cwd, sinceMs),
+        null,
+        'without a process-owned identity, newer output from the same cwd must not be selected',
       );
       assert.equal(
-        _testOnlyClaudeTmux.findLatestClaudeSessionJsonlUpdatedAfter(cwd, sinceMs, expectedSessionId)?.sessionId,
+        _testOnlyClaudeTmux.findClaudeSessionJsonlUpdatedAfter(cwd, sinceMs, expectedSessionId)?.sessionId,
         expectedSessionId,
       );
     } finally {
@@ -259,7 +260,9 @@ describe('claude-tmux-provider', () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-claude-tmux-cwd-'));
     const projectDir = getClaudeProjectDir(cwd, homeDir);
     fs.mkdirSync(projectDir, { recursive: true });
-    const sessionFile = path.join(projectDir, 'claude-tmux-session.jsonl');
+    const claudeId = '7b2e7d9d-688a-4697-bf54-2bfdcfec85e9';
+    let launchedId = claudeId;
+    let sessionFile = path.join(projectDir, `${claudeId}.jsonl`);
     const calls: string[] = [];
     const restoreTmux = patchTmuxCore({
       async ensureExtendedKeys() {
@@ -272,6 +275,9 @@ describe('claude-tmux-provider', () => {
       },
       async ensureDetachedSession(params) {
         calls.push(`ensure:${params.name}:${params.cwd}`);
+        const match = String(params.command).match(/--session-id\s+([a-f0-9-]{36})/);
+        if (match) launchedId = match[1]!;
+        sessionFile = path.join(projectDir, `${launchedId}.jsonl`);
         return { existed: false, commands: ['tmux new-session'] };
       },
       async capturePane(target: string) {
@@ -296,7 +302,7 @@ describe('claude-tmux-provider', () => {
           JSON.stringify({
             type: 'user',
             uuid: 'user-1',
-            sessionId: 'claude-tmux-session',
+            sessionId: launchedId,
             cwd,
             timestamp: now,
             message: { role: 'user', content: prompt },
@@ -305,7 +311,7 @@ describe('claude-tmux-provider', () => {
             type: 'assistant',
             uuid: 'assistant-1',
             parentUuid: 'user-1',
-            sessionId: 'claude-tmux-session',
+            sessionId: launchedId,
             cwd,
             timestamp: now,
             message: {
@@ -316,6 +322,11 @@ describe('claude-tmux-provider', () => {
           }),
           '',
         ].join('\n'), 'utf-8');
+        const neighborId = '9e55ad25-ffac-4edb-b539-3da7e8d459cc';
+        const neighborPath = path.join(projectDir, `${neighborId}.jsonl`);
+        fs.writeFileSync(neighborPath, fs.readFileSync(sessionFile, 'utf8')
+          .replaceAll(launchedId, neighborId).replaceAll('tmux hello', 'IFNAR2 PRIVATE OUTPUT'));
+        fs.utimesSync(neighborPath, new Date(), new Date(Date.now() + 2000));
         return { commands: ['tmux paste-buffer'] };
       },
     });
@@ -339,11 +350,12 @@ describe('claude-tmux-provider', () => {
 
       assert.ok(calls.some((call) => call === `ensure:claude_bridge-session-1:${cwd}`));
       assert.ok(calls.includes('extended-keys'));
+      assert.doesNotMatch(JSON.stringify(events), /IFNAR2 PRIVATE OUTPUT|9e55ad25-ffac-4edb-b539-3da7e8d459cc/);
       assert.ok(calls.some((call) => call === 'inject:claude_bridge-session-1:0.0:hello from tmux'));
       assert.ok(events.some((event) => event.type === 'status'
         && typeof event.data === 'object'
         && event.data !== null
-        && (event.data as { session_id?: string }).session_id === 'claude-tmux-session'));
+        && (event.data as { session_id?: string }).session_id === launchedId));
       assert.ok(events.some((event) => event.type === 'text' && event.data === 'tmux hello'));
       assert.ok(events.some((event) => event.type === 'result'
         && typeof event.data === 'object'
@@ -355,4 +367,24 @@ describe('claude-tmux-provider', () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
+  for (const actual of ['', '9e55ad25-ffac-4edb-b539-3da7e8d459cc']) {
+    it(`refuses input when a reused Claude pane identity is ${actual ? 'different' : 'unknown'}`, async () => {
+      let injected = false;
+      const restore = patchTmuxCore({
+        ensureDetachedSession: async () => ({ existed: true, commands: [] }),
+        readPaneStartCommand: async () => actual ? `claude --session-id ${actual}` : 'claude',
+        injectPromptIntoPane: async () => { injected = true; return { commands: [] }; },
+      });
+      try {
+        const events = await withEnv({ CODELARK_CLAUDE_CLI_PATH: process.execPath }, () => readSse(streamClaudeTmuxTui({
+          sessionId: 'bridge-identity-conflict', claudeSessionId: '7b2e7d9d-688a-4697-bf54-2bfdcfec85e9',
+          runtime: 'claude', prompt: 'must not be injected', workingDirectory: process.cwd(),
+        })));
+        assert.equal(injected, false);
+        assert(events.some((event) => event.type === 'error' && /无法确认|不匹配/.test(String(event.data))));
+        assert(!events.some((event) => event.type === 'text' || event.type === 'result'));
+      } finally { restore(); }
+    });
+  }
+
 });

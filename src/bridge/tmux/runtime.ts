@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+import { parseClaudeLaunchSessionId } from '../../runtime/claude/session-identity.js';
 
 import {
   buildCodexTuiSelectionChoiceActions,
@@ -257,6 +260,7 @@ export interface StartClaudeTmuxSessionParams {
 }
 
 export interface StartClaudeTmuxSessionResult {
+  claudeSessionId: string;
   sessionName: string;
   commands: string[];
   existed: boolean;
@@ -273,7 +277,7 @@ export type StartRuntimeTmuxSessionResult =
   | ({ runtime: 'claude' } & StartClaudeTmuxSessionResult);
 
 // 这里统一的是 provider-owned tmux session 生命周期，而不是强行抽象 CLI 语义。
-// Codex 与已绑定的 Claude 会话都必须 resume 稳定 identity；fresh Claude 会话再从 JSONL 发现 session id。
+// Codex 与已绑定的 Claude 会话 resume 稳定 identity；fresh Claude 通过 --session-id 提前固定 identity。
 // 保留各 CLI 的参数差异能让上层共享创建/查看/清理行为，同时避免 provider 暴露多余接口。
 
 const DEFAULT_CODEX_RESUME_TMUX_READY_TIMEOUT_MS = 15_000;
@@ -1281,11 +1285,22 @@ function buildClaudeTmuxShellCommand(
     : launchArgs.map((value) => quoteCommandLineArg(value)).join(' ');
 }
 
+export async function readClaudeTmuxSessionId(sessionName: string, core: TmuxCore = tmuxCore): Promise<string> {
+  const command = await core.readPaneStartCommand?.(`${sessionName}:0.0`);
+  const sessionId = command ? parseClaudeLaunchSessionId(command) : null;
+  if (!sessionId) {
+    throw new Error('无法确认 Claude tmux 窗口的会话 ID，已停止自动绑定输出。旧窗口需要先绑定正确的 Claude 会话，再用 /p tmux 重建；不会按工作目录猜测日志。');
+  }
+  return sessionId;
+}
+
 export async function startClaudeTmuxSession(
   params: StartClaudeTmuxSessionParams,
 ): Promise<StartClaudeTmuxSessionResult> {
   const core = params.core || tmuxCore;
   const executable = params.executable || 'claude';
+  const resumeSessionId = params.claudeSessionId?.trim();
+  let claudeSessionId = resumeSessionId || randomUUID();
   const cwd = params.workingDirectory || process.cwd();
   transitionRuntimeTmuxInputState(
     'claude',
@@ -1299,7 +1314,8 @@ export async function startClaudeTmuxSession(
   let env: Record<string, string>;
   try {
     ({ command, args } = buildClaudePtyCommand(executable, {
-      claudeSessionId: params.claudeSessionId,
+      claudeSessionId: resumeSessionId,
+      newSessionId: resumeSessionId ? undefined : claudeSessionId,
       model: params.model?.trim() || undefined,
       permissionMode: params.permissionMode?.trim() || undefined,
       reasoningEffort: params.reasoningEffort?.trim() || undefined,
@@ -1354,6 +1370,12 @@ export async function startClaudeTmuxSession(
       { error: describeUnknownError(error) },
     );
     throw error;
+  }
+  if (started.existed && params.recreate === false) {
+    claudeSessionId = await readClaudeTmuxSessionId(params.sessionName, core);
+    if (resumeSessionId && claudeSessionId !== resumeSessionId) {
+      throw new Error(`Claude tmux 会话 ID 不匹配：窗口属于 ${claudeSessionId}，保存的绑定为 ${resumeSessionId}。未发送消息，请先修正会话绑定。`);
+    }
   }
   const readiness = params.waitReady
     ? await waitForRuntimeTmuxReady({
@@ -1434,6 +1456,7 @@ export async function startClaudeTmuxSession(
   }
   return {
     sessionName: params.sessionName,
+    claudeSessionId,
     existed: started.existed,
     commands: [...started.commands, ...(readiness?.commands || [])],
     ready: readiness?.ready ?? true,

@@ -12,6 +12,7 @@ import { prepareCodexAppServerSession, type CodexAppServerSession } from '../../
 import { appServerTurnOptions } from '../../runtime/codex/app-server-provider.js';
 import {
   claudeTmuxSessionName,
+  readClaudeTmuxSessionId,
   cleanupRuntimeTmuxSession,
   codexTmuxSessionName,
   attachTmuxSession,
@@ -868,6 +869,7 @@ async function ensureRuntimeTmuxSessionForProvider(
         setSessionClaudeProviderToml(session.id, 'tmux');
         scheduleTmuxMirrorReconcile(params.reconcileMirrorSubscriptions, 'existing Claude provider binding');
       }
+      let readinessCommands: string[] = [];
       if (
         params.tmuxProviderAutoForward === true
         && inspected.needsReadiness
@@ -900,9 +902,11 @@ async function ensureRuntimeTmuxSessionForProvider(
             error: formatRuntimeTmuxAutoForwardReadinessError('claude', readiness, true),
           };
         }
-        return { target, commands: [inspected.command || '', ...readiness.commands].filter(Boolean), recovered: false };
+        readinessCommands = readiness.commands;
       }
-      return { target, commands: inspected.command ? [inspected.command] : [], recovered: false };
+      const actualId = await readClaudeTmuxSessionId(target);
+      if (claudeSessionId && actualId !== claudeSessionId) throw new Error(`Claude tmux 窗口会话 ${actualId} 与保存的绑定 ${claudeSessionId} 不一致，未发送消息，请先修正绑定。`);
+      return { target, commands: [inspected.command || '', ...readinessCommands].filter(Boolean), recovered: false };
     }
     if (params.autoRecoverProviderSession !== true || hasManualOnlyTarget) {
       return {

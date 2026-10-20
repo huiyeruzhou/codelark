@@ -275,4 +275,67 @@ describe('real Claude Code tmux provider e2e', () => {
       removeRuntimeTestDirectory(tmuxTmpDir);
     }
   });
+  it('keeps concurrent Claude processes in the same directory bound to their own transcripts', { timeout: 120_000 }, async (t) => {
+    const executable = (process.env.CODELARK_REAL_CLAUDE_E2E_EXECUTABLE || 'claude') as ClaudeExecutable;
+    if (!await commandAvailable('tmux', ['-V']) || !await commandAvailable(executable, ['--version'], { ...process.env, CLAUDE_CODE_SIMPLE: '1' })) {
+      t.skip('real Claude and tmux required'); return;
+    }
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-shared-home-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-claude-shared-cwd-'));
+    const tmuxTmpDir = createShortTmuxTempDirectory();
+    const proxyA = await startLocalResponsesProxy({ responseText: 'IFNAR2_ONLY_OUTPUT', responseDelayMs: 250 });
+    const proxyB = await startLocalResponsesProxy({ responseText: 'TNFA_ONLY_OUTPUT' });
+    const ids = [`shared-a-${process.pid}-${Date.now()}`, `shared-b-${process.pid}-${Date.now()}`];
+    const names = ids.map(claudeTmuxSessionName);
+    const saved = { ...process.env };
+    delete process.env.TMUX; delete process.env.TMUX_PANE;
+    Object.assign(process.env, {
+      HOME: homeDir, USERPROFILE: homeDir, CODELARK_CLAUDE_HOME: homeDir,
+      TMUX_TMPDIR: tmuxTmpDir, ANTHROPIC_AUTH_TOKEN: 'isolated-fixture-token', ANTHROPIC_API_KEY: '',
+      CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CODELARK_CLAUDE_TMUX_PROMPT_DELAY_MS: '0', CODELARK_CLAUDE_TMUX_POLL_INTERVAL_MS: '100',
+    });
+    writeClaudeOnboardingState(homeDir);
+    try {
+      const launched = [];
+      for (const [index, proxy] of [proxyA, proxyB].entries()) {
+        process.env.ANTHROPIC_BASE_URL = proxy.baseUrl.replace(/\/v1$/u, '');
+        launched.push(await startClaudeTmuxSession({
+          sessionName: names[index]!, bridgeSessionId: ids[index]!, workingDirectory: cwd,
+          executable, waitReady: true,
+        }));
+      }
+      const outputs = await Promise.all(ids.map((sessionId, index) => readStream(streamClaudeTmuxTui({
+        sessionId, runtime: 'claude', claudeExecutable: 'claude', workingDirectory: cwd,
+        prompt: index === 0 ? 'IFNAR2 isolated task' : 'TNFA isolated task',
+      }))));
+      assert.match(outputs[0]!, /IFNAR2_ONLY_OUTPUT/);
+      assert.doesNotMatch(outputs[0]!, /TNFA_ONLY_OUTPUT/);
+      assert.match(outputs[1]!, /TNFA_ONLY_OUTPUT/);
+      assert.doesNotMatch(outputs[1]!, /IFNAR2_ONLY_OUTPUT/);
+      const nativeIds = outputs.map(findClaudeSessionId);
+      assert(nativeIds.every(Boolean));
+      assert.notEqual(nativeIds[0], nativeIds[1]);
+      assert.deepEqual(nativeIds, launched.map((session) => session.claudeSessionId));
+      const again = await readStream(streamClaudeTmuxTui({
+        sessionId: ids[1]!, runtime: 'claude', workingDirectory: cwd, prompt: 'TNFA follow-up',
+      }));
+      assert.equal(findClaudeSessionId(again), nativeIds[1], 'reuse must keep the live process identity');
+      assert.match(again, /TNFA_ONLY_OUTPUT/);
+      assert.doesNotMatch(again, /IFNAR2_ONLY_OUTPUT/);
+      assert.equal(listClaudeSessionJsonlFiles(cwd, homeDir).length, 2);
+    } finally {
+      // These names and this socket are created exclusively by this fixture.
+      const socket = path.join(tmuxTmpDir, `tmux-${process.getuid?.()}`, 'default');
+      const socketArgs = process.platform === 'win32' ? [] : ['-S', socket];
+      if (process.platform === 'win32' || (fs.existsSync(socket) && fs.statSync(socket).isSocket())) {
+        for (const name of names) await execFileAsync('tmux', [...socketArgs, 'kill-session', '-t', name]).catch(() => undefined);
+      }
+      await Promise.all([proxyA.close(), proxyB.close()]);
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
+      removeRuntimeTestDirectory(homeDir); removeRuntimeTestDirectory(cwd); removeRuntimeTestDirectory(tmuxTmpDir);
+    }
+  });
+
 });
