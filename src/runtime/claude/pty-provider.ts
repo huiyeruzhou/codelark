@@ -224,10 +224,22 @@ export function hasClaudePtyInputPrompt(text: string): boolean {
     || hasClaudePtyTrustPrompt(text)
   ) return false;
   const compact = compactScreenText(text);
-  return text.includes('❯') && (
+  if (text.includes('❯') && (
     compact.includes('forshortcuts')
     || compact.includes('/effort')
-  );
+  )) return true;
+
+  // A surviving TUI can lose both its welcome banner and shortcut hints after
+  // long output or a status-line update. Recognize its empty composer instead.
+  // Use the last chevron so an earlier input cannot hide a later selection.
+  if (hasTuiEnterConfirmFooter(text)) return false;
+  const lines = normalizeTerminalScreenText(text).split('\n');
+  const promptIndex = lines.findLastIndex((line) => /^\s*❯/u.test(line));
+  const isInputBorder = (line: string | undefined) => /^\s*─{3,}\s*$/u.test(line || '');
+  return promptIndex > 0
+    && /^\s*❯\s*$/u.test(lines[promptIndex]!)
+    && isInputBorder(lines[promptIndex - 1])
+    && isInputBorder(lines[promptIndex + 1]);
 }
 
 function appendScreen(sessionId: string, data: string): void {

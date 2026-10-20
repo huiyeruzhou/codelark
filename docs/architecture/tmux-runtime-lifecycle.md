@@ -267,6 +267,10 @@ Windows psmux 的长粘贴即使已经显示，第一次 Enter 仍可能被 ConP
 
 因此普通消息的统一决策是：先确认/创建 runtime session，再确认/启动 tmux并处理启动选择，进入 `running` 后发送；后续消息仅检查 tmux 是否还活着。Bridge 重启会丢失内存状态，所以首次接管已有 tmux 仍执行一次 readiness，这是必要的冷接管边界。
 
+Claude 冷接管支持欢迎标题和 `? for shortcuts`、`/effort` 全部离开末屏的情况：使用上下横线包围的空 `❯` 输入行识别就绪，允许页脚显示自定义 statusLine、更新提示或后台任务。单独箭头、编号菜单或缺少边框不满足这个补充判据；启动向导、信任和 bypass 确认仍先按交互处理。就绪后仍必须从 pane 启动命令核对 Claude session ID，不能凭输入框跳过身份校验。
+
+此缺口在 v0.3.0 已存在。持续运行时内存中的 `running` 状态会跳过再次抓屏，升级或重启 Bridge 后则会重新检查存活窗口，从而暴露对旧页脚的依赖。回归覆盖真实 Claude 2.1.175 的无 hints 抓屏、冷接管后连续 auto-forward、缺失或不匹配身份拒绝，以及真 Claude + tmux + 本地 mock API 的保留进程冷接管。
+
 ### 不可破坏的输入生命周期契约
 
 以下约束适用于 Codex、Claude Code、Kimi Code、Cursor Agent、ZCode 和以后新增的 runtime：

@@ -1,0 +1,103 @@
+  History line 3: isolated local Claude cold takeover reproduction.
+  History line 4: isolated local Claude cold takeover reproduction.
+  History line 5: isolated local Claude cold takeover reproduction.
+  History line 6: isolated local Claude cold takeover reproduction.
+  History line 7: isolated local Claude cold takeover reproduction.
+  History line 8: isolated local Claude cold takeover reproduction.
+  History line 9: isolated local Claude cold takeover reproduction.
+  History line 10: isolated local Claude cold takeover reproduction.
+  History line 11: isolated local Claude cold takeover reproduction.
+  History line 12: isolated local Claude cold takeover reproduction.
+  History line 13: isolated local Claude cold takeover reproduction.
+  History line 14: isolated local Claude cold takeover reproduction.
+  History line 15: isolated local Claude cold takeover reproduction.
+  History line 16: isolated local Claude cold takeover reproduction.
+  History line 17: isolated local Claude cold takeover reproduction.
+  History line 18: isolated local Claude cold takeover reproduction.
+  History line 19: isolated local Claude cold takeover reproduction.
+  History line 20: isolated local Claude cold takeover reproduction.
+  History line 21: isolated local Claude cold takeover reproduction.
+  History line 22: isolated local Claude cold takeover reproduction.
+  History line 23: isolated local Claude cold takeover reproduction.
+  History line 24: isolated local Claude cold takeover reproduction.
+  History line 25: isolated local Claude cold takeover reproduction.
+  History line 26: isolated local Claude cold takeover reproduction.
+  History line 27: isolated local Claude cold takeover reproduction.
+  History line 28: isolated local Claude cold takeover reproduction.
+  History line 29: isolated local Claude cold takeover reproduction.
+  History line 30: isolated local Claude cold takeover reproduction.
+  History line 31: isolated local Claude cold takeover reproduction.
+  History line 32: isolated local Claude cold takeover reproduction.
+  History line 33: isolated local Claude cold takeover reproduction.
+  History line 34: isolated local Claude cold takeover reproduction.
+  History line 35: isolated local Claude cold takeover reproduction.
+  History line 36: isolated local Claude cold takeover reproduction.
+  History line 37: isolated local Claude cold takeover reproduction.
+  History line 38: isolated local Claude cold takeover reproduction.
+  History line 39: isolated local Claude cold takeover reproduction.
+  History line 40: isolated local Claude cold takeover reproduction.
+  History line 41: isolated local Claude cold takeover reproduction.
+  History line 42: isolated local Claude cold takeover reproduction.
+  History line 43: isolated local Claude cold takeover reproduction.
+  History line 44: isolated local Claude cold takeover reproduction.
+  History line 45: isolated local Claude cold takeover reproduction.
+  History line 46: isolated local Claude cold takeover reproduction.
+  History line 47: isolated local Claude cold takeover reproduction.
+  History line 48: isolated local Claude cold takeover reproduction.
+  History line 49: isolated local Claude cold takeover reproduction.
+  History line 50: isolated local Claude cold takeover reproduction.
+  History line 51: isolated local Claude cold takeover reproduction.
+  History line 52: isolated local Claude cold takeover reproduction.
+  History line 53: isolated local Claude cold takeover reproduction.
+  History line 54: isolated local Claude cold takeover reproduction.
+  History line 55: isolated local Claude cold takeover reproduction.
+  History line 56: isolated local Claude cold takeover reproduction.
+  History line 57: isolated local Claude cold takeover reproduction.
+  History line 58: isolated local Claude cold takeover reproduction.
+  History line 59: isolated local Claude cold takeover reproduction.
+  History line 60: isolated local Claude cold takeover reproduction.
+  History line 61: isolated local Claude cold takeover reproduction.
+  History line 62: isolated local Claude cold takeover reproduction.
+  History line 63: isolated local Claude cold takeover reproduction.
+  History line 64: isolated local Claude cold takeover reproduction.
+  History line 65: isolated local Claude cold takeover reproduction.
+  History line 66: isolated local Claude cold takeover reproduction.
+  History line 67: isolated local Claude cold takeover reproduction.
+  History line 68: isolated local Claude cold takeover reproduction.
+  History line 69: isolated local Claude cold takeover reproduction.
+  History line 70: isolated local Claude cold takeover reproduction.
+  History line 71: isolated local Claude cold takeover reproduction.
+  History line 72: isolated local Claude cold takeover reproduction.
+  History line 73: isolated local Claude cold takeover reproduction.
+  History line 74: isolated local Claude cold takeover reproduction.
+  History line 75: isolated local Claude cold takeover reproduction.
+  History line 76: isolated local Claude cold takeover reproduction.
+  History line 77: isolated local Claude cold takeover reproduction.
+  History line 78: isolated local Claude cold takeover reproduction.
+  History line 79: isolated local Claude cold takeover reproduction.
+  History line 80: isolated local Claude cold takeover reproduction.
+  History line 81: isolated local Claude cold takeover reproduction.
+  History line 82: isolated local Claude cold takeover reproduction.
+  History line 83: isolated local Claude cold takeover reproduction.
+  History line 84: isolated local Claude cold takeover reproduction.
+  History line 85: isolated local Claude cold takeover reproduction.
+  History line 86: isolated local Claude cold takeover reproduction.
+  History line 87: isolated local Claude cold takeover reproduction.
+  History line 88: isolated local Claude cold takeover reproduction.
+  History line 89: isolated local Claude cold takeover reproduction.
+  History line 90: isolated local Claude cold takeover reproduction.
+  History line 91: isolated local Claude cold takeover reproduction.
+  History line 92: isolated local Claude cold takeover reproduction.
+  History line 93: isolated local Claude cold takeover reproduction.
+  History line 94: isolated local Claude cold takeover reproduction.
+  History line 95: isolated local Claude cold takeover reproduction.
+  QA-RESPONSE-END
+
+✻ Worked for 0s
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  QA local backend | context 42%
+  ← for agents
+  tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tra…

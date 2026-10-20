@@ -1,6 +1,7 @@
 import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import { _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
@@ -180,4 +181,38 @@ describe('Claude PTY startup prompts', () => {
       }
     }
   });
+});
+
+
+describe('Claude input readiness without startup hints', () => {
+  const captured = fs.readFileSync(new URL('../../../fixtures/runtime/claude/mature-input-no-hints.txt', import.meta.url), 'utf8');
+  const frame = '────────────────────────────────';
+
+  it('recognizes the real mature input after the banner and shortcut hints scroll away', () => {
+    assert.doesNotMatch(captured, /Claude Code|for shortcuts|\/effort/u);
+    assert.equal(_testOnlyClaudePty.hasClaudePtyInputPrompt(captured), true);
+  });
+
+  for (const footer of ['Update installed · restart to apply', '2 background tasks', 'bypass permissions on', '']) {
+    it(`accepts a framed empty input with footer ${JSON.stringify(footer)}`, () => {
+      const screen = `Finished.\r\n${frame}\r\n\x1b[36m❯\u00a0\x1b[0m\r\n${frame}\r\n${footer}`;
+      assert.equal(_testOnlyClaudePty.hasClaudePtyInputPrompt(screen), true);
+    });
+  }
+
+  for (const [name, screen] of Object.entries({
+    'bare chevron in output': 'Example prompt: ❯',
+    'unframed empty chevron': 'Command output\n❯ ',
+    'shell prompt': `${frame}\n> \n${frame}`,
+    'numbered menu': `${frame}\n❯ 1. Continue\n  2. Cancel\n${frame}`,
+    'incomplete input frame': `${frame}\n❯ `,
+    'later selection after old input': `${frame}\n❯ \n${frame}\nChoose a mode\n❯ 1. Yes\n  2. No`,
+    'unrecognized confirmation after old input': `${frame}\n❯ \n${frame}\nEnter to confirm · Esc to cancel`,
+    'trust confirmation': `Quick safety check\n❯ 1. Yes, I trust this folder\n  2. No, exit\nEnter to confirm`,
+    'bypass warning': bypassPermissionsWarning,
+  })) {
+    it(`does not mistake ${name} for a ready input`, () => {
+      assert.equal(_testOnlyClaudePty.hasClaudePtyInputPrompt(screen), false);
+    });
+  }
 });
