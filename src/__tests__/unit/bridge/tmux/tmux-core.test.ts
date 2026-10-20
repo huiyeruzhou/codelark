@@ -180,8 +180,50 @@ if (args[0] === 'send-paste') {
         .split(/\r?\n/u)
         .filter(Boolean)
         .map((line) => JSON.parse(line) as string[]);
-      assert.deepEqual(calls.map((args) => args[0]), ['capture-pane', 'send-paste', 'capture-pane', 'send-keys']);
-      assert.deepEqual(calls.at(-1)?.slice(-1), ['Enter']);
+      assert.deepEqual(calls.map((args) => args[0]), ['capture-pane', 'send-paste', 'capture-pane', 'send-keys', 'capture-pane']);
+      assert.equal(calls.filter(args => args[0] === 'send-keys' && args.at(-1) === 'Enter').length, 1);
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers a swallowed submit without pasting or submitting the long message twice', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-submit-retry-'));
+    const statePath = path.join(binDir, 'state.json');
+    const scriptPath = path.join(binDir, 'fake-tmux.cjs');
+    fs.writeFileSync(scriptPath, `
+const fs = require('node:fs');
+const file = ${JSON.stringify(statePath)};
+const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+const args = process.argv.slice(2);
+if (args[0] === 'send-paste') {
+  state.draft += Buffer.from(args.at(-1), 'base64').toString('utf8');
+  state.pastes++;
+} else if (args[0] === 'send-keys' && args.at(-1) === 'Enter') {
+  state.enters++;
+  // Model the observed ConPTY failure: paste is visible but the first Enter
+  // is consumed before the editor accepts a submit.
+  if ((!state.dropFirst || state.enters > 1) && state.draft) { state.submitted.push(state.draft); state.draft = ''; }
+} else if (args[0] === 'capture-pane') {
+  const history = state.submitted.length ? '› [Pasted Content ' + state.submitted[0].length + ' chars]\\n• answer\\n' : '';
+  process.stdout.write(history + (state.draft ? '› [Pasted Content ' + Array.from(state.draft).length + ' chars]' : '› '));
+}
+fs.writeFileSync(file, JSON.stringify(state));
+`, 'utf8');
+    const core = createTmuxCliCore({ executable: process.execPath, prefixArgs: [scriptPath], psmuxServerSidePaste: true });
+    const prompt = `clk-submit-${'x'.repeat(8681)}`;
+    try {
+      for (const dropFirst of [true, false]) {
+        for (const inject of [false, true]) {
+          fs.writeFileSync(statePath, JSON.stringify({ draft: '', pastes: 0, enters: 0, submitted: [], dropFirst }));
+          if (inject) await core.injectPromptIntoPane('submit-retry', prompt);
+          else await core.sendActions('submit-retry', [{ type: 'literal', text: prompt }, { type: 'key', key: 'Enter' }]);
+          const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+          assert.deepEqual(state.submitted, [prompt], 'one complete message must reach the model');
+          assert.equal(state.pastes, 1, 'a lost Enter must never cause the text to be pasted again');
+          assert.equal(state.enters, dropFirst ? 2 : 1, 'a submitted paste in scrollback must not trigger another Enter');
+        }
+      }
     } finally {
       fs.rmSync(binDir, { recursive: true, force: true });
     }

@@ -1385,6 +1385,13 @@ describe('real codex tmux provider e2e', () => {
           `screen: ${capture.stdout.slice(-2000)}`,
         ].join('\n'));
       }
+      assert.equal(await waitForCondition(
+        () => hasCompletedTurnForMarker(generatedThreadFilePath, 'clk-long-prompt-start'),
+        30_000,
+        250,
+      ), true, 'the long input should finish before checking duplicate submissions');
+      assert.equal(proxy.requests.filter(request => request.url.includes('/responses') && requestBodyContainsText(request.body, longPrompt)).length,
+        1, 'one long input must produce exactly one complete model request');
     } finally {
       tmuxCore.sendActions = originalSendActions;
       if (tmuxSessionName) {

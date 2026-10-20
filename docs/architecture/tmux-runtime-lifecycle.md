@@ -244,6 +244,8 @@ ready 检测内部仍按一个短生命周期 readiness gate 运转；它只用�
 
 readiness gate 的 `ready` 会把共享输入状态推进到 `running`，随后普通消息才进入 `sending` 并写入 prompt/Enter。Codex auto-forward 的普通 prompt 强制使用 `load-buffer` + `paste-buffer -p`，包括低于大文本阈值的中等长度多行输入，避免逐键注入仍处于 paste burst 时吞掉紧随其后的 Enter；selection callback 的原消息恢复也走同一条路径。运行期不再为了寻找空闲光标而重复 readiness capture；Codex 在执行过程中真正出现 permission/goal 等交互选择时，mirror selection monitor 仍可把共享状态从 `running` 推到 `waiting_selection`，用户选择完成后回到 `running`。这是业务交互检测，不是每条输入前的光标门控。
 
+Windows psmux 的长粘贴即使已经显示，第一次 Enter 仍可能被 ConPTY 吞掉。共享输入层在该提交后等待 500ms，只在最后一个 Codex 输入行仍显示匹配本次字符数的 `[Pasted Content … chars]` 时补一次 Enter；不重新粘贴文本，不把历史区的折叠消息当成当前草稿，输入框已清空时不补键。真实 Windows 回归检查完整长文本最终只产生一次模型请求。
+
 输入状态机同时保存独立的 `turnState=unknown|idle|active`。普通提交对 Codex、Claude、Cursor 已具有自然 steer 语义，因此显式 steer operation 为 `none`；Kimi 根据提交前的 wire `step.begin/step.end` 状态决定，只有 `active` 才在 Enter 后执行额外 `Ctrl-S`。新建、恢复或已结束的 Kimi turn 均为 idle，不发送 `Ctrl-S`。提交确认必须看到 `llm.request`，或在提交前确有 active turn 时看到匹配的 `turn.steer`；单独 `step.begin` 不能证明请求已发出。
 
 ### 3. 输入生命周期状态机

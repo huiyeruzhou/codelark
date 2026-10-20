@@ -174,6 +174,7 @@ const PSMUX_PASTE_FIRST_ACK_TIMEOUT_MS = 1_500;
 const PSMUX_PASTE_RETRY_ACK_TIMEOUT_MS = 5_000;
 const PSMUX_PASTE_ACK_POLL_MS = 100;
 const PSMUX_PASTE_ACK_CAPTURE_LINES = 120;
+const PSMUX_SUBMIT_PROBE_DELAY_MS = 500;
 const SESSION_START_SURVIVAL_DELAY_MS = 50;
 const SESSION_START_RETRY_DELAY_MS = 100;
 
@@ -465,6 +466,7 @@ class TmuxCliCore implements TmuxCore {
     options: TmuxSendActionsOptions = {},
   ): Promise<TmuxSendActionsResult> {
     const commands: string[] = [];
+    let pastedText: string | undefined;
     for (const [index, action] of actions.entries()) {
       if (
         action.type === 'literal'
@@ -473,16 +475,43 @@ class TmuxCliCore implements TmuxCore {
         commands.push(...(this.psmuxServerSidePaste
           ? await this.sendPsmuxEditorInput(target, action.text, options.pasteNewlineKey)
           : await this.pasteLiteralChunks(target, action.text)));
+        if (this.psmuxServerSidePaste) pastedText = action.text;
       } else {
         const args = tmuxSendActionArgv(target, action);
         await this.runTmux(args);
         commands.push(this.command(args));
+        if (action.type === 'key' && action.key === 'Enter' && pastedText !== undefined) {
+          commands.push(...await this.retryUnsubmittedPsmuxPaste(target, pastedText));
+        }
+        pastedText = undefined;
       }
       if (options.delayMs !== undefined && index < actions.length - 1) {
         await sleep(options.delayMs);
       }
     }
     return { commands };
+  }
+
+  private async retryUnsubmittedPsmuxPaste(target: string, text: string): Promise<string[]> {
+    if (Array.from(text).length <= PASTE_LITERAL_THRESHOLD) return [];
+    // A visible paste is not a submission acknowledgement. ConPTY can consume
+    // the first Enter while finishing a large paste. Only retry the key when
+    // Codex's current editor still contains this exact collapsed draft; never
+    // retype text or mistake a previous user message in scrollback for a draft.
+    await sleep(PSMUX_SUBMIT_PROBE_DELAY_MS);
+    const capture = await this.capturePsmuxPasteScreen(target).catch(() => undefined);
+    if (!capture) return [];
+    const commands = [capture.command];
+    const editor = capture.screen.split(/\r?\n/u).filter(line => /^\s*›(?:\s|$)/u.test(line)).at(-1);
+    if (!editor || !/^\s*›\s*\[Pasted Content\s+\d+\s+chars?\]\s*$/iu.test(editor)
+      || !screenAcknowledgesPsmuxPaste(editor, text)) return commands;
+    const args: TmuxArgv = ['send-keys', '-t', target, 'Enter'];
+    await this.runTmux(args);
+    commands.push(this.command(args));
+    console.warn('[tmux-core] Retried submit for a still-visible Windows paste:', {
+      event: 'tmux.psmux.submit.retry', target, characters: Array.from(text).length,
+    });
+    return commands;
   }
 
   private async sendPsmuxEditorInput(target: string, text: string, newlineKey?: string): Promise<string[]> {
@@ -633,6 +662,7 @@ class TmuxCliCore implements TmuxCore {
       commands.push(...(await this.sendPsmuxEditorInput(targetPane, prompt, options.pasteNewlineKey)));
       const submit = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
       commands.push(...submit.commands);
+      commands.push(...await this.retryUnsubmittedPsmuxPaste(targetPane, prompt));
       return { commands };
     }
     const bufferName = `clk-prompt-${process.pid}-${Date.now()}`;
