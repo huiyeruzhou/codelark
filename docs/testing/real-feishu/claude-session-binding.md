@@ -2,6 +2,8 @@
 
 这条回归验证两个群共用工作目录时，输出监听必须绑定到各自 Claude 进程的会话，不能选择目录中最近更新的 JSONL。
 
+CI 还在 Linux、macOS 和 Windows 上运行 Claude 原生 tmux 及工作流回归。模拟进程必须从实际启动命令读取会话 UUID，兼容 Windows 的 argv 数组及 PowerShell 引号；无法读取时立即让夹具失败，不能沿用预设 UUID 写入模拟日志。
+
 入口是 `scripts/real-feishu-claude-binding.ts`。它通过产品 `/new` 用例创建两个真实飞书群，把已授权用户加入群；后续输入全部使用用户身份发送，经飞书 WebSocket 进入隔离 daemon，由真实 Claude CLI/tmux 处理。模型 HTTP 服务使用本地确定性响应，回复由 Bridge 自动投递，测试以用户身份逐条读取 `user_card_content`。
 
 ## 同一测试必须能区分旧版与修复版

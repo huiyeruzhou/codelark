@@ -7,6 +7,7 @@ import path from 'node:path';
 import { parseClaudeLaunchSessionId } from '../../../../runtime/claude/session-identity.js';
 import { buildClaudePtyCommand, streamClaudePtyTui, _testOnlyClaudePty } from '../../../../runtime/claude/pty-provider.js';
 import { getClaudeProjectDir, getClaudeSessionJsonlById } from '../../../../runtime/claude/session-jsonl.js';
+import { buildShellSnapshotLaunchArgs } from '../../../../runtime/codex/shell-snapshot.js';
 
 const id = '7b2e7d9d-688a-4697-bf54-2bfdcfec85e9';
 test('reads only a unique explicit Claude launch UUID, including shell quoting', () => {
@@ -16,6 +17,9 @@ test('reads only a unique explicit Claude launch UUID, including shell quoting',
     `zsh -lc 'source snapshot; exec claude --session-id ${id}'`,
     `cmd /c "claude.cmd --resume ${id}"`,
     `claude --session-id=${id}`,
+    buildShellSnapshotLaunchArgs('claude', ['--session-id', id], {
+      shell: { type: 'powershell', path: 'pwsh.exe' }, path: 'snapshot.ps1', content: '',
+    }).join(' '),
   ]) assert.equal(parseClaudeLaunchSessionId(command), id, command);
   for (const command of ['claude', `echo ${id}`, 'claude --resume named-session',
     `claude --resume ${id} --session-id ${id}`]) assert.equal(parseClaudeLaunchSessionId(command), null, command);

@@ -16,6 +16,7 @@ import {
   streamClaudeTmuxTui,
 } from '../../../../runtime/claude/tmux-provider.js';
 import { buildClaudePtyCommand } from '../../../../runtime/claude/pty-provider.js';
+import { parseClaudeLaunchSessionId } from '../../../../runtime/claude/session-identity.js';
 
 interface ParsedSse {
   type: string;
@@ -275,8 +276,11 @@ describe('claude-tmux-provider', () => {
       },
       async ensureDetachedSession(params) {
         calls.push(`ensure:${params.name}:${params.cwd}`);
-        const match = String(params.command).match(/--session-id\s+([a-f0-9-]{36})/);
-        if (match) launchedId = match[1]!;
+        const command = Array.isArray(params.command) ? params.command.join(' ') : params.command;
+        assert.ok(command, 'the fake process requires a launch command');
+        const sessionId = parseClaudeLaunchSessionId(command);
+        assert.ok(sessionId, 'the fake process must use the UUID from the actual launch, including PowerShell quoting');
+        launchedId = sessionId;
         sessionFile = path.join(projectDir, `${launchedId}.jsonl`);
         return { existed: false, commands: ['tmux new-session'] };
       },
