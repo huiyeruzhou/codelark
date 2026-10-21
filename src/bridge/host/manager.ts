@@ -5425,8 +5425,8 @@ async function handleMessage(
               if (hasAttachments && prepared.persistedFileMeta.length !== msg.attachments!.length) {
                 throw new Error('附件保存失败，消息尚未提交，请重试。');
               }
-              const prompt = sanitizeInput(appendModelContextText(buildConversationPromptText(
-                modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), prepared.persistedFileMeta), msg.contextText)).text;
+              const prompt = sanitizeInput(buildConversationPromptText(appendModelContextText(
+                modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), msg.contextText), prepared.persistedFileMeta)).text;
               if (prompt) {
                 await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
                   ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session));
@@ -5523,10 +5523,7 @@ async function handleMessage(
       ack();
       return;
     }
-    const tmuxModelText = appendModelContextText(
-      prepareTextAttachmentPrompt({ prompt: modelText, files: msg.attachments, workingDirectory: getSessionWorkingDirectory(tmuxProviderSession) || path.join(CODELARK_HOME, 'uploads', tmuxProviderSession.id) }),
-      msg.contextText,
-    );
+    const tmuxModelText = prepareTextAttachmentPrompt({ prompt: appendModelContextText(modelText, msg.contextText), files: msg.attachments, workingDirectory: getSessionWorkingDirectory(tmuxProviderSession) || path.join(CODELARK_HOME, 'uploads', tmuxProviderSession.id) });
     const { text, truncated } = sanitizeInput(tmuxModelText);
     if (truncated) {
       console.warn(`[bridge-manager] tmux provider input truncated from ${tmuxModelText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
@@ -5620,7 +5617,7 @@ async function handleMessage(
     const threadId = getSessionCursorSessionId(tmuxProviderSession);
     try {
       if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，消息未发送。');
-      const { text } = sanitizeInput(appendModelContextText(prepareTextAttachmentPrompt({ prompt: modelText, files: msg.attachments, workingDirectory: getSessionWorkingDirectory(tmuxProviderSession) || path.join(CODELARK_HOME, 'uploads', tmuxProviderSession.id) }), msg.contextText));
+      const { text } = sanitizeInput(prepareTextAttachmentPrompt({ prompt: appendModelContextText(modelText, msg.contextText), files: msg.attachments, workingDirectory: getSessionWorkingDirectory(tmuxProviderSession) || path.join(CODELARK_HOME, 'uploads', tmuxProviderSession.id) }));
       const sent = await sendCursorDesktopMessage(threadId, text, {
         delivery: 'auto',
         isCurrentTarget: () => {

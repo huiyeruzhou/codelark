@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import path from 'path';
 
 import type { FileAttachment } from '../domain/index.js';
+import { attachmentPromptReference } from '../domain/message.js';
 
 export interface PersistedAttachmentMeta {
   id: string;
@@ -46,8 +47,21 @@ export function buildLocalAttachmentPromptSupplement(files: PersistedAttachmentM
   return lines.join('\n');
 }
 
+function placeLocalAttachments(text: string, files: PersistedAttachmentMeta[]): { text: string; unplaced: PersistedAttachmentMeta[] } {
+  const unplaced: PersistedAttachmentMeta[] = [];
+  for (const file of files) {
+    const marker = attachmentPromptReference(file.id);
+    if (!text.includes(marker)) { unplaced.push(file); continue; }
+    const local = `<local_attachment name="${escapeXmlAttribute(file.name)}" mime_type="${escapeXmlAttribute(file.type)}" size_bytes="${file.size}" path="${escapeXmlAttribute(file.filePath)}" />`;
+    text = text.split(marker).join(local);
+  }
+  return { text, unplaced };
+}
+
 export function buildConversationPromptText(text: string, files: PersistedAttachmentMeta[] = [], includeImages = false): string {
-  const attachmentSupplement = buildLocalAttachmentPromptSupplement(files, includeImages);
+  const placed = placeLocalAttachments(text, files);
+  text = placed.text;
+  const attachmentSupplement = buildLocalAttachmentPromptSupplement(placed.unplaced, includeImages);
   if (!attachmentSupplement) return text;
   return text.trim() ? `${text}\n\n${attachmentSupplement}` : attachmentSupplement;
 }
@@ -90,7 +104,7 @@ export function prepareMessageAttachments(params: {
       return { id: file.id, name: file.name, type: file.type, size: buffer.length, filePath };
     });
     return {
-      savedContent: `<!--files:${JSON.stringify(fileMeta)}-->${text}`,
+      savedContent: `<!--files:${JSON.stringify(fileMeta)}-->${placeLocalAttachments(text, fileMeta).text}`,
       llmFiles: files.map((file) => {
         const persisted = fileMeta.find((item) => item.id === file.id);
         return persisted ? { ...file, size: persisted.size, filePath: persisted.filePath } : file;

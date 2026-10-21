@@ -9,6 +9,11 @@ export interface FileAttachment {
   filePath?: string;
 }
 
+/** Stable position marker, resolved after the attachment has been persisted. */
+export function attachmentPromptReference(id: string): string {
+  return `<attachment_ref id="${encodeURIComponent(id)}" />`;
+}
+
 export interface BridgeMessage {
   role: string;
   content: string;

@@ -52,3 +52,5 @@ IM 内 `/h` 的文案由 [src/bridge/command/help.ts](https://github.com/huiyeru
 `/require-at on|off|status`（别名 `/require_at`）只控制当前绑定会话的群聊 @bot 要求，也可在 `/current common` 修改。私聊不受影响；`/clear`、`/new` 和首次切换到新 runtime 会话会继承设置，切回已有会话保留其自身设置。
 
 `/customer` 查看当前群客服模式，`/customer on|off` 开启或关闭；已有话题内执行也修改所属群。`/whitelist` 查看客服管理员，`/whitelist add|remove @成员` 管理名单。两者均要求客服控制权限，空名单默认 bot 创始人，是否需要 @ 仍遵循群设置。详见 [客服模式](./customer-service.md)。
+
+飞书附件在对应消息或富文本图片位置显示本地路径。合并转发会按子消息的原始 message_id 自动读取有权限访问的原消息，取得可下载的 key；无法读取时保留资源标识、限制原因和 lark-cli 恢复步骤。自动下载预算为每条消息累计 20 MiB、最多 20 个附件；已知大小或响应 Content-Length 超限时不读取正文，大小未知时有界读取并及时停止。未下载的附件保留 message_id、file_key、类型、名称、已知大小与按需下载命令。

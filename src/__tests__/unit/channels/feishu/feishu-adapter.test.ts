@@ -2553,7 +2553,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.deepEqual(parsed.warnings, []);
   });
 
-  it('downloads Feishu post images concurrently before enqueuing the inbound message', async () => {
+  it('downloads Feishu post images within one message budget before enqueuing', async () => {
     initBridgeTestContext();
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -2596,8 +2596,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
     }) as Promise<void>;
 
-    await waitForCondition(() => started.length === 2);
-    assert.deepEqual(started, ['img-first', 'img-second']);
+    await waitForCondition(() => started.length === 1);
+    assert.deepEqual(started, ['img-first']);
     first.resolve({
       id: 'att-first',
       name: 'first.png',
@@ -2605,6 +2605,7 @@ describe('feishu-adapter structured streaming regions', () => {
       size: 5,
       data: Buffer.from('first').toString('base64'),
     });
+    await waitForCondition(() => started.length === 2);
     second.resolve({
       id: 'att-second',
       name: 'second.png',
@@ -2616,7 +2617,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
-    assert.equal(inbound.text, '看这两张图');
+    assert.match(inbound.text, /看这两张图.*attachment_ref id="att-first".*attachment_ref id="att-second"/s);
     assert.equal(inbound.attachments?.length, 2);
     assert.deepEqual(inbound.attachments?.map((attachment) => attachment.id), ['att-first', 'att-second']);
   });

@@ -14,6 +14,8 @@
  * structured callbacks.
  */
 
+import { attachmentPromptReference } from '../../domain/message.js';
+import { describeDeferredFeishuAttachment, feishuResourceReference } from './attachment-context.js';
 import crypto from 'crypto';
 import { canControlCustomerService, isCustomerServiceChat, parseTopicConversationId, resolveTopicAddress, topicConversationId, type TopicMessage } from './customer-service.js';
 import { isBridgeCommandText } from '../../bridge/command/aliases.js';
@@ -442,6 +444,7 @@ type FeishuWsClientOptions = {
 type FeishuResourceInfo = {
   fileKey: string | null;
   name?: string;
+  size?: number;
 };
 
 function normalizeFeishuChatKind(value: unknown): ChannelChatKind | null {
@@ -489,6 +492,7 @@ function extractFeishuResourceInfo(content: string): FeishuResourceInfo {
     const parsed = JSON.parse(content);
     return {
       fileKey: parsed.image_key || parsed.file_key || parsed.imageKey || parsed.fileKey || null,
+      ...(Number.isFinite(Number(parsed.file_size ?? parsed.size)) && Number(parsed.file_size ?? parsed.size) >= 0 ? { size: Number(parsed.file_size ?? parsed.size) } : {}),
       name: sanitizeInboundResourceName(
         parsed.file_name
         || parsed.fileName
@@ -2222,7 +2226,7 @@ function describeUnsupportedPostElementFields(element: Record<string, unknown>, 
   return [`第 ${index + 1} 个 ${tag} 元素包含暂未支持的字段：${unsupported.join(', ')}`];
 }
 
-function parseFeishuPostContent(content: string): FeishuPostParseResult {
+function parseFeishuPostContent(content: string, renderImage?: (key: string) => string): FeishuPostParseResult {
   const imageKeys: string[] = [];
   const textParts: string[] = [];
   const warnings: string[] = [];
@@ -2254,7 +2258,7 @@ function parseFeishuPostContent(content: string): FeishuPostParseResult {
             // Mention in post — handled by isBotMentioned for group policy
           } else if (element.tag === 'img') {
             const key = element.image_key || element.file_key || element.imageKey;
-            if (key) imageKeys.push(key);
+            if (key) { imageKeys.push(key); if (renderImage) textParts.push(renderImage(key)); }
           } else if (element.tag === 'code_block' && typeof element.text === 'string') {
             appendPostBlock(
               textParts,
@@ -2735,7 +2739,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       siblings.push(item); children.set(item.upper_message_id, siblings);
     }
     const seen = new Set<string>();
-    const resources = new Set<string>();
+    const resources = new Map<string, string>();
     let remainingChars = 64_000;
     let count = 0;
     let bytes = attachments.reduce((total, file) => total + file.size, 0);
@@ -2757,48 +2761,49 @@ export class FeishuAdapter extends BaseChannelAdapter {
         }
         content = rendered.length ? `<merged_messages>\n${rendered.join('\n')}\n</merged_messages>` : '[合并消息未返回可读取的子消息]';
       } else {
-        const resourceRefs = (value: string): Array<{ key: string; kind: string; name?: string }> => {
+        const resourceRefs = (value: string): Array<{ key: string; kind: string; name?: string; size?: number }> => {
           if (type === 'post') return parseFeishuPostContent(value).imageKeys.map((key) => ({ key, kind: 'image' }));
           if (!['image', 'file', 'audio', 'video', 'media'].includes(type)) return [];
           const resource = extractFeishuResourceInfo(value);
-          return resource.fileKey ? [{ key: resource.fileKey, kind: type, name: resource.name }] : [];
+          return resource.fileKey ? [{ key: resource.fileKey, kind: type, name: resource.name, size: resource.size }] : [];
         };
         const keys = resourceRefs(body);
         let originalKeys: ReturnType<typeof resourceRefs> | undefined;
-        if (item.upper_message_id && keys.length && downloadAttachments && resources.size < 20 && bytes < MAX_FILE_SIZE) {
+        if (item.upper_message_id && keys.length && downloadAttachments) {
           // Merged children retain original message IDs but contain different resource keys.
-          // Resolve the original only inside this chat; never assume merged keys are downloadable.
+          // The user forwarded this exact original message. Resolve its key across chats when the bot can read it; never guess by filename.
           const original = (await this.fetchMessagesById(id)).find((candidate) => candidate.message_id === id
-            && !candidate.upper_message_id && !candidate.deleted && !candidate.updated && candidate.msg_type === type
-            && Boolean(expectedChatId) && candidate.chat_id === expectedChatId);
+            && !candidate.upper_message_id && !candidate.deleted && !candidate.updated && candidate.msg_type === type);
           if (original) {
             const refs = resourceRefs(original.body?.content || '');
             if (refs.length === keys.length) originalKeys = refs;
           }
         }
-        const notes: string[] = [];
+        const notes = new Map<string, string>();
         for (const [index, resource] of keys.entries()) {
-          if (!downloadAttachments) break;
           const key = `${id}:${resource.key}`;
-          if (resources.has(key)) continue;
-          if (attachments.length >= 20 || resources.size >= 20 || bytes >= MAX_FILE_SIZE) { notes.push('[附件总量超限，未继续下载]'); break; }
-          resources.add(key);
-          // Feishu message-resource/get rejects merged children with 234043.
-          // Preserve their identity without claiming the bytes were attached.
-          if (item.upper_message_id && !originalKeys) {
-            notes.push(`合并转发附件：${resource.name || resource.key}（${resource.kind}）。飞书资源接口不支持下载合并转发子消息；需要直接发送附件，或引用非合并的原始附件消息。`);
-            continue;
-          }
+          const cached = resources.get(key);
+          if (cached) { notes.set(resource.key, cached); continue; }
+          let note: string;
+          const merged = Boolean(item.upper_message_id && !originalKeys);
           const download = originalKeys?.[index] || resource;
-          const file = await this.downloadResource(id, download.key, download.kind, download.name);
-          if (!file) { notes.push(`附件下载失败：${resource.name || resource.key}；原消息 ID：${id}`); continue; }
-          if (bytes + file.size > MAX_FILE_SIZE) { notes.push(`附件总量超限，未附加：${file.name}`); continue; }
-          attachments.push(file); bytes += file.size;
-          notes.push(`已附加${file.type.startsWith('image/') ? '图片' : '文件'}：${file.name}（${file.type}，${file.size} 字节）`);
+          const describe = (reason: string) => describeDeferredFeishuAttachment({ messageId: id,
+            fileKey: download.key, type: download.kind, name: download.name, size: download.size,
+            appId: this.appId, reason, merged });
+          if (!downloadAttachments) note = describe('当前消息为控制命令，未自动下载引用附件。');
+          else if (attachments.length >= 20 || resources.size >= 20 || bytes >= MAX_FILE_SIZE) note = describe('附件总量超限，未继续自动下载。');
+          else if (merged) note = describe('飞书资源接口不支持下载合并转发子消息，尚未取得可访问的原始附件。');
+          else {
+            const result = await this.readInboundAttachment(id, download.key, download.kind, download.name, download.size, MAX_FILE_SIZE - bytes);
+            note = result.content;
+            if (result.file) { attachments.push(result.file); bytes += result.file.size; }
+          }
+          resources.set(key, note); notes.set(resource.key, note);
         }
-        if (notes.length) {
-          const rendered = type === 'post' ? parseFeishuPostContent(body).extractedText : type === 'image' ? '引用的图片' : body;
-          content = [rendered, ...notes].filter(Boolean).join('\n');
+        if (keys.length) {
+          content = type === 'post'
+            ? parseFeishuPostContent(body, (key) => notes.get(key) || '').extractedText
+            : [...notes.values()].join('\n');
         }
       }
       if (type !== 'merge_forward') {
@@ -7129,79 +7134,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const messageType = msg.message_type;
     let text = '';
     const attachments: FileAttachment[] = [];
-    let contextPromise: Promise<string | undefined> | null = null;
-    const getContextPromise = () => {
-      contextPromise ||= this.buildQuotedMessageContext(msg.parent_id, attachments, chatId, !isBridgeCommandText(commandText));
-      return contextPromise;
-    };
 
     if (messageType === 'text') {
       text = this.parseTextContent(msg.content);
-    } else if (messageType === 'image') {
-      // [P1] Download image with failure fallback
-      console.log('[feishu-adapter] Image message received, content:', msg.content);
-      const { fileKey, name } = extractFeishuResourceInfo(msg.content);
-      console.log('[feishu-adapter] Extracted fileKey:', fileKey);
+    } else if (['image', 'file', 'audio', 'video', 'media'].includes(messageType)) {
+      const { fileKey, name, size } = extractFeishuResourceInfo(msg.content);
       if (fileKey) {
-        getContextPromise();
-        const attachment = await this.downloadResource(msg.message_id, fileKey, 'image', name);
-        if (attachment) {
-          attachments.push(attachment);
-        } else {
-          text = '[image download failed]';
-          try {
-            getBridgeContext().store.insertAuditLog({
-              channelType: this.channelType,
-              channelProvider: this.provider,
-              channelAlias: this.alias,
-              chatId,
-              direction: 'inbound',
-              messageId: msg.message_id,
-              summary: `[ERROR] Image download failed for key: ${fileKey}`,
-            });
-          } catch { /* best effort */ }
-        }
-      }
-    } else if (messageType === 'file' || messageType === 'audio' || messageType === 'video' || messageType === 'media') {
-      // [P2] Support file/audio/video/media downloads
-      const { fileKey, name } = extractFeishuResourceInfo(msg.content);
-      if (fileKey) {
-        const resourceType = messageType === 'audio' || messageType === 'video' || messageType === 'media'
-          ? messageType
-          : 'file';
-        getContextPromise();
-        const attachment = await this.downloadResource(msg.message_id, fileKey, resourceType, name);
-        if (attachment) {
-          attachments.push(attachment);
-        } else {
-          text = `[${messageType} download failed]`;
-          try {
-            getBridgeContext().store.insertAuditLog({
-              channelType: this.channelType,
-              channelProvider: this.provider,
-              channelAlias: this.alias,
-              chatId,
-              direction: 'inbound',
-              messageId: msg.message_id,
-              summary: `[ERROR] ${messageType} download failed for key: ${fileKey}`,
-            });
-          } catch { /* best effort */ }
-        }
+        const result = await this.readInboundAttachment(msg.message_id, fileKey, messageType, name, size);
+        text = result.content;
+        if (result.file) attachments.push(result.file);
       }
     } else if (messageType === 'post') {
-      // [P2] Extract text and image keys from rich text (post) messages
-      const { extractedText, imageKeys, warnings } = this.parsePostContent(msg.content);
+      const { extractedText, imageKeys, warnings } = parseFeishuPostContent(msg.content, feishuResourceReference);
       text = extractedText;
-      getContextPromise();
-      const imageDownloads = Promise.all(imageKeys.map((key) =>
-        this.downloadResource(msg.message_id, key, 'image'),
-      ));
-      if (warnings.length > 0) {
-        this.notifyUnsupportedInboundContent(conversationId, msg.message_id, warnings);
-      }
-      for (const attachment of await imageDownloads) {
-        if (attachment) attachments.push(attachment);
-        // Don't add fallback text for individual post images — the text already carries context
+      if (warnings.length > 0) this.notifyUnsupportedInboundContent(conversationId, msg.message_id, warnings);
+      let bytes = 0;
+      for (const [index, key] of [...new Set(imageKeys)].entries()) {
+        const result = await this.readInboundAttachment(msg.message_id, key, 'image', undefined, undefined, index >= 20 ? 0 : MAX_FILE_SIZE - bytes);
+        text = text.split(feishuResourceReference(key)).join(result.content);
+        if (result.file) { attachments.push(result.file); bytes += result.file.size; }
       }
     } else if (messageType === 'merge_forward') {
       text = await this.buildQuotedMessageContext(msg.message_id, attachments, chatId) || '[合并消息读取失败]';
@@ -7222,7 +7173,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Strip @mention markers from text
     text = this.stripMentionMarkers(text);
-    const contextText = await getContextPromise();
+    // Quote downloads share the remaining budget with the message itself.
+    const contextText = await this.buildQuotedMessageContext(msg.parent_id, attachments, chatId, !isBridgeCommandText(commandText));
 
     if (!text.trim() && attachments.length === 0) return;
 
@@ -8045,6 +7997,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return text.replace(/@_user_\d+/g, '').trim();
   }
 
+  private async readInboundAttachment(messageId: string, fileKey: string, type: string, name?: string, size?: number, maxBytes = MAX_FILE_SIZE): Promise<{ file: FileAttachment | null; content: string }> {
+    let reason = `附件下载失败：${name || fileKey}；请按以下信息按需下载。`;
+    const file = maxBytes <= 0 ? null : await this.downloadResource(messageId, fileKey, type, name, { size, maxBytes, onFailure: (message) => { reason = message; } });
+    if (maxBytes <= 0) reason = '附件总量超限，未继续自动下载。';
+    return { file, content: file ? attachmentPromptReference(file.id)
+      : describeDeferredFeishuAttachment({ messageId, fileKey, type, name, size, appId: this.appId, reason }) };
+  }
+
   // ── Resource download ───────────────────────────────────────
 
   /**
@@ -8056,8 +8016,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
     fileKey: string,
     resourceType: string,
     originalName?: string,
+    options: { size?: number; maxBytes?: number; onFailure?: (reason: string) => void } = {},
   ): Promise<FileAttachment | null> {
     if (!this.restClient) return null;
+    const limit = options.maxBytes ?? MAX_FILE_SIZE;
+    const tooLarge = () => { options.onFailure?.('附件超过自动下载上限（单个或本条消息累计 20 MiB），未自动下载；可按需下载。'); return null; };
+    if (options.size !== undefined && options.size > limit) return tooLarge();
 
     try {
       console.log(`[feishu-adapter] Downloading resource: type=${resourceType}, key=${fileKey}, msgId=${messageId}`);
@@ -8077,44 +8041,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
         return null;
       }
 
-      // SDK returns { writeFile, getReadableStream, headers }
-      // Try stream approach first, fall back to writeFile + read if stream fails
-      let buffer: Buffer;
-
-      try {
-        const readable = res.getReadableStream();
-        const chunks: Buffer[] = [];
-        let totalSize = 0;
-
-        for await (const chunk of readable) {
-          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-          totalSize += buf.length;
-          if (totalSize > MAX_FILE_SIZE) {
-            console.warn(`[feishu-adapter] Resource too large (>${MAX_FILE_SIZE} bytes), key: ${fileKey}`);
-            return null;
-          }
-          chunks.push(buf);
-        }
-        buffer = Buffer.concat(chunks);
-      } catch (streamErr) {
-        // Stream approach failed — fall back to writeFile + read
-        console.warn('[feishu-adapter] Stream read failed, falling back to writeFile:', streamErr instanceof Error ? streamErr.message : streamErr);
-
-        const fs = await import('fs');
-        const os = await import('os');
-        const path = await import('path');
-        const tmpPath = path.join(os.tmpdir(), `feishu-dl-${crypto.randomUUID()}`);
-        try {
-          await res.writeFile(tmpPath);
-          buffer = await fs.promises.readFile(tmpPath);
-          if (buffer.length > MAX_FILE_SIZE) {
-            console.warn(`[feishu-adapter] Resource too large (>${MAX_FILE_SIZE} bytes), key: ${fileKey}`);
-            return null;
-          }
-        } finally {
-          try { await fs.promises.unlink(tmpPath); } catch { /* ignore cleanup errors */ }
-        }
+      // Inspect response metadata before consuming bytes. Never fall back to an unbounded writeFile.
+      const readable = res.getReadableStream();
+      const declaredSize = Number(res.headers?.['content-length'] ?? res.headers?.['Content-Length']);
+      if (Number.isFinite(declaredSize) && declaredSize > limit) {
+        readable.destroy();
+        return tooLarge();
       }
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      for await (const chunk of readable) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalSize += bytes.length;
+        if (totalSize > limit) { readable.destroy(); return tooLarge(); }
+        chunks.push(bytes);
+      }
+      const buffer = Buffer.concat(chunks);
 
       if (!buffer || buffer.length === 0) {
         console.warn('[feishu-adapter] Downloaded resource is empty, key:', fileKey);
