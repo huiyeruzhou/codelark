@@ -1,3 +1,4 @@
+import { mappedRuntimeSessionId } from './runtime-session.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -455,7 +456,7 @@ export function buildCurrentCommandRichCard(options: {
     || '';
   const sessionName = session.name?.trim() ? stripLegacySessionPrefix(session.name) : '';
   const configService = createConfigService({ migrate: false });
-  const configScope = { kind: 'session' as const, sessionId: session.id };
+  const configScope = { kind: 'session' as const, sessionId: commonSection ? session.id : mappedRuntimeSessionId(options.store, binding, configSection) || session.id };
   const runtimeConfig = configService.snapshot(configScope).config;
   const configDefinitions = commonSection
     ? currentSessionCommonSettingDefinitions().filter((definition) => !binding.feishuTopic || definition.key !== 'requireMention')
@@ -551,7 +552,7 @@ export function buildCurrentCommandRichCard(options: {
         ? binding.feishuTopic
           ? '通用配置修改当前话题的对话名称、工作目录和 tmux 展示行数。是否需要 @ 跟随所属群；使用 /require-at on|off 修改整个群的规则。'
           : '通用配置只修改当前会话的对话名称、工作目录、tmux 展示行数和群聊 @bot 要求，不会切换 agent。留空会删除当前会话覆盖。'
-        : `当前分栏只显示 ${runtimeLabel(configSection as RuntimeAgent)} 配置；选择分栏只查看和编辑配置；切换执行 agent 请使用 /runtime。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
+        : `当前分栏只显示 ${runtimeLabel(configSection as RuntimeAgent)} 配置；选择分栏可预览配置；点击保存会采用所选 runtime，切换检查与 /runtime 相同。留空或选择“跟随上层配置”会删除当前会话覆盖。`,
     ],
   };
 }

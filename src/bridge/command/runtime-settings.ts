@@ -47,6 +47,7 @@ import {
 } from '../../domain/session-runtime.js';
 import { getGlobalCodexModel } from '../session/global-config.js';
 import type { ChannelChat, InboundMessage } from '../../domain/index.js';
+import { requestDirectoryCreation } from './directory-confirmation.js';
 import type { OutboundRichCard } from '../../domain/index.js';
 import { listCursorAvailableModels, type CursorAvailableModel } from '../../runtime/cursor/models.js';
 import { getCursorDesktopModels, setCursorDesktopModel, CursorDesktopModelControlUnavailable } from '../../runtime/cursor/desktop-bridge-client.js';
@@ -691,6 +692,7 @@ export function handleChangeDirectoryCommand(options: {
   currentBinding: ChannelChat | null;
   store: BridgeStore;
   markdown: boolean;
+  richCard?: (card: OutboundRichCard) => void;
 }): string {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -724,6 +726,11 @@ export function handleChangeDirectoryCommand(options: {
       return `切换目录失败：目标不是目录：${resolved.workDir}`;
     }
   } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      const result = requestDirectoryCreation({ address: options.msg.address, binding, session, directory: resolved.workDir, command: `/cd ${resolved.workDir}` });
+      options.richCard?.(result.richCard);
+      return result.response;
+    }
     return `切换目录失败：${error instanceof Error ? error.message : String(error)}`;
   }
   setSessionWorkspaceToml(session.id, resolved.workDir);
@@ -745,6 +752,7 @@ export function handleRuntimeCommand(options: {
   store: BridgeStore;
   deps?: RuntimeSettingsCommandDeps;
   markdown: boolean;
+  prepareSwitch?: (target: BridgeSession) => void;
 }): string {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -806,6 +814,7 @@ export function handleRuntimeCommand(options: {
     [currentRuntime]: session.id,
     [targetRuntime]: nextSession.id,
   };
+  options.prepareSwitch?.(nextSession);
   options.store.updateChannelChat(binding.id, {
     bridgeSessionId: nextSession.id,
     runtimeBridgeSessionIds,

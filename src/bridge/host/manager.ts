@@ -345,6 +345,7 @@ const STARTUP_NOTICE_CARD_TEMPLATE = 'turquoise';
 const BACKGROUND_INPUT_LIMIT = 64_000;
 // 保存下一次执行的配置不依赖当前任务结束；只有实际切换执行载体才进入执行队列。
 const SESSION_SETTINGS_COMMANDS = new Set([
+  '/mkdir-confirm', '/mkdir-cancel',
   '/current-config', '/current-runtime', '/cd', '/cwd', '/model', '/mode', '/yolo',
   '/sandbox', '/network', '/reasoning', '/require-at', '/whitelist', '/customer', '/tmux-set',
 ]);

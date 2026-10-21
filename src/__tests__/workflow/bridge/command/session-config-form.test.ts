@@ -37,21 +37,22 @@ function fixture() {
   return { store, service, session, scope, command };
 }
 
-it('editing another runtime is independent of the active task and applies a validated form together', async () => {
+it('previewing another runtime keeps the active task, and saving uses the runtime switch warning', async () => {
   const f = fixture();
   const card = (await f.command('/current-runtime claude')).richCard!;
   assert.equal(parseCommandCallbackData(card.form!.submitCallbackData)?.scopeSessionId, f.session.id);
   const before = f.service.snapshot(f.scope).config;
-  assert.match((await f.command('/current-config claude', { claudeDefaultModel: 'after', cld_idle_min: '-1' })).text, /配置未保存/);
-  assert.deepEqual(f.service.snapshot(f.scope).config, before, '后面的无效字段不能留下前面模型修改');
-  assert.match((await f.command('/current-config claude', { claudeDefaultModel: 'after', cld_idle_min: '15' })).text, /已保存当前会话配置/);
-  assert.equal(f.service.get('runtime.claude.model', f.scope), 'after');
-  assert.equal(f.service.get('runtime.claude.idleTimeoutMinutes', f.scope), 15);
+  const warning = (await f.command('/runtime claude')).text;
+  assert.match(warning, /请先停止当前对话/);
+  assert.equal((await f.command('/current-config claude', { claudeDefaultModel: 'after', cld_idle_min: '15' })).text, warning);
+  assert.deepEqual(f.service.snapshot(f.scope).config, before, 'a rejected switch must not save any part of the form');
 });
 
-it('invalid directory prevents the name and other form values from being saved', async () => {
+it('a missing directory asks for confirmation before saving any form values', async () => {
   const f = fixture();
-  assert.match((await f.command('/current-config common', { clk_name: 'new name', clk_cwd: `/missing-${f.session.id}`, tmuxCaptureLines: '123' })).text, /配置未保存/);
+  const result = await f.command('/current-config common', { clk_name: 'new name', clk_cwd: `/missing-${f.session.id}`, tmuxCaptureLines: '123' });
+  assert.match(result.text, /目录不存在/);
+  assert.equal(result.richCard?.title, '创建工作目录');
   assert.equal(f.store.getSession(f.session.id)?.name, 'form');
   assert.equal(f.service.get('session.workspace', f.scope), os.tmpdir());
   assert.notEqual(f.service.get('session.tmuxCaptureLines', f.scope), 123);

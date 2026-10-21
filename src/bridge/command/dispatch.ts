@@ -1,3 +1,5 @@
+import { requestDirectoryCreation, consumeDirectoryCreation } from './directory-confirmation.js';
+import { mappedRuntimeSessionId, sessionHasActiveRuntimeTurn } from './runtime-session.js';
 import fs from 'node:fs';
 import {
   resolveCommandAlias,
@@ -260,14 +262,16 @@ async function buildCurrentCommandRichCardWithCursorModels(
   if (!session) return card;
   const section = options.configSection || options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
   if (section !== 'cursor') return card;
-  if (resolveCursorCapabilities(session).modelCatalog === 'unavailable') return attachCursorDesktopModelNotice(card, session.id);
+  const targetId = mappedRuntimeSessionId(options.store, options.binding, 'cursor') || session.id;
+  const targetSession = options.store.getSession(targetId) || session;
+  if (resolveCursorCapabilities(targetSession).modelCatalog === 'unavailable') return attachCursorDesktopModelNotice(card, session.id);
   try {
     const models = await listCursorAvailableModels();
     return attachCursorModelPickerControls({
       card,
       models,
       target: 'session',
-      selectedSlug: sessionCursorModelOverride(session.id),
+      selectedSlug: sessionCursorModelOverride(targetId),
       requestedPage,
       pageCommand: (page) => `/current-runtime cursor --cursor-model-page=${page}`,
       scopeSessionId: session.id,
@@ -392,12 +396,20 @@ async function handleCurrentConfigFormCommand(options: {
 
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const submittedSection = parseCurrentConfigSectionArg(options.args) || activeRuntime;
+  const switching = submittedSection !== 'common' && submittedSection !== activeRuntime;
+  if (switching && sessionHasActiveRuntimeTurn(options.deps, session)) {
+    return { response: handleRuntimeCommand({ msg: options.msg, args: submittedSection, currentBinding: binding,
+      store: options.store, deps: options.deps, markdown: options.markdown }) };
+  }
+  const targetSessionId = submittedSection === 'common' ? session.id : mappedRuntimeSessionId(options.store, binding, submittedSection) || session.id;
   const cursorModelConfiguration = submittedSection === 'cursor'
-    ? resolveCursorCapabilities(session).modelConfiguration : undefined;
+    ? resolveCursorCapabilities(options.store.getSession(targetSessionId) || session).modelConfiguration : undefined;
   const responses: string[] = [];
   const backgroundEffects: SessionCommandBackgroundEffect[] = [];
   const service = createConfigService({ migrate: false });
-  const scope = { kind: 'session' as const, sessionId: session.id };
+  const scope = { kind: 'session' as const, sessionId: targetSessionId };
+  let missingDirectory: string | undefined;
+  let switched = false;
   let currentConfig = service.snapshot(scope).config;
   const patch: ConfigPatch = {};
   const unsetPaths: ConfigPath[] = [];
@@ -410,13 +422,14 @@ async function handleCurrentConfigFormCommand(options: {
     if (!parsed.ok) return { response: parsed.message };
   }
   const cwd = submittedSection === 'common' ? normalizeFormString(formValue.clk_cwd || formValue.cwd) : '';
-  if (cwd && cwd !== getSessionWorkingDirectory(session)) {
+  if (cwd) {
     const resolved = resolveSessionWorkingDirectoryPath(cwd, getSessionWorkingDirectory(session));
     if (!resolved.ok) return { response: `配置未保存：${resolved.message}` };
     try {
       if (!fs.statSync(resolved.workDir).isDirectory()) return { response: '配置未保存：目标不是目录。' };
     } catch (error) {
-      return { response: `配置未保存：${formatCurrentConfigWriteError(error)}` };
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') missingDirectory = resolved.workDir;
+      else return { response: `配置未保存：${formatCurrentConfigWriteError(error)}` };
     }
     patch.session = { workspace: resolved.workDir };
     responses.push(`工作目录: ${resolved.workDir}`);
@@ -441,7 +454,7 @@ async function handleCurrentConfigFormCommand(options: {
       if (changesValue) return { response: `配置未保存：${CURSOR_DESKTOP_MODEL_CONTROL_NOTICE}` };
     }
     if (!rawValue) {
-      if (service.resolve(configPath, scope).source === 'session') {
+      if (switching || service.resolve(configPath, scope).source === 'session') {
         unsetPaths.push(configPath);
         fallbackSettings.push(definition);
       }
@@ -455,8 +468,18 @@ async function handleCurrentConfigFormCommand(options: {
     mergePatch(currentConfig, written.patch);
     updatedSettings.push(definition);
   }
+  if (missingDirectory) return requestDirectoryCreation({ address: options.msg.address, binding, session,
+    directory: missingDirectory, command: `/current-config ${submittedSection}`, formValue: { ...formValue, clk_cwd: missingDirectory } });
   try {
-    if (Object.keys(patch).length || unsetPaths.length) service.update(scope, patch, unsetPaths);
+    if (switching) {
+      responses.push(handleRuntimeCommand({ msg: options.msg, args: submittedSection, currentBinding: binding,
+        store: options.store, deps: options.deps, markdown: options.markdown, prepareSwitch: (target) => {
+          scope.sessionId = target.id;
+          if (Object.keys(patch).length || unsetPaths.length) service.update(scope, patch, unsetPaths);
+          switched = true;
+        } }));
+      if (!switched) return { response: responses.at(-1)! };
+    } else if (Object.keys(patch).length || unsetPaths.length) service.update(scope, patch, unsetPaths);
   } catch (error) {
     return { response: `配置未保存：${formatCurrentConfigWriteError(error)}` };
   }
@@ -473,12 +496,13 @@ async function handleCurrentConfigFormCommand(options: {
     }
   }
   const refreshedBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId) || binding;
+  const savedSession = options.store.getSession(refreshedBinding.bridgeSessionId) || session;
   return {
     response: responses.length > 0 || updatedSettings.length > 0 || fallbackSettings.length > 0
       ? [
-          '已保存当前会话配置；当前任务继续使用原配置。',
-          session.runtime?.codex?.appServerEndpoint ? '新配置从下一次由 IM 发起的新轮次开始生效。'
-            : resolveEffectiveRuntimeProvider(session, binding).provider === 'tmux'
+          switched ? '已保存所选 runtime 的配置并切换当前聊天。' : '已保存当前会话配置；当前任务继续使用原配置。',
+          savedSession.runtime?.codex?.appServerEndpoint ? '新配置从下一次由 IM 发起的新轮次开始生效。'
+            : resolveEffectiveRuntimeProvider(savedSession, refreshedBinding).provider === 'tmux'
               ? '已启动的旧 TUI 需通过 `/p tmux` 确认结束并重启后采用新配置。' : '新配置从下一次执行开始生效。',
           ...responses,
           ...(updatedSettings.length > 0 ? [buildSettingsFields(currentConfig, updatedSettings).map(([label, value]) => `${label}: ${value}`).join('\n')] : []),
@@ -772,6 +796,21 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/mkdir-confirm':
+    case '/mkdir-cancel': {
+      const liveBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+      const liveSession = liveBinding ? store.getSession(liveBinding.bridgeSessionId) : null;
+      const pending = consumeDirectoryCreation(args.trim(), msg.address, liveBinding, liveSession);
+      if (!pending) { response = '创建目录确认已失效或会话已变化，请重新提交。'; break; }
+      if (command === '/mkdir-cancel') { response = '已取消创建目录，配置未保存。'; break; }
+      try { fs.mkdirSync(pending.directory, { recursive: true }); }
+      catch (error) { response = `创建目录失败：${formatCurrentConfigWriteError(error)}`; break; }
+      await handleBridgeCommand(adapter, { ...msg, text: pending.command, callbackData: undefined,
+        raw: pending.formValue ? { event: { action: { form_value: pending.formValue } } } : undefined,
+      }, pending.command, { ...deps, scopedBinding: liveBinding });
+      return;
+    }
+
     case '/cd': {
       response = handleChangeDirectoryCommand({
         msg,
@@ -779,6 +818,7 @@ export async function handleBridgeCommand(
         currentBinding,
         store,
         markdown: responseParseMode === 'Markdown',
+        richCard: (card) => { responseRichCard = card; },
       });
       break;
     }

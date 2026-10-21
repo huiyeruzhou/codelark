@@ -2280,26 +2280,28 @@ describe('command-dispatch', () => {
     );
 
     assert.equal(store.getSession(claudeBinding.bridgeSessionId)?.name, claudeNameBeforeRuntimeSave);
+    const savedClaudeBinding = store.getChannelChat(address.channelType, address.chatId)!;
+    assert.equal(getSessionActiveRuntime(store.getSession(savedClaudeBinding.bridgeSessionId)), 'claude');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.yoloMode', {
       kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
+      sessionId: savedClaudeBinding.bridgeSessionId,
     }), 'on');
-    assert.equal(resolveClaudeRuntimeConfig(store.getSession(claudeBinding.bridgeSessionId), claudeBinding).permissionMode, 'bypassPermissions');
+    assert.equal(resolveClaudeRuntimeConfig(store.getSession(savedClaudeBinding.bridgeSessionId), savedClaudeBinding).permissionMode, 'bypassPermissions');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.provider', {
       kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
+      sessionId: savedClaudeBinding.bridgeSessionId,
     }), 'tmux');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.model', {
       kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
+      sessionId: savedClaudeBinding.bridgeSessionId,
     }), 'test-model');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.reasoningEffort', {
       kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
+      sessionId: savedClaudeBinding.bridgeSessionId,
     }), 'max');
     assert.equal(createConfigService({ migrate: false, env: {} }).get('runtime.claude.idleTimeoutMinutes', {
       kind: 'session',
-      sessionId: claudeBinding.bridgeSessionId,
+      sessionId: savedClaudeBinding.bridgeSessionId,
     }), 15);
     assert.deepEqual(adapter.renamedGroups, []);
     assert.equal(sent.at(-1)?.richCard?.form?.inputDefaultValue, undefined);
@@ -2326,7 +2328,7 @@ describe('command-dispatch', () => {
     );
     const codexBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(codexBinding);
-    assert.equal(getSessionActiveRuntime(store.getSession(codexBinding.bridgeSessionId)), 'codex');
+    assert.equal(getSessionActiveRuntime(store.getSession(codexBinding.bridgeSessionId)), 'claude');
     assert.equal(sent.at(-1)?.richCardUpdateMessageId, 'reply-5');
     assert.equal(sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, buildCommandCallbackData('/current-runtime codex'));
     assert.equal(getThreadTableMessageRecord(address, 'current')?.messageId, 'reply-5');
@@ -2427,16 +2429,16 @@ describe('command-dispatch', () => {
     const updatedBinding = store.getChannelChat(address.channelType, address.chatId);
     assert.ok(updatedBinding);
     const updated = store.getSession(updatedBinding.bridgeSessionId);
-    assert.equal(updated?.name, kimiNameBeforeRuntimeSave);
-    assert.equal(getSessionActiveRuntime(updated), 'codex');
+    assert.equal(store.getSession(kimiBinding.bridgeSessionId)?.name, kimiNameBeforeRuntimeSave);
+    assert.equal(getSessionActiveRuntime(updated), 'kimi');
     const config = createConfigService({ migrate: false, env: {} });
     assert.equal(config.get('runtime.kimi.model', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'moonshot-current-card');
     assert.equal(config.get('runtime.kimi.provider', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'tmux');
     assert.equal(config.get('runtime.kimi.thinkingMode', { kind: 'session', sessionId: updatedBinding.bridgeSessionId }), 'on');
-    const afterKimiForm = config.snapshot({ kind: 'session', sessionId: updatedBinding.bridgeSessionId }).config;
+    const afterKimiForm = config.snapshot({ kind: 'session', sessionId: kimiBinding.bridgeSessionId }).config;
     assert.deepEqual(afterKimiForm.runtime.codex, beforeKimiForm.runtime.codex);
     assert.deepEqual(afterKimiForm.runtime.claude, beforeKimiForm.runtime.claude);
-    assert.match(sent.at(-1)?.text || '', /已保存当前会话配置/);
+    assert.match(sent.at(-1)?.text || '', /已保存所选 runtime 的配置并切换/);
     assert.match(sent.at(-1)?.text || '', /runtime\.kimi\.model/);
     assert.match(sent.at(-1)?.text || '', /moonshot-current-card/);
     assert.doesNotMatch(sent.at(-1)?.text || '', /runtime\.codex\.provider|runtime\.claude\.provider/);
