@@ -43,6 +43,8 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 
 ## 命令展示
 
+Codex thread 模式中，单独发送 `<C-c>`（也支持 `<Ctrl+C>`、`<Cmd+C>`）等同 `/stop`，请求中断当前轮次；没有运行中的轮次时只返回空闲提示。其他终端按键及组合序列（例如 `<Enter>`、`<Esc>`、`<C-c><Enter>`）直接返回不支持，不会提交给模型。`/tmux` 和 `/tmux-key` 使用同样规则；正文或代码块中的按键示例仍按普通消息发送。
+
 IM 内 `/h` 的文案由 [src/bridge/command/help.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/command/help.ts) 生成。Web 工作台“命令说明”页面在 [src/operator-ui/shell.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/operator-ui/shell.ts) 中渲染。新增命令时需要同步这两处用户入口。
 
 模块边界：生产代码中只有 `bridge/host` 直接调用 `bridge/command`；通道、turn、runtime 等横向 owner 不直接 import command，command 也不反向 import `bridge/host/*`。跨 turn 和 command 共用的 agent question 回调协议位于 [src/bridge/callbacks/agent-question.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/callbacks/agent-question.ts)。命令需要的聊天绑定和 startup target 共享入口分别是 [src/bridge/session/channel-router.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/session/channel-router.ts) 和 [src/bridge/startup-notice-target.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/startup-notice-target.ts)。

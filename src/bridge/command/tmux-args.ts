@@ -136,6 +136,17 @@ export function isPureSpecialKeySyntax(raw: string): boolean {
   return Boolean(trimmed) && /^(?:<[^<>]+>\s*)+$/.test(trimmed);
 }
 
+/** Thread backends can interrupt a turn, but cannot accept terminal keystrokes. */
+export function classifyCodexThreadKeyInput(raw: string): 'interrupt' | 'unsupported' | undefined {
+  if (!isPureSpecialKeySyntax(raw)) return undefined;
+  const actions = parseTmuxKeySequence(raw);
+  return actions?.length === 1 && actions[0]?.type === 'key' && actions[0].key === 'C-c'
+    ? 'interrupt'
+    : 'unsupported';
+}
+
+export const CODEX_THREAD_UNSUPPORTED_KEYS = 'Codex thread 模式不支持此终端控制命令。中断任务请发送 <C-c> 或 /stop。';
+
 function parseOnOff(raw: string): boolean | null {
   const token = raw.trim().toLowerCase();
   if (['on', 'true', '1', 'yes', 'enable', 'enabled'].includes(token)) return true;

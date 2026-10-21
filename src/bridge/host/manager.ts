@@ -208,6 +208,7 @@ import {
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import { prepareCodexAppServerForBinding, codexAppServerTurnOptions, scheduleCodexAppServerView } from '../command/tmux.js';
 import { CodexWriterMigrationError, getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../runtime/codex/app-server-registry.js';
+import { classifyCodexThreadKeyInput, CODEX_THREAD_UNSUPPORTED_KEYS } from '../command/tmux-args.js';
 import { requestCodexDesktopRestart } from '../command/codex-desktop-restart-confirmation.js';
 import { readCodexBackendStatus, type BridgeRuntimeStatus } from '../session/display/codex-backend-status.js';
 import { stopRunningSession } from '../session/stop-running-session.js';
@@ -3113,10 +3114,31 @@ function sessionMutatingCallbackLane(callbackData: string): { jobKind: string; s
 }
 
 function shouldBypassSessionLock(msg: InboundMessage): boolean {
-  return isPendingClearConfirmationReply(msg.address, msg.text) || shouldRouteTerminalAppendInline(msg);
+  return Boolean(codexThreadControlForMessage(msg)) || isPendingClearConfirmationReply(msg.address, msg.text) || shouldRouteTerminalAppendInline(msg);
+}
+
+function codexThreadControlForMessage(msg: InboundMessage): 'interrupt' | 'unsupported' | undefined {
+  if (msg.channelEvent || msg.callbackData || msg.attachments?.length) return undefined;
+  const store = getBridgeContext().store;
+  const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+  const session = binding && store.getSession(binding.bridgeSessionId);
+  if (resolveEffectiveRuntimeProvider(session, binding).runtime !== 'codex') return undefined;
+  if (isBridgeCommandText(msg.text)) {
+    const { resolvedCommand, args } = splitInboundCommandText(msg.text);
+    if (resolvedCommand !== '/tmux' && resolvedCommand !== '/tmux-key') return undefined;
+    return classifyCodexThreadKeyInput(args) || (resolvedCommand === '/tmux-key' && args.trim() ? 'unsupported' : undefined);
+  }
+  return classifyCodexThreadKeyInput(msg.text);
 }
 
 function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): AdapterImmediateLane | null {
+  if (codexThreadControlForMessage(msg)) {
+    return {
+      laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'thread-control'}`,
+      laneKind: 'control',
+      jobKind: 'control:thread-key',
+    };
+  }
   if (category === 'channel-event') {
     return {
       laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || msg.updateId || 'event'}`,
@@ -4966,12 +4988,15 @@ async function handleMessage(
     ack();
     return;
   }
-  // Check before every callback/command branch, including trusted local ingress.
-  if (msg.callbackData || isBridgeCommandText(msg.text) || msg.text.trim().toLowerCase() === '//clear') {
-    await adapter.prepareControlAuthorization?.(msg.address, msg.callbackData ? undefined : msg.text);
+  // Key aliases carry the same authorization as slash controls, including local ingress.
+  const threadControl = codexThreadControlForMessage(msg);
+  const controlText = threadControl === 'interrupt' ? '/stop' : msg.text;
+  const isControl = Boolean(threadControl || msg.callbackData || isBridgeCommandText(msg.text) || msg.text.trim().toLowerCase() === '//clear');
+  if (isControl) {
+    await adapter.prepareControlAuthorization?.(msg.address, msg.callbackData ? undefined : controlText);
   }
-  const controlAuthorized = adapter.isControlAuthorized?.(msg.address, msg.callbackData ? undefined : msg.text) ?? true;
-  if (!controlAuthorized && (msg.callbackData || isBridgeCommandText(msg.text) || msg.text.trim().toLowerCase() === '//clear')) {
+  const controlAuthorized = adapter.isControlAuthorized?.(msg.address, msg.callbackData ? undefined : controlText) ?? true;
+  if (!controlAuthorized && isControl) {
     enqueueBridgeNotice(adapter, msg.address, '客服模式：只有控制白名单用户（留空时为 bot 创始人）可以执行控制指令。', { replyToMessageId: msg.messageId });
     ack();
     return;
@@ -5369,7 +5394,7 @@ async function handleMessage(
     const binding = router.resolve(msg.address);
     const session = store.getSession(binding.bridgeSessionId);
     if (session) {
-      const questionReply = answerAppServerQuestion(msg, session.id, store);
+      const questionReply = threadControl ? undefined : answerAppServerQuestion(msg, session.id, store);
       if (questionReply !== undefined) {
         enqueueBridgeNotice(adapter, msg.address, questionReply);
         ack();
@@ -5380,6 +5405,12 @@ async function handleMessage(
         try {
           const protocol = await prepareCodexAppServerForBinding(store, binding, session);
           if (protocol) {
+            if (threadControl) {
+              if (threadControl === 'interrupt') await handleCommand(adapter, msg, '/stop', { scopedBinding: binding });
+              else enqueueBridgeNotice(adapter, msg.address, CODEX_THREAD_UNSUPPORTED_KEYS, { replyToMessageId: msg.messageId });
+              ack();
+              return;
+            }
             observeAppServerRequests(session.id, protocol, adapter, msg.address, store);
             if (effective.provider === 'tmux') {
               void scheduleCodexAppServerView({ store, binding, session, handle: protocol,

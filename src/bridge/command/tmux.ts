@@ -93,6 +93,8 @@ import {
 } from './runtime-settings.js';
 import {
   DEFAULT_CAPTURE_LINES,
+  classifyCodexThreadKeyInput,
+  CODEX_THREAD_UNSUPPORTED_KEYS,
   isPureSpecialKeySyntax,
   normalizeCaptureLines,
   parseTmuxKeySequence,
@@ -1729,8 +1731,13 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         const protocol = await prepareCodexAppServerForBinding(store, binding, session);
         if (protocol) {
           protocolSelected = true;
-          if (command === '/tmux-key' || (!params.tmuxProviderAutoForward && isPureSpecialKeySyntax(args))) {
-            return '当前线程由共享 Codex 协议控制。请用 /stop 中断任务；界面按键请在 tmux 查看入口或 Desktop 中操作。';
+          const control = classifyCodexThreadKeyInput(args);
+          if (control === 'interrupt') {
+            const interrupted = await protocol.lifecycle.interrupt(protocol.threadId);
+            return interrupted ? '已请求中断，等待 Codex 确认轮次结束。' : '当前没有正在运行的协议轮次。';
+          }
+          if (command === '/tmux-key' || control === 'unsupported') {
+            return CODEX_THREAD_UNSUPPORTED_KEYS;
           }
           params.onAppServerPrepared?.(protocol);
           void scheduleCodexAppServerView({ store, binding, session, handle: protocol,
