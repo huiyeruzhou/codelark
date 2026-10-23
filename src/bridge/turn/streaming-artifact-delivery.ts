@@ -17,7 +17,7 @@ export interface StreamingArtifactDeliveryControllerOptions {
 }
 
 /**
- * Delivers complete clk-send blocks and local Markdown images as soon as
+ * Delivers complete clk-send blocks and local links to supported image files as soon as
  * they appear in answer text.
  *
  * Observations are synchronous and non-blocking. Delivery is serialized in the
@@ -27,42 +27,19 @@ export interface StreamingArtifactDeliveryControllerOptions {
 export function createStreamingArtifactDeliveryController(
   options: StreamingArtifactDeliveryControllerOptions,
 ): StreamingArtifactDeliveryController {
-  const openTag = '<clk-send>';
-  const closeTag = '</clk-send>';
   const attemptedKeys = new Set<string>();
   const deliveredKeys = new Set<string>();
   let closed = false;
-  let observedLength = 0;
-  let pendingText = '';
+  let observedText = '';
   let deliveryChain: Promise<void> = Promise.resolve();
 
   const observeAnswerText = (answerText: string): void => {
     if (closed) return;
-    if (answerText.length < observedLength) {
-      observedLength = 0;
-      pendingText = '';
-    }
-    const delta = answerText.slice(observedLength);
-    observedLength = answerText.length;
-    if (!delta) return;
-    pendingText += delta;
-
-    const discovered: OutboundAttachment[] = [];
-    while (pendingText) {
-      const normalized = pendingText.toLowerCase();
-      const openIndex = normalized.indexOf(openTag);
-      if (openIndex < 0) {
-        pendingText = pendingText.slice(-(openTag.length - 1));
-        break;
-      }
-      if (openIndex > 0) pendingText = pendingText.slice(openIndex);
-      const closeIndex = pendingText.toLowerCase().indexOf(closeTag, openTag.length);
-      if (closeIndex < 0) break;
-      const blockEnd = closeIndex + closeTag.length;
-      discovered.push(...parseOutboundArtifacts(pendingText.slice(0, blockEnd)).attachments);
-      pendingText = pendingText.slice(blockEnd);
-    }
-    discovered.push(...parseOutboundArtifacts(answerText).attachments);
+    if (answerText === observedText) return;
+    observedText = answerText;
+    // Parse the complete Markdown context; slicing a tag out of a code example
+    // turns documentation into an executable upload instruction.
+    const discovered = parseOutboundArtifacts(answerText).attachments;
 
     const pendingDelivery = dedupeOutboundAttachments(discovered)
       .filter((attachment) => !attemptedKeys.has(outboundAttachmentKey(attachment)));

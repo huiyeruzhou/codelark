@@ -17,7 +17,7 @@ export async function runOutboundImages(c: ConfigurationStoryContext): Promise<(
   const initial = await c.state(d.chatId);
   assert(initial.threadId);
   const marker = `IMAGE_DELIVERY_${d.runId}`;
-  const answer = `${marker}\n[报告](<${filePath}>)\n[图片链接](<${imagePath}>)\n![附图](<${imagePath}>)`;
+  const answer = `${marker}\n[报告](<${filePath}>)\n[附图](<${imagePath}>)\n![附图](<${imagePath}>)`;
   d.model.enqueue({ text: answer });
   const modelInput = await c.send(d.chatId, marker);
   await c.visible(d.chatId, marker);
@@ -36,7 +36,7 @@ export async function runOutboundImages(c: ConfigurationStoryContext): Promise<(
     const resources = messages.filter(m => ['image', 'file'].includes(m.msg_type));
     // No other lifecycle step sends images/files; recheck at the end to catch
     // delayed final uploads and duplicate streaming deliveries.
-    assert.equal(resources.length, 3, '链接不能上传，图片不能重复或退化成文件');
+    assert.equal(resources.length, 3, '非图片链接不能上传，同一图片不能重复或退化成文件');
     for (const [input, type] of expected) {
       const replies = resources.filter(m => m.reply_to === input);
       assert.equal(replies.length, 1, '每次显式附件发送必须且只能产生一条原生消息');
@@ -50,8 +50,9 @@ export async function runOutboundImages(c: ConfigurationStoryContext): Promise<(
     assert.equal(modelImages[0].msg_type, 'image');
     assert.match(JSON.stringify(modelImages[0].content), /img_/);
     const content = String(cards[0].content);
-    assert(content.includes(marker) && content.includes(filePath) && content.includes(imagePath), '普通本地链接必须保留在实际卡片正文');
-    assert(!content.includes('![附图]'), '附图不应在正文重复显示本地 Markdown');
+    assert(content.includes(marker) && content.includes(filePath) && content.includes(imagePath), '所有原链接保留在实际卡片正文，图片同时额外交付');
+    assert(content.includes('[附图]('), '原始图片链接标签必须保留');
+    assert(!content.includes('![附图]'), '本地图片写法转为普通超链接以兼容卡片');
     assert.equal((await c.state(d.chatId)).threadId, initial.threadId);
   };
   await verify();
@@ -59,7 +60,10 @@ export async function runOutboundImages(c: ConfigurationStoryContext): Promise<(
   // Later lifecycle steps intentionally replace the thread, so only the
   // message invariants apply to the final readback.
   return async () => {
-    const resources = (await newBotMessages()).filter(m => ['image', 'file'].includes(m.msg_type));
+    const messages = await newBotMessages();
+    const resources = messages.filter(m => ['image', 'file'].includes(m.msg_type));
+    const card = messages.find(m => m.msg_type === 'interactive' && String(m.content).includes(marker));
+    assert(card && String(card.content).includes(imagePath) && String(card.content).includes('[附图]('), '图片送达后的最终卡片必须仍保留原链接');
     assert.equal(resources.length, 3, '终态出现延迟上传或重复附件');
     c.check('outbound_images_no_late_duplicates', { messageIds: resources.map(m => m.message_id) });
   };

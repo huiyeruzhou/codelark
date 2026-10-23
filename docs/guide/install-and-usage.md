@@ -75,7 +75,9 @@ codelark setup
 6. 可选设置飞书用户 open_id 白名单。
 7. 可选安装 `codelark`、`condition-monitor` 和官方 `lark-doc` skills。`codelark` 覆盖飞书消息、附件、问题卡片、自动化卡片和 Agent 通讯；`condition-monitor` 用于在外部条件满足时向指定群聊或 Agent 只发送一次通知；官方 `lark-doc` 通过 `npx skills add ...` 单独安装。
 
-两个 CodeLark 内置 skills 都随 npm 包发布。向导首次安装它们；无论使用内置更新还是手工升级 npm 包，新版本都会在下一次 Bridge 启动时带锁刷新、恢复可能中断的旧备份，并清理 `codelark-question`、`codelark-auto` 旧目录。手动刷新可运行：
+两个 CodeLark 内置 skills 都随 npm 包发布。向导首次安装它们；无论使用内置更新还是手工升级 npm 包，新版本都会在下一次 Bridge 启动时检查并带锁同步本地 skills，补齐缺失项、替换旧内容、恢复可能中断的旧备份，并清理 `codelark-question`、`codelark-auto` 旧目录。这一步在“已经运行”的快捷返回前也会执行；同步失败会明确终止本次启动，不再带着旧 skill 报告成功。用户自己的 skills 和单独安装的官方 `lark-doc` 不在内置同步范围内。
+
+版本更新 worker 和源码 hot-update 都在停止现有 Bridge 前显式更新内置 skills；失败时不会继续执行重启。已加载旧 skill 的模型会话仍可能保留旧上下文，新会话会读取同步后的指引。手动刷新可运行：
 
 ```bash
 codelark install-skills codelark condition-monitor

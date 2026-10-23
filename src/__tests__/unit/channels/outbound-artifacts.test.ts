@@ -11,6 +11,87 @@ import {
 } from '../../../channels/delivery/artifacts.js';
 
 describe('outbound-artifacts', () => {
+  it('preserves every ordinary file link and downgrades non-image image syntax to a link', () => {
+    for (const target of [
+      '/tmp/codelark-link-demo/runner.py', '/tmp/codelark-link-demo/runner.py:193',
+      '/tmp/codelark-link-demo/report.pdf', '/tmp/codelark-link-demo/README',
+      '/tmp/codelark-link-demo/report%20one.html', 'file:///tmp/codelark-link-demo/report.pdf',
+      'C:\\codelark-link-demo\\runner.ts',
+      '/tmp/codelark-link-demo/image.svg', '/tmp/codelark-link-demo/photo.png:12',
+      'file:///tmp/codelark-link-demo/photo.png#L12',
+    ]) {
+      const link = `[文件](<${target}>)`;
+      for (const input of [link, `!${link}`]) {
+        const text = `前文\n${input}\n后文`;
+        const parsed = parseOutboundArtifacts(text);
+        assert.deepEqual(parsed.attachments, [], target);
+        assert.equal(parsed.cleanText, `前文\n${link}\n后文`, target);
+        assert.equal(stripOutboundArtifactBlocksForStreaming(text), `前文\n${link}\n后文`, target);
+      }
+    }
+  });
+
+  it('classifies local images by extension in either link form, case-insensitively', () => {
+    for (const extension of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'tif', 'tiff']) {
+      for (const suffix of [extension, extension.toUpperCase()]) {
+        for (const bang of ['', '!']) {
+          const target = `/tmp/codelark-link-demo/photo.${suffix}`;
+          const text = `前文\n${bang}[图片](<${target}>)\n后文`;
+          const parsed = parseOutboundArtifacts(text);
+          assert.deepEqual(parsed.attachments.map(({ kind, path }) => ({ kind, path })), [{ kind: 'image', path: target }]);
+          assert.equal(parsed.cleanText, `前文\n[图片](<${target}>)\n后文`);
+          assert.equal(stripOutboundArtifactBlocksForStreaming(text), parsed.cleanText);
+        }
+      }
+    }
+  });
+
+  const sourcePath = '/tmp/codelark-source-demo/src/runner.py:193';
+
+  it('keeps source locations as links even when wrapped as an upload instruction', () => {
+    for (const location of [sourcePath, `${sourcePath}:5`, sourcePath.replace(':193', '#L193-L200')]) {
+      const link = `[runner.py](<${location}>)`;
+      assert.equal(parseOutboundArtifacts(link).cleanText, link);
+      assert.deepEqual(parseOutboundArtifacts(link).attachments, []);
+      const raw = `<clk-send>${JSON.stringify({ msg_type: 'file', local_path: location, name: 'runner.py' })}</clk-send>`;
+      assert.equal(parseOutboundArtifacts(raw).cleanText, link);
+      assert.deepEqual(parseOutboundArtifacts(raw).attachments, []);
+      assert.equal(stripOutboundArtifactBlocksForStreaming(raw), link);
+      assert.deepEqual(parseOutboundArtifacts(`![源码](<${location}>)`).attachments, []);
+    }
+  });
+
+  it('preserves links and surrounding prose when a control block cannot be parsed', () => {
+    for (const body of [`[源码](${sourcePath})`, '{"msg_type":"file", broken}', '{"msg_type":"file","local_path":"relative.txt"}']) {
+      const raw = `前文\n<clk-send>\n${body}\n</clk-send>\n后文`;
+      assert.equal(parseOutboundArtifacts(raw).cleanText, raw);
+      assert.deepEqual(parseOutboundArtifacts(raw).attachments, []);
+      assert.equal(stripOutboundArtifactBlocksForStreaming(raw), raw);
+    }
+  });
+
+  it('does not turn escaped image links or code examples into uploads', () => {
+    const raw = [
+      `\\![源码](${sourcePath})`,
+      '`![示例](/tmp/example.png)`',
+      '`[示例](/tmp/example.png)`',
+      '\\[示例](/tmp/example.png)',
+      '\\![示例](/tmp/example.png)',
+      '~~~markdown',
+      '<clk-send>{"type":"file","path":"/tmp/example.txt"}</clk-send>',
+      '![围栏](/tmp/example.png)',
+      '[围栏](/tmp/example.png)',
+      '~~~',
+      '```xml',
+      '<clk-send>{"type":"file","path":"/tmp/example.txt"}</clk-send>',
+      '```',
+      `[源码](${sourcePath})`,
+    ].join('\n');
+    assert.equal(parseOutboundArtifacts(raw).cleanText, raw);
+    assert.deepEqual(parseOutboundArtifacts(raw).attachments, []);
+    assert.equal(stripOutboundArtifactBlocksForStreaming(raw), raw);
+  });
+
   it('treats local Markdown images as uploadable image attachments', () => {
     const parsed = parseOutboundArtifacts([
       '二维码如下：',
@@ -20,7 +101,7 @@ describe('outbound-artifacts', () => {
 
     assert.equal(parsed.cleanText, [
       '二维码如下：',
-      '',
+      '[登录二维码](/tmp/lark_auth_run12_layers_qr_2.png)',
       '![远程图片](https://example.com/image.png)',
     ].join('\n'));
     assert.deepEqual(parsed.attachments, [{
@@ -31,11 +112,10 @@ describe('outbound-artifacts', () => {
     }]);
   });
 
-  it('preserves ordinary local links without attaching any files, including image paths', () => {
+  it('preserves ordinary non-image local links without attaching any files', () => {
     const markdown = [
       '完整稿件：',
       '[打开报告](/opt/tiger/project/work/reports/report.html)',
-      '[图片链接](/tmp/photo.png)',
       '[源码](/tmp/app.ts:12)',
       '[Windows 文件](C:\\work\\report.pdf)',
       '[带空格](</tmp/report one.pdf>)',
@@ -49,10 +129,10 @@ describe('outbound-artifacts', () => {
 
   it('uploads images from encoded paths and file URLs', () => {
     const imagePath = path.resolve('image one.png');
-    const parsed = parseOutboundArtifacts(`![URL](${pathToFileURL(imagePath).href})\n![编码](/tmp/image%20two.png)`);
+    const parsed = parseOutboundArtifacts(`[URL](${pathToFileURL(imagePath).href})\n![编码](/tmp/image%20two.png)`);
     assert.deepEqual(parsed.attachments.map(a => a.path), [imagePath, '/tmp/image two.png']);
     assert(parsed.attachments.every(a => a.kind === 'image'));
-    assert.equal(parsed.cleanText, '');
+    assert.equal(parsed.cleanText, `[URL](${pathToFileURL(imagePath).href})\n[编码](/tmp/image%20two.png)`);
   });
 
   it('leaves local Markdown image examples inside code blocks untouched', () => {
@@ -71,6 +151,9 @@ describe('outbound-artifacts', () => {
   });
 
   it('extracts attachments and strips send blocks from final text', () => {
+    const uppercase = '<CLK-SEND>{"type":"file","path":"/tmp/explicit.txt"}</CLK-SEND>';
+    assert.equal(parseOutboundArtifacts(uppercase).attachments.length, 1);
+    assert.equal(stripOutboundArtifactBlocksForStreaming(uppercase), '');
     const parsed = parseOutboundArtifacts([
       '这里是说明文字。',
       '',
@@ -290,10 +373,10 @@ describe('outbound-artifacts', () => {
     assert.equal(supportsOutboundArtifacts('unknown'), false);
   });
 
-  it('hides local Markdown images from streaming text while they upload separately', () => {
+  it('keeps local image links in streaming text while uploading images separately', () => {
     assert.equal(
       stripOutboundArtifactBlocksForStreaming('结果如下：\n\n![二维码](/tmp/qr.png)'),
-      '结果如下：',
+      '结果如下：\n\n[二维码](/tmp/qr.png)',
     );
   });
 
@@ -323,5 +406,5 @@ it('normalizes Markdown images but preserves ordinary file URLs', () => {
   assert.deepEqual(parsed.attachments.map(({ kind, path }) => ({ kind, path })), [
     { kind: 'image', path: '/tmp/a b.png' }, { kind: 'image', path: '/tmp/a(1).png' },
   ]);
-  assert.equal(parsed.cleanText, `[报告](${pathToFileURL(reportPath).href})`);
+  assert.equal(parsed.cleanText, `[图](</tmp/a b.png> "图标题")\n[报告](${pathToFileURL(reportPath).href})\n[转义](/tmp/a\\(1\\).png)`);
 });

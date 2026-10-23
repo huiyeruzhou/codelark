@@ -71,6 +71,18 @@ it('renders MCP identity and title once, with executable code and a single failu
 });
 
 describe('preprocessFeishuMarkdown', () => {
+  it('keeps source links, escaped image links, and literal examples intact', () => {
+    const text = [
+      '[源码](/tmp/codelark-source-demo/src/runner.py:193)',
+      '\\![源码](/tmp/codelark-source-demo/src/runner.py:193)',
+      '`![示例](/tmp/example.png)`',
+      '~~~markdown',
+      '![示例](/tmp/example.png)',
+      '~~~',
+    ].join('\n');
+    assert.equal(preprocessFeishuMarkdown(text), text);
+  });
+
   it('keeps Feishu image keys and degrades local or remote image targets to readable text', () => {
     const rendered = preprocessFeishuMarkdown([
       '![已上传](img_v2_abc-123)',

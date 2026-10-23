@@ -3,9 +3,73 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createStreamingArtifactDeliveryController } from '../../../../bridge/turn/streaming-artifact-delivery.js';
+import { assembleCodexFinalResponse, assembleSdkFinalResponse, stripFinalOnlyBlocksForStreaming } from '../../../../bridge/turn/response-assembler.js';
 import type { OutboundAttachment } from '../../../../domain/index.js';
 
 describe('streaming artifact delivery', () => {
+  it('retains original image links before and after upload, including failed uploads', async () => {
+    for (const ok of [true, false]) {
+      for (const bang of ['', '!']) {
+        const delivered: OutboundAttachment[][] = [];
+        const controller = createStreamingArtifactDeliveryController({
+          async deliver(attachments) { delivered.push(attachments); return { ok }; },
+        });
+        const link = '[图片原链接](</tmp/codelark-link-demo/photo one.PNG> "图片标题")';
+        const text = `前文\n${bang}${link}\n后文`;
+        const expected = `前文\n${link}\n后文`;
+        for (let i = 1; i <= text.length; i++) controller.observeAnswerText(text.slice(0, i));
+        assert.equal(stripFinalOnlyBlocksForStreaming(text), expected);
+        await controller.close();
+        assert.equal(delivered.length, 1);
+        for (const assemble of [assembleCodexFinalResponse, assembleSdkFinalResponse]) {
+          const final = assemble({ text });
+          assert.equal(final.text, expected);
+          assert.equal(controller.withoutDelivered(final.attachments || []).length, ok ? 0 : 1);
+        }
+        assert.equal(stripFinalOnlyBlocksForStreaming(text), expected);
+      }
+    }
+  });
+
+  it('uploads images by extension from both link forms while retaining non-image references', async () => {
+    const delivered: OutboundAttachment[][] = [];
+    const controller = createStreamingArtifactDeliveryController({
+      async deliver(attachments) { delivered.push(attachments); return { ok: true }; },
+    });
+    const text = [
+      '[源码](/tmp/codelark-link-demo/runner.py)',
+      '[源码行](/tmp/codelark-link-demo/runner.py:193)',
+      '![误用图片语法的文档](/tmp/codelark-link-demo/report.pdf)',
+      '![误用图片语法的源码](/tmp/codelark-link-demo/runner.py)',
+      '[图片链接](/tmp/codelark-link-demo/photo.PNG)',
+      '![图片预览](/tmp/codelark-link-demo/preview.jpg)',
+    ].join('\n');
+    for (let i = 1; i <= text.length; i++) controller.observeAnswerText(text.slice(0, i));
+    await controller.close();
+    assert.deepEqual(delivered.flat().map(({ kind, path }) => ({ kind, path })), [
+      { kind: 'image', path: '/tmp/codelark-link-demo/photo.PNG' },
+      { kind: 'image', path: '/tmp/codelark-link-demo/preview.jpg' },
+    ]);
+  });
+
+  it('never uploads code examples or source references while text arrives in chunks', async () => {
+    const delivered: OutboundAttachment[][] = [];
+    const controller = createStreamingArtifactDeliveryController({
+      async deliver(attachments) { delivered.push(attachments); return { ok: true }; },
+    });
+    const text = [
+      '```xml',
+      '<clk-send>{"type":"file","path":"/tmp/example.txt"}</clk-send>',
+      '```',
+      '`![示例](/tmp/example.png)`',
+      '[源码](/tmp/codelark-source-demo/src/runner.py:193)',
+      '<clk-send>{"type":"file","path":"/tmp/runner.py:193"}</clk-send>',
+    ].join('\n');
+    for (let i = 1; i <= text.length; i++) controller.observeAnswerText(text.slice(0, i));
+    await controller.close();
+    assert.deepEqual(delivered, []);
+  });
+
   it('uploads a completed local Markdown image once', async () => {
     const delivered: OutboundAttachment[][] = [];
     const controller = createStreamingArtifactDeliveryController({

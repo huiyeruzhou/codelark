@@ -45,6 +45,8 @@ test('hot-update script dry-run validates cwd, node runtime, env paths, and safe
   assert.match(output, /\[hot-update\] npm test: planned/);
   assert.match(output, new RegExp(`\\[hot-update\\] global CLI sync: npm install --global --no-audit --no-fund ${projectRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.match(output, /\[hot-update\] restart: planned/);
+  assert.match(output, /bundled skills sync: .*install-skills codelark condition-monitor/);
+  assert.ok(output.indexOf('bundled skills sync:') < output.indexOf('[hot-update] restart: planned'));
   assert.doesNotMatch(output, /Dispatched CodeLark hot update/);
   assert.doesNotMatch(output, /\[hot-update\] started /);
   assert.ok(output.indexOf('[hot-update] npm run build: planned') < output.indexOf('[hot-update] restart: planned'));
@@ -122,6 +124,7 @@ test('hot-update worker preserves the supplied instance environment across stop 
       timeout: 30_000,
     });
     assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line)), [
+      { action: 'install-skills', home, key: 'test-instance-secret', options: '--no-warnings' },
       { action: 'stop', home, key: 'test-instance-secret', options: '--no-warnings' },
       { action: 'start', home, key: 'test-instance-secret', options: '--no-warnings' },
     ]);
@@ -131,4 +134,30 @@ test('hot-update worker preserves the supplied instance environment across stop 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test('hot-update stops before restart if bundled skill synchronization fails', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-hot-update-skill-failure-'));
+  const calls = path.join(root, 'calls.jsonl');
+  for (const dir of ['scripts', 'dist', 'bin']) fs.mkdirSync(path.join(root, dir));
+  fs.copyFileSync('scripts/hot-update-bridge.sh', path.join(root, 'scripts/hot-update-bridge.sh'));
+  fs.writeFileSync(path.join(root, 'package.json'), '{"name":"codelark"}');
+  fs.writeFileSync(path.join(root, 'bin', 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, 'dist', 'cli.mjs'), `
+    import fs from 'node:fs';
+    fs.appendFileSync(process.env.CLK_TEST_CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
+    if (process.argv[2] === 'install-skills') process.exit(1);
+  `);
+  try {
+    await assert.rejects(execFileAsync('bash', ['scripts/hot-update-bridge.sh', '--run', '--skip-tests'], {
+      cwd: root,
+      env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`,
+        CODELARK_HOME: path.join(root, 'home'), CLK_TEST_CALLS: calls },
+      timeout: 30_000,
+    }));
+    assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)), [
+      ['install-skills', 'codelark', 'condition-monitor'],
+    ]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

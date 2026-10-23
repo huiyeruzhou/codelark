@@ -813,11 +813,7 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
   // the already-running fast path so `codelark start` still upgrades legacy config.
   const startup = startupProjectionFor(options);
   const config = startup.config;
-  try {
-    refreshBundledCodeLarkSkills();
-  } catch (error) {
-    console.warn('[service-manager] Failed to refresh bundled CodeLark skill:', error instanceof Error ? error.message : error);
-  }
+  refreshBundledCodeLarkSkills();
   const current = getBridgeStatus();
   const extraAlivePids = getTrackedBridgePids(current)
     .filter((pid) => pid !== current.pid && isProcessAlive(pid));
@@ -1312,13 +1308,17 @@ function removeLegacyCodeLarkSkills(): void {
   }
 }
 
-function refreshBundledCodeLarkSkills(): void {
-  for (const name of REQUIRED_CODEX_SKILL_NAMES) {
-    const skill = BUNDLED_CODEX_SKILLS.find((candidate) => candidate.name === name);
-    if (!skill) throw new Error(`Bundled CodeLark skill is unavailable: ${name}`);
-    installBundledCodexSkill(skill);
+export function refreshBundledCodeLarkSkills(): void {
+  try {
+    for (const name of REQUIRED_CODEX_SKILL_NAMES) {
+      const skill = BUNDLED_CODEX_SKILLS.find((candidate) => candidate.name === name);
+      if (!skill) throw new Error(`Bundled CodeLark skill is unavailable: ${name}`);
+      installBundledCodexSkill(skill);
+    }
+    removeLegacyCodeLarkSkills();
+  } catch (error) {
+    throw new Error(`CodeLark bundled skills could not be updated; startup is incomplete: ${error instanceof Error ? error.message : error}`, { cause: error });
   }
-  removeLegacyCodeLarkSkills();
 }
 
 function runExternalSkillInstall(command: string, args: string[]): Promise<ExternalSkillInstallResult> {

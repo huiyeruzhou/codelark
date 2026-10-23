@@ -9,6 +9,17 @@ import {
 } from '../../../../bridge/turn/response-assembler.js';
 
 describe('response-assembler', () => {
+  it('recovers carried source references as body links instead of upload paths', () => {
+    for (const assemble of [assembleCodexFinalResponse, assembleSdkFinalResponse]) {
+      const response = assemble({
+        text: '查看源码位置。',
+        attachments: [{ kind: 'file', path: '/tmp/codelark-source-demo/src/runner.py:193', name: 'runner.py' }],
+      });
+      assert.equal(response.text, '查看源码位置。\n\n[runner.py](</tmp/codelark-source-demo/src/runner.py:193>)');
+      assert.deepEqual(response.attachments, []);
+    }
+  });
+
   it('strips final-only send blocks and deduplicates attachments', () => {
     const response = assembleSdkFinalResponse({
       text: [

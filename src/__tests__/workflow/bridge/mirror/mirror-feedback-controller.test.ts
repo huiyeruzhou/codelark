@@ -385,7 +385,7 @@ describe('mirror-feedback-controller', () => {
     assert.match(renderedText, /普通说明中的 `<clk-send>` 只是协议名称，必须完整显示。/);
     assert.match(renderedText, /终态不重复。/);
     assert.doesNotMatch(renderedText, /visible\.txt/);
-    assert.doesNotMatch(renderedText, /visible\.png/);
+    assert.ok(renderedText.includes('[本地图片](/tmp/visible.png)'), 'native image delivery must retain the original link in mirror history');
     assert.match(subscription.pendingTurn?.streamedText || '', /clk-send/);
   });
 

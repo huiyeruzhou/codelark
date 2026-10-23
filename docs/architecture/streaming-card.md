@@ -162,7 +162,7 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 
 `<clk-send>` 不等待 turn completed。SDK runtime 从只包含 assistant answer 的累积快照检测完整块；tmux/mirror runtime 只从 assistant/commentary 正文检测。thinking、reasoning、状态栏和工具预览即使包含合法的 `<clk-send>`，也不得触发附件发送。
 
-协议块只存在于附件解析所需的原始 answer 中，不属于用户可见历史。SDK 正文和 mirror `StreamingHistoryItem` 在送入卡片前都要经过同一 final-only block 清理；原始 turn 文本继续保留到附件控制器和终态解析完成。这样中间卡、终态卡和 continuation 都不会显示 `<clk-send>`/`<clk-ask>` 或本地路径，同时不会因过早改写原始事件而丢失附件。
+解析成功的协议块从展示正文提取为交付项。SDK 正文和 mirror `StreamingHistoryItem` 在送入卡片前共用该清理规则；原始 turn 文本继续保留到附件控制器和终态解析完成。无效块保留原文，文件链接（包括图片链接）和源码行号引用保留在正文，代码围栏、内联代码及转义示例不执行。流式控制器直接解析完整 Markdown 快照，不再截出标签后丢失代码上下文。源码位置误放进发送块或携带附件时转成正文链接，不查找带行号的文件，也不去掉行号后上传。
 
 每个 turn 使用一个流式附件交付控制器：新发现的附件进入同聊天 interactive delivery queue，模型事件消费不等待远端发送；控制器按附件类型、路径、caption 和 name 去重。若结构化流式卡片仍在异步创建，附件 worker 必须先等待 adapter 返回真实 message id，再把附件回复到该卡片；不能用同步查询得到的空值把附件发成脱离当前 turn 的根消息。卡片创建失败时才沿用通道原有的降级发送。终态处理先等待已排队的附件发送收口，再从 final response 中删除已经成功发送的项，因此 completed 不会重复发送。中间发送失败的项不标记为成功，仍保留给终态交付重试。
 
@@ -177,7 +177,7 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 5. 调用 `card.update` 写最终卡。
 6. 成功后按 completed/error 添加终态 reaction。
 
-模型正文中的 CardKit Markdown 图片目标必须是飞书 `img_*` image key。本地路径、HTTP URL 等目标不能直接作为 image key 发送，否则飞书会以 `200570` 拒绝整张卡片。本地 Markdown 图片和文件链接会按出站 artifact 处理：从卡片正文剥离、通过飞书图片或文件接口上传并作为附件消息回复到当前流式卡；上传失败的项在终态重试，仍失败则回复包含文件名和原因的错误提示。远程 URL 保持普通 Markdown。`<clk-send>` 仍是模型主动发送附件的规范协议。renderer 还会将绕过 artifact pipeline 的非 image-key 图片语法降级为可读文本，作为最后的 payload 防线。
+模型正文中的 CardKit Markdown 图片目标必须是飞书 `img_*` image key。本地路径、HTTP URL 等目标不能直接作为 image key 发送，否则飞书会以 `200570` 拒绝整张卡片。本地 Markdown 链接按扩展名识别图片，PNG/JPEG/GIF/WebP/BMP/ICO/TIFF 大小写无关，`[说明](路径)` 和 `![说明](路径)` 都会被提取为出站 artifact：通过飞书图片接口上传并回复当前流式卡，同时保留正文原链接及上下文；本地 `![]` 转为同标签、同目标的普通链接以兼容 CardKit。成功、失败和终态去重都不能删除原链接。其他文件链接保留在正文，流式和终态都不上传，非图片误写 `![]` 时降为普通链接；文件附件须由用户的发送请求触发模型输出 `<clk-send>`。上传失败的项在终态重试，仍失败则回复包含文件名和原因的错误提示。远程 URL 保持普通 Markdown。renderer 还会将绕过 artifact pipeline 的非 image-key 图片语法降级为可读文本，作为最后的 payload 防线。
 
 如果 final `card.update` 失败，history-driven 卡片必须先用 `cardElement.content` 将已有 `streaming_status` 原位改成最终 footer，保持整张卡只有一个结尾状态栏。仅当该元素更新也失败或接口不可用时，才追加 `stream_done` 作为最后兜底；card id 已失效则直接进入消息级 fallback，不再发送必然失败的元素请求。
 

@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isSupportedImagePath } from '../../shared/image-path.js';
+import { maskMarkdownCode } from '../../shared/markdown/code-mask.js';
 
 import type {
   ManualInputTargetSelector,
@@ -18,7 +20,7 @@ const ASK_BLOCK_REGEX = /^[ \t]*<clk-ask>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ 
 const ASK_BLOCK_OPEN_REGEX = /^[ \t]*<clk-ask>[ \t]*(?=$|[\[{])/im;
 const INPUT_BLOCK_REGEX = /^[ \t]*<clk-input>[ \t]*(?:\r?\n[ \t]*)?([\[{][\s\S]*?)[ \t]*<\/clk-input>[ \t]*$/gim;
 const INPUT_BLOCK_OPEN_REGEX = /^[ \t]*<clk-input>[ \t]*(?=$|[\[{])/im;
-const LOCAL_MARKDOWN_IMAGE_REGEX = /!\[([^\]\n]*)\]\((<[^>\n]+>|(?:\\.|[^)\\\n])+)\)/gu;
+const LOCAL_MARKDOWN_LINK_REGEX = /(!?)\[([^\]\n]*)\]\((<[^>\n]+>|(?:\\.|[^)\\\n])+)\)/gu;
 
 interface RawSendInstruction {
   type?: unknown;
@@ -96,11 +98,13 @@ function normalizeInstruction(raw: RawSendInstruction): OutboundAttachment | nul
 function normalizeInstructionPayload(payload: unknown): {
   attachments: OutboundAttachment[];
   platformMessages: OutboundPlatformMessage[];
+  references: string[];
   errors: string[];
 } {
   const attachments: OutboundAttachment[] = [];
   const platformMessages: OutboundPlatformMessage[] = [];
   const errors: string[] = [];
+  const references: string[] = [];
 
   const objects: RawSendInstruction[] = [];
   if (Array.isArray(payload)) {
@@ -123,6 +127,12 @@ function normalizeInstructionPayload(payload: unknown): {
   }
 
   for (const raw of objects) {
+    const reference = sourceLocationLink({
+      path: typeof raw.local_path === 'string' ? raw.local_path : typeof raw.path === 'string' ? raw.path : '',
+      name: typeof raw.name === 'string' ? raw.name : undefined,
+      caption: typeof raw.caption === 'string' ? raw.caption : undefined,
+    });
+    if (reference) { references.push(reference); continue; }
     const msgType = typeof raw.msg_type === 'string' ? raw.msg_type.trim() : '';
     if (msgType) {
       const localPath = typeof raw.local_path === 'string' ? raw.local_path.trim() : '';
@@ -154,7 +164,18 @@ function normalizeInstructionPayload(payload: unknown): {
     }
   }
 
-  return { attachments, platformMessages, errors };
+  if (!objects.length) errors.push('invalid-send-instruction');
+  return { attachments, platformMessages, references, errors };
+}
+
+/** A source position is a reference, never a local file upload target. */
+export function sourceLocationLink(attachment: { path: string; name?: string; caption?: string }): string | null {
+  const target = attachment.path.trim();
+  if (!(path.isAbsolute(target) || path.win32.isAbsolute(target) || /^file:/iu.test(target))) return null;
+  if (!/(?::\d+(?::\d+)?(?:-\d+(?::\d+)?)?|#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?)$/u.test(target)) return null;
+  const label = (attachment.caption || attachment.name || target.split(/[\\/]/u).at(-1) || target)
+    .replace(/([\\[\]])/gu, '\\$1');
+  return `[${label}](<${target.replace(/>/gu, '%3E')}>)`;
 }
 
 function normalizeAskPayload(payload: unknown): {
@@ -228,6 +249,7 @@ function compactBlankLines(text: string): string {
 function localMarkdownPath(destination: string): string | null {
   let value = destination.trim().replace(/\s+["'][^"']*["']$/, '');
   if (value.startsWith('<') && value.endsWith('>')) value = value.slice(1, -1);
+  if (sourceLocationLink({ path: value })) return value;
   if (/^file:/i.test(value)) {
     try { value = fileURLToPath(value); } catch { return null; }
   } else {
@@ -242,31 +264,31 @@ function extractLocalMarkdownImages(text: string): {
   attachments: OutboundAttachment[];
 } {
   const attachments: OutboundAttachment[] = [];
+  if (!text.includes('[')) return { text, attachments };
+  const codeMask = maskMarkdownCode(text);
+  let lineOffset = 0;
   const lines = text.split('\n');
-  let fenceLength = 0;
   const rendered = lines.map((line) => {
-    if (fenceLength > 0) {
-      const closer = /^( {0,3})(`{3,})([^`]*)$/.exec(line);
-      if (closer && closer[2].length >= fenceLength) fenceLength = 0;
-      return line;
-    }
-    const opener = /^( {0,3})(`{3,})([^`]*)$/.exec(line);
-    if (opener) {
-      fenceLength = opener[2].length;
-      return line;
-    }
-    if (/^(?: {4}|\t)/u.test(line)) return line;
-
-    return line.replace(LOCAL_MARKDOWN_IMAGE_REGEX, (match, altText: string, destination: string) => {
+    const offset = lineOffset;
+    lineOffset += line.length + 1;
+    return line.replace(LOCAL_MARKDOWN_LINK_REGEX, (match, bang: string, altText: string, destination: string, index: number) => {
+      if (codeMask[offset + index] !== match[0]) return match;
+      const escapes = /\\+$/u.exec(line.slice(0, index))?.[0].length || 0;
+      if (escapes % 2) return match;
       const filePath = localMarkdownPath(destination);
       if (!filePath) return match;
+      if (!isSupportedImagePath(filePath) || sourceLocationLink({ path: filePath })) {
+        return bang ? match.slice(1) : match;
+      }
       attachments.push({
         kind: 'image',
         path: filePath,
         caption: altText.trim() || undefined,
         name: undefined,
       });
-      return '';
+      // Native image delivery supplements the answer; keep its original link.
+      // Local image syntax must become a link because CardKit expects img_* keys.
+      return bang ? match.slice(1) : match;
     });
   });
   return { text: rendered.join('\n'), attachments };
@@ -307,38 +329,50 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
   const errors: string[] = [];
   let mutated = text ?? '';
 
-  mutated = mutated.replace(SEND_BLOCK_REGEX, (_full, payloadText: string) => {
+  const replaceBlocks = (pattern: RegExp, process: (full: string, payload: string) => string) => {
+    if (mutated.search(pattern) < 0) return;
+    const codeMask = maskMarkdownCode(mutated);
+    mutated = mutated.replace(pattern, (full: string, payload: string, offset: number) =>
+      /<clk-/iu.test(codeMask.slice(offset, offset + full.indexOf('>') + 1)) ? process(full, payload) : full);
+  };
+  replaceBlocks(SEND_BLOCK_REGEX, (full, payloadText) => {
     try {
       const payload = JSON.parse(payloadText);
       const normalized = normalizeInstructionPayload(payload);
+      errors.push(...normalized.errors);
+      if (normalized.errors.length) return full;
       attachments.push(...normalized.attachments);
       platformMessages.push(...normalized.platformMessages);
-      errors.push(...normalized.errors);
+      return normalized.references.join('\n');
     } catch {
       errors.push('invalid-send-json');
+      return full;
     }
-    return '';
   });
 
-  mutated = mutated.replace(ASK_BLOCK_REGEX, (_full, payloadText: string) => {
+  replaceBlocks(ASK_BLOCK_REGEX, (full, payloadText) => {
     try {
       const payload = JSON.parse(payloadText);
       const normalized = normalizeAskPayload(payload);
-      questions.push(...normalized.questions);
       errors.push(...normalized.errors);
+      if (normalized.errors.length || !normalized.questions.length) return full;
+      questions.push(...normalized.questions);
     } catch {
       errors.push('invalid-ask-json');
+      return full;
     }
     return '';
   });
 
-  mutated = mutated.replace(INPUT_BLOCK_REGEX, (_full, payloadText: string) => {
+  replaceBlocks(INPUT_BLOCK_REGEX, (full, payloadText) => {
     try {
       const normalized = normalizeManualInputPayload(JSON.parse(payloadText));
-      manualInputs.push(...normalized.inputs);
       errors.push(...normalized.errors);
+      if (normalized.errors.length || !normalized.inputs.length) return full;
+      manualInputs.push(...normalized.inputs);
     } catch {
       errors.push('invalid-manual-input-json');
+      return full;
     }
     return '';
   });
@@ -348,7 +382,7 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
   attachments.push(...localMarkdownAttachments.attachments);
 
   return {
-    cleanText: compactBlankLines(mutated),
+    cleanText: errors.length && mutated === text ? text : compactBlankLines(mutated),
     attachments,
     questions,
     platformMessages,
@@ -360,18 +394,23 @@ export function parseOutboundArtifacts(text: string): ParsedOutboundArtifacts {
 export function stripOutboundArtifactBlocksForStreaming(text: string): string {
   if (!text) return '';
 
-  let stripped = text.replace(SEND_BLOCK_REGEX, '').replace(ASK_BLOCK_REGEX, '').replace(INPUT_BLOCK_REGEX, '');
-  const sendOpenMatch = SEND_BLOCK_OPEN_REGEX.exec(stripped);
-  const askOpenMatch = ASK_BLOCK_OPEN_REGEX.exec(stripped);
-  const inputOpenMatch = INPUT_BLOCK_OPEN_REGEX.exec(stripped);
+  let stripped = parseOutboundArtifacts(text).cleanText;
+  if (!/<clk-(?:send|ask|input)>/iu.test(stripped)) return stripped;
+  const mask = maskMarkdownCode(stripped);
+  const sendOpenMatch = SEND_BLOCK_OPEN_REGEX.exec(mask);
+  const askOpenMatch = ASK_BLOCK_OPEN_REGEX.exec(mask);
+  const inputOpenMatch = INPUT_BLOCK_OPEN_REGEX.exec(mask);
   const openMatch = [sendOpenMatch, askOpenMatch, inputOpenMatch]
     .filter((match): match is RegExpExecArray => Boolean(match))
     .sort((a, b) => a.index - b.index)[0];
-  if (openMatch) {
+  const remainder = openMatch ? stripped.slice(openMatch.index + openMatch[0].length) : '';
+  // Hide only an unfinished JSON instruction. A failed complete block or a
+  // Markdown link beginning with '[' remains ordinary visible source text.
+  if (openMatch && !/<\/clk-(?:send|ask|input)>/iu.test(remainder)
+      && /^\s*(?:\{\s*(?:"|$)|\[\s*(?:\{|$)|$)/u.test(remainder)) {
     stripped = stripped.slice(0, openMatch.index);
   }
 
-  stripped = extractLocalMarkdownImages(stripped).text;
   return stripped.replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 

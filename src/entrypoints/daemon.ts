@@ -22,6 +22,7 @@ import { PendingPermissions } from '../runtime/permission-gateway.js';
 import { setupLogger } from '../shared/logger.js';
 import { applyStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
+import { refreshBundledCodeLarkSkills } from '../local-service/manager.js';
 import { runStartupStorageMigrations } from '../storage/migrations.js';
 import { startBridgeControlService } from '../bridge/control/service-discovery.js';
 
@@ -125,6 +126,9 @@ async function main(): Promise<void> {
     instanceLockHeld = false;
   };
 
+  // Cold starts by a supervisor can bypass `codelark start` entirely. Repair
+  // local guidance at the actual daemon boundary before accepting messages.
+  refreshBundledCodeLarkSkills();
   runStartupStorageMigrations();
   const configService = createConfigService({ codelarkHome: CODELARK_HOME });
   const config = configService.snapshot().config;

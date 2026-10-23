@@ -54,7 +54,11 @@ Upload a local image or file with CodeLark's `local_path` extension. The path mu
 <clk-send>{"msg_type":"file","local_path":"/absolute/report.pdf"}</clk-send>
 ```
 
-When the user asks to receive, see, or be sent a local image or file, complete the delivery with `<clk-send>` in the final response. Calling `view_image` or showing a local path is only local inspection. CodeLark also delivers local Markdown images (`![caption](/absolute/image.png)`) as native images, but ordinary Markdown links never upload files. Do not claim that the artifact was sent before CodeLark accepts the control block.
+When displaying, listing, or referencing local files, use ordinary Markdown links in the response, for example `[report.pdf](/absolute/report.pdf)` or `[report.pdf](</absolute/path with spaces/report.pdf>)`. Requests such as “展示文件”, “看看这个文件”, or “给我文件链接” call for links or reading and explaining the content. Use a file `<clk-send>` only when the user asks to send, upload, attach, or receive the file itself. Creating or updating a file does not by itself call for attachment delivery; do not add a file send alongside a link unless requested.
+
+Source locations such as `[runner.py](/project/src/runner.py:193)` are links, including `:line:column` and `#L193` variants. Keep the location in the link; never put it in an attachment path or strip the line number to upload the source file.
+
+Local links are classified by file extension, case-insensitively: PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF are delivered as native images with either `[caption](/absolute/image.png)` or `![caption](/absolute/image.png)`. Image delivery is additional: always retain the original link, label, target, and surrounding text in streaming and final answers, whether upload succeeds or fails. Local `![]` becomes an ordinary link with the same label and target in the card. All other file links keep their labels and paths in the answer, with or without line numbers; even `![]` pointing to a non-image becomes an ordinary link. Explicit `<clk-send>` also supports native image delivery. Calling `view_image` is only local inspection. Do not claim that an image or file was sent before CodeLark accepts the delivery.
 
 Check that the local path exists before sending, but do not call `view_image` by default. If the user reports that an image is wrong, broken, stale, or visually incorrect, inspect that image and subsequent corrected images with `view_image` before sending them again during that task.
 

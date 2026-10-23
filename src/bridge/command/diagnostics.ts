@@ -1,6 +1,7 @@
 import { mappedRuntimeSessionId } from './runtime-session.js';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSupportedImagePath } from '../../shared/image-path.js';
 
 import { createConfigService } from '../../configuration/service.js';
 import { listBindingsForChat } from '../session/registry.js';
@@ -755,9 +756,6 @@ export function handleCatCommand(options: {
   }
 }
 
-// Formats accepted by Feishu's image upload API; unsupported formats remain files.
-const IMAGE_FILE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.tif', '.tiff']);
-
 export async function handleFileCommand(options: {
   adapter: BaseChannelAdapter;
   msg: InboundMessage;
@@ -807,7 +805,7 @@ export async function handleFileCommand(options: {
       return '目标不是文件。';
     }
     const attachment: OutboundAttachment = {
-      kind: IMAGE_FILE_EXTENSIONS.has(path.extname(resolvedPath).toLowerCase()) ? 'image' : 'file',
+      kind: isSupportedImagePath(resolvedPath) ? 'image' : 'file',
       path: resolvedPath,
       name: path.basename(resolvedPath),
     };

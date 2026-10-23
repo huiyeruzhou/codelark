@@ -2,6 +2,7 @@ import type { OutboundAttachment, OutboundManualInput, OutboundPlatformMessage, 
 import {
   parseOutboundArtifacts,
   stripOutboundArtifactBlocksForStreaming,
+  sourceLocationLink,
 } from '../../channels/delivery/artifacts.js';
 import type {
   BridgeTurnFinalSource,
@@ -85,6 +86,7 @@ export function collectFinalResponseArtifacts(
   manualInputs: OutboundManualInput[] = [],
 ): FinalResponseArtifactParseResult {
   const parsed = parseOutboundArtifacts(text || '');
+  const carriedReferences = attachments.map(sourceLocationLink).filter((reference): reference is string => Boolean(reference));
   if (parsed.questions.length > 0 || questions.length > 0 || parsed.errors.some((error) => error.includes('ask'))) {
     console.log('[bridge] Final response artifact parse:', {
       parsedQuestionCount: parsed.questions.length,
@@ -98,9 +100,9 @@ export function collectFinalResponseArtifacts(
     });
   }
   return {
-    text: parsed.cleanText,
+    text: [parsed.cleanText, ...carriedReferences].filter(Boolean).join('\n\n'),
     attachments: dedupeOutboundAttachments([
-      ...attachments,
+      ...attachments.filter((attachment) => !sourceLocationLink(attachment)),
       ...parsed.attachments,
     ]),
     questions: [

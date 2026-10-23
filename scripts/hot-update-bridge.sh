@@ -213,6 +213,10 @@ run_worker() {
   # been stopped yet.
   run_logged npm install --global --no-audit --no-fund "$PROJECT_DIR"
 
+  # Refresh local bundled skills before stopping the live bridge. An upgrade
+  # with stale/missing guidance is incomplete, so installation must succeed.
+  run_logged run_bridge_cli install-skills codelark condition-monitor
+
   local cli
   cli="$(bridge_cli_display)"
   # The caller supplies the target instance's environment. Never replace its
@@ -256,6 +260,7 @@ run_dry_run() {
   echo "[hot-update] npm run build: planned"
   echo "[hot-update] npm test: $([ "$SKIP_TESTS" = "1" ] && echo skipped || echo planned)"
   echo "[hot-update] global CLI sync: npm install --global --no-audit --no-fund $PROJECT_DIR"
+  echo "[hot-update] bundled skills sync: $(bridge_cli_display) install-skills codelark condition-monitor"
   echo "[hot-update] restart cli: $(bridge_cli_display)"
   echo "[hot-update] restart: planned"
 }

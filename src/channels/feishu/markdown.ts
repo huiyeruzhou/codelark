@@ -10,6 +10,7 @@ import type {
 } from '../../domain/index.js';
 import type { StructuredStreamingUiMetadata } from '../contracts.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
+import { maskMarkdownCode } from '../../shared/markdown/code-mask.js';
 import { formatStreamTagLabel } from '../../shared/streaming-metadata.js';
 import {
   buildToolProgressBlocks,
@@ -282,10 +283,15 @@ function isFeishuMarkdownImageKey(value: string): boolean {
 }
 
 function rewriteUnsupportedFeishuMarkdownImages(text: string): string {
+  if (!text.includes('![')) return text;
+  const mask = maskMarkdownCode(text);
+  let offset = 0;
   const lines = text.split('\n');
   let fenceLength = 0;
 
   return lines.map((line) => {
+    const start = offset;
+    offset += line.length + 1;
     if (fenceLength > 0) {
       if (isFenceLine(line, fenceLength)) fenceLength = 0;
       return line;
@@ -298,7 +304,9 @@ function rewriteUnsupportedFeishuMarkdownImages(text: string): string {
     }
     if (/^(?: {4}|\t)/u.test(line)) return line;
 
-    return line.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/gu, (match, altText: string, destination: string) => {
+    return line.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/gu, (match, altText: string, destination: string, index: number) => {
+      if (mask[start + index] !== '!') return match;
+      if ((/\\+$/u.exec(line.slice(0, index))?.[0].length || 0) % 2) return match;
       const normalizedDestination = destination.trim();
       if (isFeishuMarkdownImageKey(normalizedDestination)) return match;
       const label = altText.trim() || '图片';

@@ -10,6 +10,7 @@ import {
   buildDeferredGlobalNpmUninstallLaunch,
   installCodexIntegration,
   isCodexIntegrationInstalled,
+  startBridge,
   warnIfLarkCliUserAuthMissing,
 } from '../../../local-service/manager.js';
 import { tryAcquireBridgeInstanceLock } from '../../../local-service/instance-lock.js';
@@ -517,6 +518,38 @@ describe('service-manager warnIfLarkCliUserAuthMissing', () => {
 });
 
 describe('service-manager Codex skill integration', () => {
+  it('repairs stale and missing local skills during cold startup, and fails on an unresolved install lock', async () => {
+    const previousCodexHome = process.env.CODEX_HOME;
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-cold-skill-upgrade-'));
+    process.env.CODEX_HOME = codexHome;
+    const skillsDir = path.join(codexHome, 'skills');
+    fs.mkdirSync(path.join(skillsDir, 'codelark'), { recursive: true });
+    const installed = path.join(skillsDir, 'codelark', 'SKILL.md');
+    fs.writeFileSync(installed, 'old guidance');
+    fs.mkdirSync(path.join(skillsDir, 'personal'));
+    fs.writeFileSync(path.join(skillsDir, 'personal', 'SKILL.md'), 'user-owned');
+    // No channels: exercise real cold-start preparation, then stop at preflight
+    // without starting a daemon or touching any production service.
+    const startupProjection = _testOnly.loadStartupProjection();
+    startupProjection.config.channels = [];
+    try {
+      await assert.rejects(startBridge({ startupProjection }), /未配置任何通道/u);
+      for (const name of ['codelark', 'condition-monitor']) {
+        assert.equal(fs.readFileSync(path.join(skillsDir, name, 'SKILL.md'), 'utf8'),
+          fs.readFileSync(path.join(process.cwd(), 'skills', name, 'SKILL.md'), 'utf8'));
+      }
+      assert.equal(fs.readFileSync(path.join(skillsDir, 'personal', 'SKILL.md'), 'utf8'), 'user-owned');
+      const lock = path.join(skillsDir, '.codelark.install.lock');
+      fs.mkdirSync(lock);
+      fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid }));
+      await assert.rejects(startBridge({ startupProjection }), /skills could not be updated; startup is incomplete/u);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      fs.rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
   const fakeExternalSkillRunner = async (command: string, args: string[]) => ({
     name: 'lark-doc',
     command,
