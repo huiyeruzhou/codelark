@@ -1,4 +1,4 @@
-import type { TmuxSendAction } from '../tmux/runtime.js';
+import type { TmuxSendAction } from '../../runtime/tmux/runtime.js';
 
 export const DEFAULT_CAPTURE_LINES = 20;
 const MIN_CAPTURE_LINES = 1;

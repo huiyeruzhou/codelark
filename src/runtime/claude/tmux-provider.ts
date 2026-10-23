@@ -21,7 +21,7 @@ import {
   startClaudeTmuxSession,
   startRuntimeTmuxSession,
   waitForRuntimeTmuxReady,
-} from '../../bridge/tmux/runtime.js';
+} from '../tmux/runtime.js';
 import { tmuxCore } from '../tmux/core.js';
 import {
   sendRuntimeTmuxInput,

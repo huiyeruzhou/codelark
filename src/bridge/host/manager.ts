@@ -7,7 +7,7 @@
  * Uses globalThis to survive Next.js HMR in development.
  */
 
-import { readClaudeTmuxSessionId } from '../tmux/runtime.js';
+import { readClaudeTmuxSessionId } from '../../runtime/tmux/runtime.js';
 import { sendCursorDesktopMessage } from '../../runtime/cursor/desktop-bridge-client.js';
 import type {
   ChannelAddress,
@@ -204,7 +204,7 @@ import {
   waitForCodexResumeTmuxReady,
   waitForRuntimeTmuxReady,
   type TmuxSendAction,
-} from '../tmux/runtime.js';
+} from '../../runtime/tmux/runtime.js';
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import { prepareCodexAppServerForBinding, codexAppServerTurnOptions, scheduleCodexAppServerView } from '../command/tmux.js';
 import { CodexWriterMigrationError, getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../runtime/codex/app-server-registry.js';

@@ -12,7 +12,7 @@ import { _testOnlyTmuxCore, type TmuxCore } from '../../../../runtime/tmux/core.
 import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../../../runtime/zcode/tmux-provider.js';
-import { claudeTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
+import { claudeTmuxSessionName } from '../../../../runtime/tmux/runtime.js';
 import { resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 
 beforeEach(() => { resetBridgeTestState(); resetRuntimeTmuxInputStatesForTests(); });

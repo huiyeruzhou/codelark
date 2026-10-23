@@ -50,8 +50,6 @@ const KNOWN_VIOLATIONS = new Set([
   'configuration/legacy.ts -> channels/types.ts',
   // domain -> runtime: audit borrows a provider contract type.
   'domain/audit.ts -> runtime/contracts.ts',
-  // runtime -> bridge: bridge/tmux/runtime.ts still mixes generic tmux readiness with Claude/Codex launch.
-  'runtime/claude/tmux-provider.ts -> bridge/tmux/runtime.ts',
   // shared -> configuration/domain/runtime: progress and logging helpers depend on higher-level types.
   'shared/lark-cli-env.ts -> configuration/paths.ts',
   'shared/logger.ts -> configuration/paths.ts',

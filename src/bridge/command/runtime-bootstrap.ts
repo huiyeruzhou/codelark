@@ -20,7 +20,7 @@ import {
 } from '../session/support.js';
 import type {
   RuntimeTmuxSelectionPrompt,
-} from '../tmux/runtime.js';
+} from '../../runtime/tmux/runtime.js';
 
 const BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS = 2_000;
 const BOOTSTRAP_THREAD_VISIBILITY_POLL_MS = 50;

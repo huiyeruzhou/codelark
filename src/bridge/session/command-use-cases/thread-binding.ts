@@ -8,7 +8,7 @@ import {
 } from '../../../domain/session-runtime.js';
 import type { SessionRegistryService } from '../registry.js';
 import { getBridgeSessionDisplayTitle } from '../display/session-display-query.js';
-import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
+import { cleanupRuntimeTmuxSession } from '../../../runtime/tmux/runtime.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../../runtime/zcode/tmux-provider.js';

@@ -39,7 +39,7 @@ import {
   cleanupRuntimeTmuxSession,
   codexTmuxSessionName,
   startRuntimeTmuxSession,
-} from '../tmux/runtime.js';
+} from '../../runtime/tmux/runtime.js';
 import { CliExecutableNotFoundError } from '../../runtime/codex/cli-executable.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 import {

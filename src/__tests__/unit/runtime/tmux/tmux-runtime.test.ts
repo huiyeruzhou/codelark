@@ -17,7 +17,7 @@ import {
   type RuntimeTmuxReadinessTransition,
   type TmuxCore,
   type TmuxSendAction,
-} from '../../../../bridge/tmux/runtime.js';
+} from '../../../../runtime/tmux/runtime.js';
 import {
   coordinateRuntimeTmuxSelection,
   getRuntimeTmuxInputState,

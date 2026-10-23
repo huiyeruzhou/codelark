@@ -12,7 +12,7 @@ import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/del
 import { CodexAppServerLifecycle, type AppServerThreadState } from '../../../../runtime/codex/app-server-lifecycle.js';
 import { closeCodexAppServerSessions, getCodexAppServerSession, prepareCodexAppServerSession } from '../../../../runtime/codex/app-server-registry.js';
 import { readCodexBackendStatus } from '../../../../bridge/session/display/codex-backend-status.js';
-import { codexTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
+import { codexTmuxSessionName } from '../../../../runtime/tmux/runtime.js';
 import { buildGlobalStatusResponse } from '../../../../bridge/command/status.js';
 import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
 import type { BridgeSession, OutboundRichCard } from '../../../../domain/index.js';

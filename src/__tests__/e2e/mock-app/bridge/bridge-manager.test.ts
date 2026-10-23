@@ -48,7 +48,7 @@ import {
   setSessionClaudeTmuxProviderUpdate,
   setSessionKimiIdentityUpdate,
 } from '../../../../domain/session-runtime.js';
-import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/runtime.js';
+import { tmuxCore, type TmuxCore } from '../../../../runtime/tmux/runtime.js';
 import {
   getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,

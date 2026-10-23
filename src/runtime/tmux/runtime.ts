@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { detectRuntimeTmuxPaneDead as detectPaneDead, type RuntimeTmuxPaneDead as PaneDead } from '../../runtime/tmux/pane-state.js';
-import { parseClaudeLaunchSessionId } from '../../runtime/claude/session-identity.js';
-import { CLAUDE_PARENT_SESSION_ENV } from '../../runtime/claude/environment.js';
+import { detectRuntimeTmuxPaneDead as detectPaneDead, type RuntimeTmuxPaneDead as PaneDead } from './pane-state.js';
+import { parseClaudeLaunchSessionId } from '../claude/session-identity.js';
+import { CLAUDE_PARENT_SESSION_ENV } from '../claude/environment.js';
 
 import {
   buildCodexTuiSelectionChoiceActions,
@@ -20,10 +20,10 @@ import {
   type CodexTuiSelectionPrompt,
   type CodexTuiSelectionPromptChoice,
   type CodexTuiSelectionPromptKind,
-} from '../../runtime/codex/tmux-provider.js';
-import { resolveCodexCliExecutable } from '../../runtime/codex/cli-executable.js';
-import { captureCodexResumeModelCheckpoint, readCodexResumeModelMismatch } from '../../runtime/codex/session-index.js';
-import { setCodexTuiResumeModelWarning } from '../../runtime/codex/tui-runtime-signals.js';
+} from '../codex/tmux-provider.js';
+import { resolveCodexCliExecutable } from '../codex/cli-executable.js';
+import { captureCodexResumeModelCheckpoint, readCodexResumeModelMismatch } from '../codex/session-index.js';
+import { setCodexTuiResumeModelWarning } from '../codex/tui-runtime-signals.js';
 import {
   buildClaudeBypassPermissionsChoiceKeys,
   buildClaudePtyCommand,
@@ -33,34 +33,34 @@ import {
   hasClaudePtyBypassPermissionsPrompt,
   hasClaudePtyOnboardingPrompt,
   hasClaudePtyTrustPrompt,
-} from '../../runtime/claude/pty-provider.js';
-import type { ClaudeBypassPermissionsChoice } from '../../runtime/claude/pty-provider.js';
-import { prepareClaudeCodeRouterEnv } from '../../runtime/claude/code-router.js';
+} from '../claude/pty-provider.js';
+import type { ClaudeBypassPermissionsChoice } from '../claude/pty-provider.js';
+import { prepareClaudeCodeRouterEnv } from '../claude/code-router.js';
 import {
   buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
   quoteCommandLineArg,
-} from '../../runtime/codex/shell-snapshot.js';
-import type { StreamChatParams } from '../../runtime/contracts.js';
+} from '../codex/shell-snapshot.js';
+import type { StreamChatParams } from '../contracts.js';
 import {
   isTmuxVersionMismatchError,
   tmuxCore,
   type TmuxCore,
   type TmuxSendAction,
   type TmuxSendActionsOptions,
-} from '../../runtime/tmux/core.js';
+} from './core.js';
 import {
   coordinateRuntimeTmuxSelection,
   transitionRuntimeTmuxInputState,
   type RuntimeTmuxInputStateKind,
-} from '../../runtime/tmux/input-state-machine.js';
+} from './input-state-machine.js';
 
 export {
   tmuxCore,
   type TmuxCore,
   type TmuxSendAction,
   type TmuxSessionInfo,
-} from '../../runtime/tmux/core.js';
+} from './core.js';
 
 export interface StartCodexResumeTmuxSessionParams {
   sessionName: string;

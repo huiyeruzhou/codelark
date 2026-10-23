@@ -12,7 +12,7 @@ import {
   claudeTmuxSessionName,
   sendTmuxActions,
   startClaudeTmuxSession,
-} from '../../../../bridge/tmux/runtime.js';
+} from '../../../../runtime/tmux/runtime.js';
 import { requestRuntimeTuiSelectionViaPermissionBroker } from '../../../../bridge/command/codex-tui-selection.js';
 import { handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import { listClaudeSessionJsonlFiles } from '../../../../runtime/claude/session-jsonl.js';

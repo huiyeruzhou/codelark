@@ -5,7 +5,7 @@ import { getSessionCursorSessionId, getSessionClaudeSessionId, getSessionCodexTh
 import { kimiTmuxSessionName } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
-import { claudeTmuxSessionName, codexTmuxSessionName, sendTmuxInterrupt } from '../tmux/runtime.js';
+import { claudeTmuxSessionName, codexTmuxSessionName, sendTmuxInterrupt } from '../../runtime/tmux/runtime.js';
 import { invalidateRuntimeTmuxInputReadiness } from '../../runtime/tmux/input-state-machine.js';
 import { resolveEffectiveRuntimeProvider } from './support.js';
 import { getCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';

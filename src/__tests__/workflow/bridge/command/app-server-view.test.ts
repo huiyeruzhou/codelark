@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { releaseLegacyCodexTmuxWriter, scheduleCodexAppServerView } from '../../../../bridge/command/tmux.js';
 import type { CodexAppServerSession } from '../../../../runtime/codex/app-server-registry.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../../../domain/index.js';
-import { startCodexAppServerView } from '../../../../bridge/tmux/runtime.js';
+import { startCodexAppServerView } from '../../../../runtime/tmux/runtime.js';
 
 function setup() {
   let session = { id: 'view-session', runtime: { codex: { threadId: 'thread', appServerEndpoint: 'ws://127.0.0.1:12345' } } } as BridgeSession;

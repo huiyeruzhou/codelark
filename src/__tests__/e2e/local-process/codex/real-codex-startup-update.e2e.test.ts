@@ -11,7 +11,7 @@ import {
   startCodexResumeTmuxSession,
   tmuxCore,
   type RuntimeTmuxSelectionPrompt,
-} from '../../../../bridge/tmux/runtime.js';
+} from '../../../../runtime/tmux/runtime.js';
 
 const execFileAsync = promisify(execFile);
 const OLD_CODEX_VERSION = '0.145.0';

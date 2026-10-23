@@ -9,7 +9,7 @@ import {
 import type {
   RuntimeTmuxSelectionPrompt,
   TmuxSendAction,
-} from '../tmux/runtime.js';
+} from '../../runtime/tmux/runtime.js';
 import * as permissionBroker from '../permission/broker.js';
 
 export interface TmuxAutoForwardRecoveryPayload {

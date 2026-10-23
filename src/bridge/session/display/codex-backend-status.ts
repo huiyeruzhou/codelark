@@ -4,7 +4,7 @@ import { appServerCliUrl } from '../../../runtime/codex/app-server-client.js';
 import type { AppServerThreadState } from '../../../runtime/codex/app-server-lifecycle.js';
 import { getCodexAppServerSession, type CodexAppServerServiceStatus } from '../../../runtime/codex/app-server-registry.js';
 export type { CodexAppServerServiceStatus } from '../../../runtime/codex/app-server-registry.js';
-import { codexTmuxSessionName } from '../../tmux/runtime.js';
+import { codexTmuxSessionName } from '../../../runtime/tmux/runtime.js';
 
 export interface CodexBackendStatus {
   backend: 'app-server' | 'legacy' | 'unstarted';

@@ -34,7 +34,7 @@ import {
   type StartCodexResumeTmuxSessionParams,
   type TmuxSendAction,
   type TmuxSessionInfo,
-} from '../tmux/runtime.js';
+} from '../../runtime/tmux/runtime.js';
 import {
   resolveClaudeRuntimeConfig,
   resolveEffectiveRuntimeProvider,
@@ -122,7 +122,7 @@ export {
   sendTmuxInterrupt,
   startCodexResumeTmuxSession,
   type StartCodexResumeTmuxSessionParams,
-} from '../tmux/runtime.js';
+} from '../../runtime/tmux/runtime.js';
 
 const SEND_ACTION_DELAY_MS = 500;
 const CAPTURE_AFTER_SEND_DELAY_MS = 250;

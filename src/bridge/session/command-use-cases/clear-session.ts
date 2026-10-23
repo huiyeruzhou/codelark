@@ -6,7 +6,7 @@ import {
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
-import { cleanupRuntimeTmuxSession } from '../../tmux/runtime.js';
+import { cleanupRuntimeTmuxSession } from '../../../runtime/tmux/runtime.js';
 import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../../runtime/codex/app-server-registry.js';
 import { releaseAppServerRequestObserver } from '../../permission/app-server.js';
 import { getProviderOwnedRuntimeTmuxTarget, stopRunningSession } from '../stop-running-session.js';

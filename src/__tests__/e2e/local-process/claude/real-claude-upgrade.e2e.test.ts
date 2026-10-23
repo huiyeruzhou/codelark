@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { createTmuxCliCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
-import { startClaudeTmuxSession, waitForRuntimeTmuxReady, readClaudeTmuxSessionId } from '../../../../bridge/tmux/runtime.js';
+import { startClaudeTmuxSession, waitForRuntimeTmuxReady, readClaudeTmuxSessionId } from '../../../../runtime/tmux/runtime.js';
 import { resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 import { getClaudeProjectDir } from '../../../../runtime/claude/session-jsonl.js';
 import { hasClaudePtyInputPrompt } from '../../../../runtime/claude/pty-provider.js';
