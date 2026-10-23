@@ -68,6 +68,18 @@ const windowsRuntimeFiles = new Set([
 ]);
 
 const requestedLayers = process.argv.slice(2).filter((arg) => layerFilters.has(arg) || arg === '--windows-runtime');
+const excludedFiles = new Set(
+  process.argv.slice(2).filter((arg) => arg.startsWith('--exclude=')).map((arg) => arg.slice('--exclude='.length).split(path.sep).join('/')),
+);
+const explicitFiles = process.argv
+  .slice(2)
+  .filter((arg) => !layerFilters.has(arg) && !arg.startsWith('--exclude=') && !arg.startsWith('--test-shard') && arg !== '--windows-runtime')
+  .map((arg) => arg.split(path.sep).join('/'))
+  .filter((arg) => arg.endsWith('.test.ts') && fs.existsSync(path.join(process.cwd(), arg)));
+if (explicitFiles.length > 0 && requestedLayers.length > 0) {
+  console.error('Layer flags and explicit test files cannot be combined.');
+  process.exit(1);
+}
 const shardArgs = process.argv.slice(2).filter((arg) => arg === '--test-shard' || arg.startsWith('--test-shard='));
 if (shardArgs.length > 1) {
   console.error(`Expected one test shard, received: ${shardArgs.join(', ')}`);
@@ -81,13 +93,25 @@ if (requestedShard && (!shardMatch || shardIndex < 1 || shardTotal < 1 || shardI
   console.error(`Invalid test shard: ${requestedShard}. Expected --test-shard=N/M with 1 <= N <= M.`);
   process.exit(1);
 }
-const testFiles = discoverTestFiles(testsDir)
-  .sort()
-  .filter((file) => requestedLayers.length === 0 || requestedLayers.some((arg) => (
-    arg === '--windows-runtime'
-      ? windowsRuntimeFiles.has(file.split(path.sep).join('/'))
-      : file.startsWith(layerFilters.get(arg))
-  )));
+if (requestedShard && explicitFiles.length > 0) {
+  console.error('--test-shard cannot be combined with explicit test files.');
+  process.exit(1);
+}
+const testFiles = (explicitFiles.length > 0
+  ? explicitFiles
+  : discoverTestFiles(testsDir)
+      .sort()
+      .filter((file) => requestedLayers.length === 0 || requestedLayers.some((arg) => (
+        arg === '--windows-runtime'
+          ? windowsRuntimeFiles.has(file.split(path.sep).join('/'))
+          : file.startsWith(layerFilters.get(arg))
+      )))
+).filter((file) => !excludedFiles.has(file.split(path.sep).join('/')));
+if (explicitFiles.length > 0 && testFiles.length !== explicitFiles.length) {
+  const missing = explicitFiles.filter((file) => !testFiles.includes(file));
+  console.error(`Explicit test files were excluded or not discovered: ${missing.join(', ')}`);
+  process.exit(1);
+}
 
 if (testFiles.length === 0) {
   console.error(`No test files matched ${requestedLayers.join(', ') || 'the current test discovery pattern'}.`);

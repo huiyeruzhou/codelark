@@ -30,22 +30,31 @@ if (requestedArgs.length > 0 && !parallelSelected) {
   runSelectedLayers(requestedArgs);
 } else {
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-test-groups-'));
+  // Two single files dominate their shards (109s / 78s of their group totals).
+  // Run them as their own groups and shard the remaining files, so no shard
+  // inherits the whole file's wall time.
+  const heavyMockE2eFile = 'src/__tests__/e2e/mock-app/bridge/command/bridge-command-e2e.test.ts';
+  const heavyWorkflowFile = 'src/__tests__/workflow/bridge/command/command-dispatch.test.ts';
+  const excludeMockE2e = `--exclude=${heavyMockE2eFile}`;
+  const excludeWorkflow = `--exclude=${heavyWorkflowFile}`;
   let groups = [
-    { name: 'unit-1', args: ['--unit', '--test-shard=1/2'] },
-    { name: 'unit-2', args: ['--unit', '--test-shard=2/2'] },
-    { name: 'workflow-1', args: ['--workflow', '--test-shard=1/4'] },
-    { name: 'workflow-2', args: ['--workflow', '--test-shard=2/4'] },
-    { name: 'workflow-3', args: ['--workflow', '--test-shard=3/4'] },
-    { name: 'workflow-4', args: ['--workflow', '--test-shard=4/4'] },
-    { name: 'mock-e2e-1', args: ['--mock-e2e', '--test-shard=1/2'] },
-    { name: 'mock-e2e-2', args: ['--mock-e2e', '--test-shard=2/2'] },
-    { name: 'harness', args: ['--harness'] },
-    { name: 'local-e2e', args: ['--local-e2e'] },
+    { name: 'unit-1', layer: '--unit', args: ['--unit', '--test-shard=1/2'] },
+    { name: 'unit-2', layer: '--unit', args: ['--unit', '--test-shard=2/2'] },
+    { name: 'workflow-1', layer: '--workflow', args: ['--workflow', '--test-shard=1/4', excludeWorkflow] },
+    { name: 'workflow-2', layer: '--workflow', args: ['--workflow', '--test-shard=2/4', excludeWorkflow] },
+    { name: 'workflow-3', layer: '--workflow', args: ['--workflow', '--test-shard=3/4', excludeWorkflow] },
+    { name: 'workflow-4', layer: '--workflow', args: ['--workflow', '--test-shard=4/4', excludeWorkflow] },
+    { name: 'workflow-heavy', layer: '--workflow', args: [heavyWorkflowFile] },
+    { name: 'mock-e2e-1', layer: '--mock-e2e', args: ['--mock-e2e', '--test-shard=1/2', excludeMockE2e] },
+    { name: 'mock-e2e-2', layer: '--mock-e2e', args: ['--mock-e2e', '--test-shard=2/2', excludeMockE2e] },
+    { name: 'mock-e2e-heavy', layer: '--mock-e2e', args: [heavyMockE2eFile] },
+    { name: 'harness', layer: '--harness', args: ['--harness'] },
+    { name: 'local-e2e', layer: '--local-e2e', args: ['--local-e2e'] },
   ];
   if (parallelSelected) {
     const supportedLayers = new Set(groups.flatMap((group) => group.args.filter((arg) => !arg.startsWith('--test-shard='))));
     const selectedLayers = new Set(selectedArgs);
-    groups = groups.filter((group) => group.args.some((arg) => selectedLayers.has(arg)));
+    groups = groups.filter((group) => selectedLayers.has(group.layer));
     if (groups.length === 0 || selectedArgs.some((arg) => !supportedLayers.has(arg))) {
       process.stderr.write('[test-groups] --parallel requires one or more layer flags and no shard override.\n');
       process.exit(1);
