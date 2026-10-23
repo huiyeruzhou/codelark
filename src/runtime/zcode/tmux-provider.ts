@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 
 import type { BridgeMirrorRecord, LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
-import { tmuxCore } from '../../bridge/tmux/core.js';
+import { tmuxCore } from '../tmux/core.js';
 import {
   assertRuntimeTmuxInputOwner,
   mutateRuntimeTmuxSession,
@@ -14,8 +14,8 @@ import {
   sendRuntimeTmuxInput,
   setRuntimeTmuxTurnState,
   transitionRuntimeTmuxInputState,
-} from '../../bridge/tmux/input-state-machine.js';
-import { detectRuntimeTmuxPaneDead } from '../../bridge/tmux/runtime.js';
+} from '../tmux/input-state-machine.js';
+import { detectRuntimeTmuxPaneDead } from '../tmux/pane-state.js';
 import { CODELARK_HOME } from '../../configuration/paths.js';
 import {
   buildShellSnapshotLaunchArgs,

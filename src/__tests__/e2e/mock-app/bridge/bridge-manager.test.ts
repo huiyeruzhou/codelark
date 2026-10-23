@@ -52,7 +52,7 @@ import { tmuxCore, type TmuxCore } from '../../../../bridge/tmux/runtime.js';
 import {
   getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,
-} from '../../../../bridge/tmux/input-state-machine.js';
+} from '../../../../runtime/tmux/input-state-machine.js';
 import type { OutboundMessage, OutboundRichCard, PermissionGateway, SendResult } from '../../../../domain/index.js';
 import type { LifecycleHooks, LLMProvider, StreamChatParams } from '../../../../runtime/contracts.js';
 import { writeCodexSessionJsonlFixture } from '../../../helpers/bridge/test-bridge-utils.js';

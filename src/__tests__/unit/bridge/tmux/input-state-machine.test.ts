@@ -13,7 +13,7 @@ import {
   setRuntimeTmuxTurnState,
   transitionRuntimeTmuxInputState,
   withRuntimeTmuxInputOwner,
-} from '../../../../bridge/tmux/input-state-machine.js';
+} from '../../../../runtime/tmux/input-state-machine.js';
 
 describe('runtime tmux input state machine', () => {
   beforeEach(() => resetRuntimeTmuxInputStatesForTests());

@@ -29,7 +29,7 @@ import {
   streamCursorTmuxTui,
   withCursorReasoningEffort,
 } from '../../../../runtime/cursor/tmux-provider.js';
-import { tmuxCore } from '../../../../bridge/tmux/core.js';
+import { tmuxCore } from '../../../../runtime/tmux/core.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { readMirrorDeliverableRecords } from '../../../../bridge/mirror/reconcile-core.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';

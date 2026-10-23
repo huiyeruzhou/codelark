@@ -8,12 +8,12 @@ import { createInteractiveRuntime } from '../../../../bridge/host/interactive-ru
 import { getProviderOwnedRuntimeTmuxTarget, stopRunningSession, type StopRunningSessionDeps } from '../../../../bridge/session/stop-running-session.js';
 import { handleStopCommand } from '../../../../bridge/command/control.js';
 import { CommandThreadDisplay } from '../../../../bridge/command/thread-display.js';
-import { _testOnlyTmuxCore, type TmuxCore } from '../../../../bridge/tmux/core.js';
+import { _testOnlyTmuxCore, type TmuxCore } from '../../../../runtime/tmux/core.js';
 import { kimiTmuxSessionName } from '../../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../../../runtime/zcode/tmux-provider.js';
 import { claudeTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
-import { resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
+import { resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 
 beforeEach(() => { resetBridgeTestState(); resetRuntimeTmuxInputStatesForTests(); });
 afterEach(() => _testOnlyTmuxCore.reset());

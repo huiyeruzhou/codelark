@@ -50,7 +50,7 @@ import { getCodexThreadId } from '../turn/turn-classifier.js';
 import { getClaudeSessionJsonlById } from '../../runtime/claude/session-jsonl.js';
 import { hasClaudePtyInputPrompt } from '../../runtime/claude/pty-provider.js';
 import { compactTerminalScreenText } from '../../runtime/tui-screen.js';
-import { tmuxCore } from '../tmux/core.js';
+import { tmuxCore } from '../../runtime/tmux/core.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
@@ -109,7 +109,7 @@ import {
   transitionRuntimeTmuxInputState,
   resolveRuntimeTmuxSteerOperation,
   sendRuntimeTmuxInput,
-} from '../tmux/input-state-machine.js';
+} from '../../runtime/tmux/input-state-machine.js';
 export {
   buildCodexResumeTmuxCommand,
   captureTmuxScreen,

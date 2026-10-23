@@ -22,7 +22,7 @@ import {
   coordinateRuntimeTmuxSelection,
   getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,
-} from '../../../../bridge/tmux/input-state-machine.js';
+} from '../../../../runtime/tmux/input-state-machine.js';
 import { parseCodexTuiSelectionPrompt } from '../../../../runtime/codex/tmux-provider.js';
 
 describe('codex tmux runtime', () => {

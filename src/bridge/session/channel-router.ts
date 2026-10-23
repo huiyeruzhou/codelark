@@ -7,9 +7,9 @@
 
 import type { ChannelAddress, ChannelChat, ChannelType } from '../../domain/index.js';
 import { getBridgeContext } from '../context.js';
-import { SessionRegistryService } from '../session/registry.js';
-import { createDraftSession, getOrCreateDraftSession } from '../session/internal-sessions.js';
-import { recordBindingChange } from '../session/binding-audit.js';
+import { SessionRegistryService } from './registry.js';
+import { createDraftSession, getOrCreateDraftSession } from './internal-sessions.js';
+import { recordBindingChange } from './binding-audit.js';
 import { createConfigService, type ConfigScope } from '../../configuration/service.js';
 import { expandHomePath } from '../../configuration/paths.js';
 import type { ConfigV2 } from '../../configuration/schema.js';

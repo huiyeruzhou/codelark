@@ -29,7 +29,7 @@ import {
   shouldUseCodexTmuxTui,
   waitForStableCodexTmuxInputPrompt,
 } from '../../../../runtime/codex/tmux-provider.js';
-import type { TmuxCore } from '../../../../bridge/tmux/core.js';
+import type { TmuxCore } from '../../../../runtime/tmux/core.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import {
   buildShellSnapshotLaunchCommand,

@@ -27,12 +27,12 @@ import {
   tmuxCore,
   type TmuxCore,
   type TmuxSendAction,
-} from '../../bridge/tmux/core.js';
+} from '../tmux/core.js';
 import {
   coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
-} from '../../bridge/tmux/input-state-machine.js';
+} from '../tmux/input-state-machine.js';
 import {
   hasTuiEnterActionFooter,
   hasTuiEnterConfirmFooter,

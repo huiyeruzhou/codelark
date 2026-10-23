@@ -9,7 +9,7 @@ import type {
 import type { LLMProvider, StreamChatParams, TokenUsage } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import { prepareClaudeCodeRouterEnv } from './code-router.js';
-import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
+import { resolveClaudeCliExecutable } from '../codex/cli-executable.js';
 import { clearClaudeParentSessionEnv } from './environment.js';
 
 type ClaudeAgentSdkModule = typeof import('@anthropic-ai/claude-agent-sdk');

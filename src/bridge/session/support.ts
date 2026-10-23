@@ -15,7 +15,7 @@ import type { ConfigV2 } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
-} from '../session/internal-sessions.js';
+} from './internal-sessions.js';
 import {
   findSelectableCodexModel,
   isCliOnlyCodexModel,

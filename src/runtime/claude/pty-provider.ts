@@ -12,7 +12,7 @@ import {
   parseClaudeCodeRouterStatus,
   prepareClaudeCodeRouterEnv,
 } from './code-router.js';
-import { resolveClaudeCliExecutable } from '../../runtime/codex/cli-executable.js';
+import { resolveClaudeCliExecutable } from '../codex/cli-executable.js';
 import {
   getClaudeSessionJsonlById,
   type ClaudeSessionJsonlSummary,

@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 
 import type { StructuredStreamingUiMetadata } from '../../../../channels/contracts.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';
-import { resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
+import { resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 import { claudeTmuxSessionName } from '../../../../bridge/tmux/runtime.js';
 import { streamClaudeTmuxTui } from '../../../../runtime/claude/tmux-provider.js';
 import { listClaudeSessionJsonlSummaries } from '../../../../runtime/claude/session-jsonl.js';

@@ -7,9 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { createTmuxCliCore } from '../../../../bridge/tmux/core.js';
+import { createTmuxCliCore } from '../../../../runtime/tmux/core.js';
 import { readClaudeTmuxSessionId, waitForRuntimeTmuxReady } from '../../../../bridge/tmux/runtime.js';
-import { inspectRuntimeTmuxInput, resetRuntimeTmuxInputStatesForTests, sendRuntimeTmuxInput } from '../../../../bridge/tmux/input-state-machine.js';
+import { inspectRuntimeTmuxInput, resetRuntimeTmuxInputStatesForTests, sendRuntimeTmuxInput } from '../../../../runtime/tmux/input-state-machine.js';
 import { hasClaudePtyInputPrompt } from '../../../../runtime/claude/pty-provider.js';
 import { commandAvailable, createShortTmuxTempDirectory, removeRuntimeTestDirectory, startLocalResponsesProxy, waitForCondition } from '../../../helpers/runtime/real-codex-e2e-utils.js';
 

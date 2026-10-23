@@ -220,7 +220,7 @@ import {
   coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
-} from '../tmux/input-state-machine.js';
+} from '../../runtime/tmux/input-state-machine.js';
 import { buildRuntimeStreamTags } from '../../shared/streaming-metadata.js';
 import { ThreadDisplayService } from '../session/thread-display-resolver.js';
 import {

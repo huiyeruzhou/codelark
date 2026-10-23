@@ -19,7 +19,7 @@ import { CodexRoutingProvider } from '../../../../../runtime/codex/routing-provi
 import { findSessionFileByThreadId } from '../../../../../runtime/codex/tmux-provider.js';
 import { computeKimiWorkspaceDirName, isArchivedKimiSession } from '../../../../../runtime/kimi/session-index.js';
 import { _testOnly, registerAdapter } from '../../../../../bridge/host/manager.js';
-import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../../bridge/tmux/core.js';
+import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../../runtime/tmux/core.js';
 import * as router from '../../../../../bridge/session/channel-router.js';
 import { createMirrorSubscription } from '../../../../../bridge/mirror/subscription-state.js';
 import { listEveryTasks } from '../../../../../bridge/automation/every-tasks.js';

@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../../../bridge/tmux/core.js';
-import { getRuntimeTmuxInputState } from '../../../../bridge/tmux/input-state-machine.js';
+import { tmuxCore, type TmuxCore, type TmuxSendAction } from '../../../../runtime/tmux/core.js';
+import { getRuntimeTmuxInputState } from '../../../../runtime/tmux/input-state-machine.js';
 import { computeKimiWorkspaceDirName } from '../../../../runtime/kimi/session-index.js';
 import {
   buildKimiTmuxLaunchCommand,

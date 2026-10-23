@@ -1,4 +1,4 @@
-import { isSupportedChannelProvider, type RuntimeChannelInstance } from '../../channels/types.js';
+import { isSupportedChannelProvider, type RuntimeChannelInstance } from '../types.js';
 import type { AdapterRuntimeInstance } from '../contracts.js';
 
 export function stableFingerprintValue(value: unknown): unknown {

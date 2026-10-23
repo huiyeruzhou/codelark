@@ -16,7 +16,7 @@ import {
   getCodexSessionByThreadIdSafe,
   resolveSessionRuntimeConfig,
 } from '../../../../bridge/session/support.js';
-import { tmuxCore } from '../../../../bridge/tmux/core.js';
+import { tmuxCore } from '../../../../runtime/tmux/core.js';
 import type { BridgeStore } from '../../../../domain/index.js';
 import type { OutboundMessage } from '../../../../domain/index.js';
 import { _testOnly, registerAdapter } from '../../../../bridge/host/manager.js';

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
+import { resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 import { findZcodeSessionById } from '../../../../runtime/zcode/session-index.js';
 import {
   restartZcodeTmuxInputSession,

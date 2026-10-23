@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { detectRuntimeTmuxPaneDead as detectPaneDead, type RuntimeTmuxPaneDead as PaneDead } from '../../runtime/tmux/pane-state.js';
 import { parseClaudeLaunchSessionId } from '../../runtime/claude/session-identity.js';
 import { CLAUDE_PARENT_SESSION_ENV } from '../../runtime/claude/environment.js';
 
@@ -47,19 +48,19 @@ import {
   type TmuxCore,
   type TmuxSendAction,
   type TmuxSendActionsOptions,
-} from './core.js';
+} from '../../runtime/tmux/core.js';
 import {
   coordinateRuntimeTmuxSelection,
   transitionRuntimeTmuxInputState,
   type RuntimeTmuxInputStateKind,
-} from './input-state-machine.js';
+} from '../../runtime/tmux/input-state-machine.js';
 
 export {
   tmuxCore,
   type TmuxCore,
   type TmuxSendAction,
   type TmuxSessionInfo,
-} from './core.js';
+} from '../../runtime/tmux/core.js';
 
 export interface StartCodexResumeTmuxSessionParams {
   sessionName: string;
@@ -95,10 +96,7 @@ export interface StartCodexResumeTmuxSessionResult {
 export type RuntimeTmuxKind = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
 export type RuntimeTmuxSelectionChoice = CodexTuiSelectionPromptChoice | ClaudeBypassPermissionsChoice | 'confirm';
 
-export interface RuntimeTmuxPaneDead {
-  status?: number;
-  line: string;
-}
+export interface RuntimeTmuxPaneDead extends PaneDead {}
 
 export type RuntimeTmuxSelectionPrompt =
   | {
@@ -640,13 +638,7 @@ function transitionRuntimeTmuxReadiness(
 }
 
 export function detectRuntimeTmuxPaneDead(screen: string | undefined): RuntimeTmuxPaneDead | undefined {
-  const line = (screen || '').split(/\r?\n/).find((candidate) => /Pane is dead \(status \d+/i.test(candidate));
-  if (!line) return undefined;
-  const statusMatch = line.match(/Pane is dead \(status (\d+)/i);
-  return {
-    ...(statusMatch ? { status: Number(statusMatch[1]) } : {}),
-    line: line.trim(),
-  };
+  return detectPaneDead(screen);
 }
 
 export async function waitForRuntimeTmuxReady(params: {

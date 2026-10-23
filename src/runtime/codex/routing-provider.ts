@@ -2,12 +2,12 @@ import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import type { RuntimeProviderChoice } from '../../domain/session.js';
 import { isRuntimeProviderChoice } from '../../domain/session-runtime.js';
-import { ClaudePtyProvider } from '../../runtime/claude/pty-provider.js';
-import { ClaudeSdkProvider } from '../../runtime/claude/sdk-provider.js';
-import { ClaudeTmuxProvider } from '../../runtime/claude/tmux-provider.js';
-import { KimiTmuxProvider } from '../../runtime/kimi/tmux-provider.js';
-import { CursorTmuxProvider } from '../../runtime/cursor/provider.js';
-import { ZcodeTmuxProvider } from '../../runtime/zcode/tmux-provider.js';
+import { ClaudePtyProvider } from '../claude/pty-provider.js';
+import { ClaudeSdkProvider } from '../claude/sdk-provider.js';
+import { ClaudeTmuxProvider } from '../claude/tmux-provider.js';
+import { KimiTmuxProvider } from '../kimi/tmux-provider.js';
+import { CursorTmuxProvider } from '../cursor/provider.js';
+import { ZcodeTmuxProvider } from '../zcode/tmux-provider.js';
 import { CodexTmuxProvider } from './tmux-provider.js';
 import { streamCodexAppServer } from './app-server-provider.js';
 

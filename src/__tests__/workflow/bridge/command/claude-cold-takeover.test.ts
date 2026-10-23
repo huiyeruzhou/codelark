@@ -9,8 +9,8 @@ import { parseClaudeLaunchSessionId } from '../../../../runtime/claude/session-i
 import { createConfigService } from '../../../../configuration/service.js';
 import { handleBridgeCommand } from '../../../../bridge/command/index.js';
 import * as router from '../../../../bridge/host/channel-router.js';
-import { _testOnlyTmuxCore, type TmuxCore, type TmuxSendAction } from '../../../../bridge/tmux/core.js';
-import { getRuntimeTmuxInputState, resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
+import { _testOnlyTmuxCore, type TmuxCore, type TmuxSendAction } from '../../../../runtime/tmux/core.js';
+import { getRuntimeTmuxInputState, resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { initBridgeTestContext, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
 

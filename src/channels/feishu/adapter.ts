@@ -41,7 +41,7 @@ import type {
 } from '../../domain/index.js';
 import type { FileAttachment } from '../../domain/index.js';
 import type { ToolCallInfo } from '../../domain/index.js';
-import type { FeishuChannelConfig } from '../../channels/types.js';
+import type { FeishuChannelConfig } from '../types.js';
 import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,

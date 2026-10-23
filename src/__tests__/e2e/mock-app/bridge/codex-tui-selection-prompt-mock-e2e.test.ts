@@ -11,8 +11,8 @@ import {
   type CodexTuiSelectionPrompt,
   type CodexTuiSelectionPromptChoice,
 } from '../../../../runtime/codex/tmux-provider.js';
-import type { TmuxCore, TmuxSendAction } from '../../../../bridge/tmux/core.js';
-import { resetRuntimeTmuxInputStatesForTests } from '../../../../bridge/tmux/input-state-machine.js';
+import type { TmuxCore, TmuxSendAction } from '../../../../runtime/tmux/core.js';
+import { resetRuntimeTmuxInputStatesForTests } from '../../../../runtime/tmux/input-state-machine.js';
 
 const CODEX_TUI_CONFIRM_FOOTER = 'Press enter to confirm or esc to cancel';
 

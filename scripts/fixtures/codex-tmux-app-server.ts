@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { createTmuxCliCore } from '../../src/bridge/tmux/core.js';
+import { createTmuxCliCore } from '../../src/runtime/tmux/core.js';
 import { startCodexAppServerView } from '../../src/bridge/tmux/runtime.js';
 import type { CodexAppServerSession } from '../../src/runtime/codex/app-server-registry.js';
 import { CodexAppServerClient } from '../../src/runtime/codex/app-server-client.js';

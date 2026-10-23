@@ -22,11 +22,11 @@ import {
   startRuntimeTmuxSession,
   waitForRuntimeTmuxReady,
 } from '../../bridge/tmux/runtime.js';
-import { tmuxCore } from '../../bridge/tmux/core.js';
+import { tmuxCore } from '../tmux/core.js';
 import {
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
-} from '../../bridge/tmux/input-state-machine.js';
+} from '../tmux/input-state-machine.js';
 
 export { startClaudeTmuxSession };
 

@@ -36,12 +36,12 @@ import {
   _testOnlyTmuxCommandFormatting,
   _testOnlyTmuxScreenMonitors,
 } from '../../../../bridge/command/tmux.js';
-import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../bridge/tmux/core.js';
+import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../runtime/tmux/core.js';
 import {
   getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,
   transitionRuntimeTmuxInputState,
-} from '../../../../bridge/tmux/input-state-machine.js';
+} from '../../../../runtime/tmux/input-state-machine.js';
 import { buildCommandCallbackData, parseCommandCallbackData, THREAD_SELECT_CALLBACK_PREFIX, THEN_TASK_ACTION_CALLBACK_PREFIX, THEN_TASK_SELECT_CALLBACK_PREFIX } from '../../../../bridge/command/callbacks.js';
 import { forwardPermissionRequest, handlePermissionCallback } from '../../../../bridge/permission/broker.js';
 import * as router from '../../../../bridge/host/channel-router.js';

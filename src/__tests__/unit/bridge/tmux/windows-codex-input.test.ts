@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createTmuxCliCore, _testOnlyTmuxCore } from '../../../../bridge/tmux/core.js';
+import { createTmuxCliCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { injectPromptIntoTmuxPane } from '../../../../runtime/codex/tmux-provider.js';
 
 // Model the documented Windows delivery boundary, not a native Windows run:

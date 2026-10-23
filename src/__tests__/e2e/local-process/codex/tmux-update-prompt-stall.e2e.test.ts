@@ -7,7 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { tmuxCore } from '../../../../bridge/tmux/core.js';
+import { tmuxCore } from '../../../../runtime/tmux/core.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import {
   createCodexTuiUpdatePromptMonitor,

@@ -1,4 +1,4 @@
-import type { FeishuSite } from '../../channels/types.js';
+import type { FeishuSite } from '../types.js';
 
 export function normalizeFeishuSite(value: string | undefined): FeishuSite {
   const normalized = (value || '').trim().replace(/\/+$/, '').toLowerCase();

@@ -11,7 +11,7 @@ import { CommandThreadDisplay } from '../../../../bridge/command/thread-display.
 import { handleClearSessionCommand } from '../../../../bridge/session/command-use-cases/clear-session.js';
 import { handleProviderCommand } from '../../../../bridge/command/provider-settings.js';
 import { scheduleCodexAppServerView } from '../../../../bridge/command/tmux.js';
-import { _testOnlyTmuxCore } from '../../../../bridge/tmux/core.js';
+import { _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { _testOnly } from '../../../../bridge/host/manager.js';
 import { prepareCodexAppServerSession, getCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
 

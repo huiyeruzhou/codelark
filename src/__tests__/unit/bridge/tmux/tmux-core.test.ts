@@ -9,7 +9,7 @@ import {
   defaultTmuxExecutableCandidates,
   usesPsmuxServerSidePaste,
   type TmuxCore,
-} from '../../../../bridge/tmux/core.js';
+} from '../../../../runtime/tmux/core.js';
 
 function installFakeTmux(): { binDir: string; logPath: string; core: TmuxCore } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-fake-tmux-core-'));

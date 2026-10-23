@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import type { BridgeMirrorRecord, LLMProvider, StreamChatParams } from '../contracts.js';
 import { sseEvent } from '../sse.js';
-import { tmuxCore } from '../../bridge/tmux/core.js';
+import { tmuxCore } from '../tmux/core.js';
 import {
   assertRuntimeTmuxInputOwner,
   mutateRuntimeTmuxSession,
@@ -13,8 +13,8 @@ import {
   inspectRuntimeTmuxInput,
   sendRuntimeTmuxInput,
   transitionRuntimeTmuxInputState,
-} from '../../bridge/tmux/input-state-machine.js';
-import { detectRuntimeTmuxPaneDead } from '../../bridge/tmux/runtime.js';
+} from '../tmux/input-state-machine.js';
+import { detectRuntimeTmuxPaneDead } from '../tmux/pane-state.js';
 import {
   buildShellSnapshotLaunchArgs,
   ensureShellSnapshot,
