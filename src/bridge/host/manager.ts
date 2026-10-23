@@ -15,7 +15,6 @@ import type {
   ChannelChat,
   InboundMessage,
   OutboundRichCard,
-  RuntimeNoticeInfo,
 } from '../../domain/index.js';
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import type { BridgeSession, BridgeStore, PermissionLinkRecord } from '../../domain/index.js';
@@ -190,14 +189,7 @@ import {
   parseCodexTuiSelectionPrompt,
   type CodexTuiSelectionPromptMonitor,
 } from '../../runtime/codex/tmux-provider.js';
-import {
-  findNewCodexTuiDiagnostics,
-  getCodexTuiResumeModelWarning,
-  setCodexTuiResumeModelWarning,
-  parseCodexTuiModelMismatchWarning,
-  parseCodexTuiReconnectSignal,
-  type CodexTuiDiagnostic,
-} from '../../runtime/codex/tui-runtime-signals.js';
+import { setCodexTuiResumeModelWarning } from '../../runtime/codex/tui-runtime-signals.js';
 import {
   cleanupRuntimeTmuxSession,
   tmuxCore,
@@ -279,7 +271,7 @@ import {
   isPendingAttachmentConfirmationReply,
 } from '../command/attachment-confirmations.js';
 import { consumeStartupNoticeTarget } from './startup-notice-target.js';
-import { applyUnifiedTurnStatusNote } from '../turn/unified-turn-state.js';
+import { createCodexTuiDiagnostics } from './codex-tui-diagnostics.js';
 import { resolveInstalledCodelarkVersion } from '../update/installed-version.js';
 import { createDailyVersionChecker } from '../update/version-check.js';
 import {
@@ -326,8 +318,6 @@ const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_INTERVAL_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_WINDOW_MS = 5_000;
 const MIRROR_TMUX_SELECTION_PROBE_FOLLOWUP_INTERVAL_MS = 300;
-const CODEX_TUI_IDLE_CHECKPOINT_HOT_MISSING_RETRY_MS = 5_000;
-const CODEX_TUI_IDLE_CHECKPOINT_COLD_MISSING_RETRY_MS = 60_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_TIMEOUT_MS = 5_000;
 const TMUX_AUTO_FORWARD_SELECTION_PROBE_INTERVAL_MS = 300;
 const TMUX_PROVIDER_EXIT_PROBE_DELAY_MS = 1_500;
@@ -369,32 +359,6 @@ const tmuxSelectionPromptMonitors = new Map<string, CodexTuiSelectionPromptMonit
 const tmuxSelectionPromptLastProbeAt = new Map<string, number>();
 const tmuxSelectionPromptFollowupUntil = new Map<string, number>();
 const pendingTmuxSelectionPromptProbePromises = new Set<Promise<boolean>>();
-interface CodexTuiScreenCheckpoint {
-  screen: string;
-  capturedAtMs: number;
-  claimedTurnKey?: string;
-}
-
-const codexTuiIdleScreenCheckpoints = new Map<string, CodexTuiScreenCheckpoint>();
-const codexTuiTurnScreenBaselines = new Map<string, CodexTuiScreenCheckpoint>();
-const codexTuiIdleScreenMissingCheckedAt = new Map<string, number>();
-
-interface CodexTuiReconnectMonitor {
-  streamKey: string;
-  signalKey: string;
-  appliedNote: string;
-  previousStatusNote: string | null;
-}
-
-const codexTuiReconnectMonitors = new Map<string, CodexTuiReconnectMonitor>();
-const codexTuiModelMismatchNoticesInFlight = new Map<string, string>();
-
-interface CodexTuiPendingTurnDiagnosticMonitor {
-  screen: string;
-  diagnostics: CodexTuiDiagnostic[];
-}
-
-const codexTuiPendingTurnDiagnosticMonitors = new Map<string, CodexTuiPendingTurnDiagnosticMonitor>();
 
 interface TmuxSelectionPromptTarget {
   channelType: string;
@@ -788,449 +752,6 @@ function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean 
   return true;
 }
 
-function assignCodexTuiTurnScreenBaseline(
-  subscription: BridgeMirrorSubscription,
-  turnState: BridgeMirrorTurnState,
-): void {
-  if (codexTuiTurnScreenBaselines.has(turnState.streamKey)) return;
-  const checkpoint = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
-  if (!checkpoint) return;
-  const turnStartedAtMs = Date.parse(turnState.startedAt);
-  if (!Number.isFinite(turnStartedAtMs) || checkpoint.capturedAtMs >= turnStartedAtMs) return;
-  const turnKey = turnState.turnId || turnState.startedAt;
-  if (checkpoint.claimedTurnKey && checkpoint.claimedTurnKey !== turnKey) return;
-  checkpoint.claimedTurnKey = turnKey;
-  codexTuiTurnScreenBaselines.set(turnState.streamKey, checkpoint);
-}
-
-function assignCodexTuiChainedTurnScreenBaseline(
-  subscription: BridgeMirrorSubscription,
-  checkpoint: CodexTuiScreenCheckpoint,
-  finalizedStreamKey: string,
-): void {
-  const pendingTurn = subscription.pendingTurn;
-  if (!pendingTurn || pendingTurn.streamKey === finalizedStreamKey) return;
-  if (codexTuiTurnScreenBaselines.has(pendingTurn.streamKey)) return;
-  const turnStartedAtMs = Date.parse(pendingTurn.startedAt);
-  if (!Number.isFinite(turnStartedAtMs) || turnStartedAtMs > checkpoint.capturedAtMs) return;
-
-  checkpoint.claimedTurnKey = pendingTurn.turnId || pendingTurn.startedAt;
-  codexTuiTurnScreenBaselines.set(pendingTurn.streamKey, checkpoint);
-  console.log('[bridge-manager] Codex TUI screen handed to chained turn as diagnostic baseline:', {
-    event: 'codex.tui.diagnostic_baseline.handoff',
-    session_id: subscription.sessionId,
-    thread_id: subscription.threadId,
-    finalized_stream_key: finalizedStreamKey,
-    pending_stream_key: pendingTurn.streamKey,
-    captured_at_ms: checkpoint.capturedAtMs,
-    pending_started_at: pendingTurn.startedAt,
-  });
-}
-
-async function captureCodexTuiIdleScreenCheckpoint(
-  subscription: BridgeMirrorSubscription,
-  activeTmuxSessionNames?: ReadonlySet<string>,
-  nowMs = Date.now(),
-): Promise<void> {
-  if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return;
-  const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
-  if (existing && !existing.claimedTurnKey) return;
-  const session = getBridgeContext().store.getSession(subscription.sessionId);
-  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return;
-  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
-  if (!tmuxSessionName) return;
-  if (activeTmuxSessionNames && !activeTmuxSessionNames.has(tmuxSessionName)) {
-    codexTuiIdleScreenMissingCheckedAt.set(subscription.sessionId, nowMs);
-    return;
-  }
-  try {
-    const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
-    codexTuiIdleScreenMissingCheckedAt.delete(subscription.sessionId);
-    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, {
-      screen: capture.screen,
-      capturedAtMs: nowMs,
-    });
-  } catch (error) {
-    console.warn('[bridge-manager] Codex TUI idle checkpoint capture failed:', {
-      session_id: subscription.sessionId,
-      tmux_session: tmuxSessionName,
-      error: describeUnknownError(error),
-    });
-  }
-}
-
-function shouldAttemptCodexTuiIdleScreenCheckpoint(
-  subscription: BridgeMirrorSubscription,
-  nowMs: number,
-): boolean {
-  if (subscription.pendingTurn || subscription.pendingDeliveries.length > 0) return false;
-  const existing = codexTuiIdleScreenCheckpoints.get(subscription.sessionId);
-  if (existing && !existing.claimedTurnKey) return false;
-  const missingCheckedAt = codexTuiIdleScreenMissingCheckedAt.get(subscription.sessionId) || 0;
-  const retryMs = subscription.activityTier === 'cold'
-    ? CODEX_TUI_IDLE_CHECKPOINT_COLD_MISSING_RETRY_MS
-    : CODEX_TUI_IDLE_CHECKPOINT_HOT_MISSING_RETRY_MS;
-  return nowMs - missingCheckedAt >= retryMs;
-}
-
-function resolveCodexTuiIdleScreenCheckpointTmuxSessionName(
-  subscription: BridgeMirrorSubscription,
-  nowMs: number,
-): string | null {
-  if (!shouldAttemptCodexTuiIdleScreenCheckpoint(subscription, nowMs)) return null;
-  const session = getBridgeContext().store.getSession(subscription.sessionId);
-  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) return null;
-  return getSessionRuntimeTmuxSessionName(session) || null;
-}
-
-async function ensureCodexTuiIdleScreenCheckpoints(): Promise<void> {
-  const nowMs = Date.now();
-  const candidates = Array.from(getState().mirrorSubscriptions.values()).flatMap((subscription) => {
-    const tmuxSessionName = resolveCodexTuiIdleScreenCheckpointTmuxSessionName(subscription, nowMs);
-    return tmuxSessionName ? [{ subscription, tmuxSessionName }] : [];
-  });
-  if (candidates.length === 0) return;
-
-  let activeTmuxSessionNames: Set<string>;
-  try {
-    const listed = await tmuxCore.listSessions();
-    activeTmuxSessionNames = new Set(listed.sessions.map((session) => session.name));
-  } catch (error) {
-    for (const { subscription } of candidates) {
-      codexTuiIdleScreenMissingCheckedAt.set(subscription.sessionId, nowMs);
-    }
-    console.warn('[bridge-manager] Unable to list tmux sessions for Codex TUI idle checkpoints:', {
-      error: describeUnknownError(error),
-    });
-    return;
-  }
-
-  await Promise.allSettled(
-    candidates.map(({ subscription }) =>
-      captureCodexTuiIdleScreenCheckpoint(subscription, activeTmuxSessionNames, nowMs),
-    ),
-  );
-}
-
-function observeCodexTuiReconnectStatus(
-  subscription: BridgeMirrorSubscription,
-  screenText: string,
-  nowMs: number,
-): void {
-  const pendingTurn = subscription.pendingTurn;
-  const previous = codexTuiReconnectMonitors.get(subscription.sessionId);
-  if (!pendingTurn) {
-    codexTuiReconnectMonitors.delete(subscription.sessionId);
-    return;
-  }
-
-  const reconnect = parseCodexTuiReconnectSignal(screenText);
-  if (!reconnect) {
-    if (!previous || previous.streamKey !== pendingTurn.streamKey) return;
-    if (pendingTurn.statusNote === previous.appliedNote) {
-      applyUnifiedTurnStatusNote(pendingTurn, previous.previousStatusNote, nowMs);
-      MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
-    }
-    codexTuiReconnectMonitors.delete(subscription.sessionId);
-    return;
-  }
-
-  const signalKey = `${reconnect.attempt}/${reconnect.maxAttempts}`;
-  if (previous?.streamKey === pendingTurn.streamKey && previous.signalKey === signalKey) return;
-  const appliedNote = `正在重连 ${signalKey}`;
-  const previousStatusNote = previous?.streamKey === pendingTurn.streamKey
-    ? previous.previousStatusNote
-    : pendingTurn.statusNote;
-  applyUnifiedTurnStatusNote(pendingTurn, appliedNote, nowMs);
-  codexTuiReconnectMonitors.set(subscription.sessionId, {
-    streamKey: pendingTurn.streamKey,
-    signalKey,
-    appliedNote,
-    previousStatusNote,
-  });
-  MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, pendingTurn);
-}
-
-function buildCodexTuiModelMismatchCard(params: {
-  bindingId: string;
-  recordedModel: string;
-  resumingModel: string;
-}): OutboundRichCard {
-  return {
-    title: 'Codex 恢复模型不一致',
-    template: 'orange',
-    updateKey: `codex-model-mismatch:${params.bindingId}`,
-    updateTtlMs: null,
-    sections: [
-      {
-        fields: [
-          ['Session 记录模型', `\`${params.recordedModel}\``],
-          ['当前恢复模型', `\`${params.resumingModel}\``],
-        ],
-      },
-      {
-        markdown: '继续使用可能影响 Codex 表现。建议发送 `/clear` 新建 session。',
-      },
-    ],
-  };
-}
-
-function notifyCodexTuiModelMismatchWarning(
-  subscription: BridgeMirrorSubscription,
-  warning: { recordedModel: string; resumingModel: string },
-): void {
-  const signalKey = `${subscription.sessionId}\u0000${warning.recordedModel}\u0000${warning.resumingModel}`;
-  const { store } = getBridgeContext();
-  const session = store.getSession(subscription.sessionId);
-  const binding = store.getChannelChat(subscription.channelType, subscription.chatId);
-  if (!session || !binding || binding.id !== subscription.bindingId) return;
-  if (binding.bridgeSessionId !== subscription.sessionId) return;
-  if (binding.codexModelMismatchWarningKey === signalKey) return;
-  if (codexTuiModelMismatchNoticesInFlight.get(binding.id) === signalKey) return;
-  const adapter = getState().adapters.get(subscription.channelType);
-  if (!adapter?.isRunning()) return;
-
-  codexTuiModelMismatchNoticesInFlight.set(binding.id, signalKey);
-  const text = [
-    'Codex 恢复模型不一致',
-    '',
-    `Session 记录模型：\`${warning.recordedModel}\``,
-    `当前恢复模型：\`${warning.resumingModel}\``,
-    '',
-    '继续使用可能影响 Codex 表现。建议发送 `/clear` 新建 session。',
-  ].join('\n');
-  const delivery = enqueueBridgeNotice(
-    adapter,
-    { channelType: subscription.channelType, chatId: subscription.chatId },
-    text,
-    {
-      sessionId: subscription.sessionId,
-      audit: true,
-      richCard: buildCodexTuiModelMismatchCard({
-        bindingId: binding.id,
-        ...warning,
-      }),
-    },
-  );
-  void delivery.completion.then((result) => {
-    if (codexTuiModelMismatchNoticesInFlight.get(binding.id) === signalKey) {
-      codexTuiModelMismatchNoticesInFlight.delete(binding.id);
-    }
-    if (!result.ok) {
-      console.warn('[bridge-manager] Codex model mismatch notice delivery failed:', {
-        event: 'codex.tui.model_mismatch.notice_failed',
-        session_id: subscription.sessionId,
-        thread_id: subscription.threadId,
-        error: result.error,
-      });
-      return;
-    }
-    const latestSession = store.getSession(subscription.sessionId);
-    const latestBinding = store.getChannelChat(subscription.channelType, subscription.chatId);
-    if (!latestSession || getSessionCodexThreadId(latestSession) !== subscription.threadId) return;
-    if (!latestBinding || latestBinding.id !== binding.id || latestBinding.bridgeSessionId !== subscription.sessionId) return;
-    store.updateChannelChat(binding.id, { codexModelMismatchWarningKey: signalKey });
-    console.warn('[bridge-manager] Codex resumed with a different model:', {
-      event: 'codex.tui.model_mismatch.notified',
-      session_id: subscription.sessionId,
-      thread_id: subscription.threadId,
-      recorded_model: warning.recordedModel,
-      resuming_model: warning.resumingModel,
-      message_id: result.messageId,
-    });
-  }).catch((error) => {
-    if (codexTuiModelMismatchNoticesInFlight.get(binding.id) === signalKey) {
-      codexTuiModelMismatchNoticesInFlight.delete(binding.id);
-    }
-    console.warn('[bridge-manager] Codex model mismatch notice delivery failed:', {
-      event: 'codex.tui.model_mismatch.notice_failed',
-      session_id: subscription.sessionId,
-      thread_id: subscription.threadId,
-      error: describeUnknownError(error),
-    });
-  });
-}
-
-function observeCodexTuiModelMismatchWarning(
-  subscription: BridgeMirrorSubscription,
-  screenText: string,
-): void {
-  const session = getBridgeContext().store.getSession(subscription.sessionId);
-  const terminal = session && getSessionRuntimeTmuxSessionName(session);
-  const warning = (terminal ? getCodexTuiResumeModelWarning(terminal) : undefined)
-    || parseCodexTuiModelMismatchWarning(screenText);
-  if (!warning) return;
-  const targets = new Map<string, BridgeMirrorSubscription>();
-  for (const candidate of getState().mirrorSubscriptions.values()) {
-    if (candidate.sessionId === subscription.sessionId) {
-      targets.set(candidate.bindingId, candidate);
-    }
-  }
-  if (targets.size === 0) targets.set(subscription.bindingId, subscription);
-  for (const target of targets.values()) {
-    notifyCodexTuiModelMismatchWarning(target, warning);
-  }
-}
-
-function observeCodexTuiPendingTurnDiagnostic(
-  subscription: BridgeMirrorSubscription,
-  screenText: string,
-): void {
-  const pendingTurn = subscription.pendingTurn;
-  if (!pendingTurn) return;
-  const previous = codexTuiPendingTurnDiagnosticMonitors.get(pendingTurn.streamKey);
-  const baseline = codexTuiTurnScreenBaselines.get(pendingTurn.streamKey);
-  const previousScreen = previous?.screen || baseline?.screen;
-  if (!previousScreen) return;
-  const newDiagnostics = findNewCodexTuiDiagnostics(previousScreen, screenText);
-  const diagnostics = [...(previous?.diagnostics || []), ...newDiagnostics];
-  codexTuiPendingTurnDiagnosticMonitors.set(pendingTurn.streamKey, {
-    screen: screenText,
-    diagnostics,
-  });
-  for (const diagnostic of newDiagnostics) {
-    console.warn('[bridge-manager] Codex TUI diagnostic observed while turn is running:', {
-      event: 'codex.tui.diagnostic_observed',
-      session_id: subscription.sessionId,
-      thread_id: subscription.threadId,
-      stream_key: pendingTurn.streamKey,
-      impact: diagnostic.impact,
-      terminal: diagnostic.terminal,
-      error: diagnostic.message,
-    });
-  }
-}
-
-function applyCodexTuiDiagnosticToFinalizedTurn(
-  turn: FinalizedBridgeMirrorTurn,
-  diagnostic: CodexTuiDiagnostic,
-  source: 'running_turn_probe' | 'completed_turn_probe',
-): FinalizedBridgeMirrorTurn['status'] {
-  if (diagnostic.terminal) {
-    turn.errorText ||= diagnostic.message;
-    console.warn('[bridge-manager] Terminal Codex TUI diagnostic applied:', {
-      event: 'codex.tui.terminal_diagnostic_applied',
-      source,
-      stream_key: turn.streamKey,
-      impact: diagnostic.impact,
-      error: diagnostic.message,
-    });
-    return 'error';
-  }
-
-  const notice: RuntimeNoticeInfo = {
-    level: 'error',
-    title: '操作未完成',
-    message: `${diagnostic.message}\n当前任务仍在继续。`,
-    source: 'codex_tui',
-  };
-  turn.runtimeNotices ||= [];
-  if (!turn.runtimeNotices.some((existing) => (
-    existing.level === notice.level
-    && existing.title === notice.title
-    && existing.message === notice.message
-    && existing.source === notice.source
-  ))) {
-    turn.runtimeNotices.push(notice);
-  }
-  console.warn('[bridge-manager] Recoverable Codex TUI diagnostic retained as a body notice:', {
-    event: 'codex.tui.recoverable_diagnostic_applied',
-    source,
-    stream_key: turn.streamKey,
-    impact: diagnostic.impact,
-    error: diagnostic.message,
-  });
-  return turn.status;
-}
-
-function applyCodexTuiDiagnosticsToFinalizedTurn(
-  turn: FinalizedBridgeMirrorTurn,
-  diagnostics: CodexTuiDiagnostic[],
-  source: 'running_turn_probe' | 'completed_turn_probe',
-): FinalizedBridgeMirrorTurn['status'] {
-  let status = turn.status;
-  for (const diagnostic of diagnostics) {
-    const nextStatus = applyCodexTuiDiagnosticToFinalizedTurn(turn, diagnostic, source);
-    if (nextStatus === 'error') status = 'error';
-  }
-  return status;
-}
-
-async function resolveCodexTuiFinalizedTurnStatus(
-  subscription: BridgeMirrorSubscription,
-  turn: FinalizedBridgeMirrorTurn,
-  context: { batchSize: number },
-): Promise<FinalizedBridgeMirrorTurn['status']> {
-  const baseline = codexTuiTurnScreenBaselines.get(turn.streamKey);
-  const observedDiagnostics = codexTuiPendingTurnDiagnosticMonitors.get(turn.streamKey)?.diagnostics || [];
-  codexTuiPendingTurnDiagnosticMonitors.delete(turn.streamKey);
-  codexTuiReconnectMonitors.delete(subscription.sessionId);
-
-  const session = getBridgeContext().store.getSession(subscription.sessionId);
-  if (!session || !sessionSupportsCodexTuiRuntimeSignals(session)) {
-    codexTuiTurnScreenBaselines.delete(turn.streamKey);
-    return turn.status;
-  }
-  const tmuxSessionName = getSessionRuntimeTmuxSessionName(session);
-  if (!tmuxSessionName) {
-    codexTuiTurnScreenBaselines.delete(turn.streamKey);
-    return turn.status;
-  }
-
-  try {
-    const capture = await tmuxCore.capturePane(`${tmuxSessionName}:0.0`, 80);
-    codexTuiTurnScreenBaselines.delete(turn.streamKey);
-    const capturedAtMs = Date.now();
-    const checkpoint: CodexTuiScreenCheckpoint = {
-      screen: capture.screen,
-      capturedAtMs,
-    };
-    codexTuiIdleScreenCheckpoints.set(subscription.sessionId, checkpoint);
-    assignCodexTuiChainedTurnScreenBaseline(subscription, checkpoint, turn.streamKey);
-    if (turn.status === 'completed' && observedDiagnostics.length > 0) {
-      return applyCodexTuiDiagnosticsToFinalizedTurn(turn, observedDiagnostics, 'running_turn_probe');
-    }
-    if (turn.status !== 'completed' || !baseline || context.batchSize !== 1) {
-      if (turn.status === 'completed' && !baseline) {
-        console.log('[bridge-manager] Codex TUI completed-turn error probe skipped without a screen baseline:', {
-          event: 'codex.tui.error_probe.skipped',
-          reason: 'missing_screen_baseline',
-          session_id: subscription.sessionId,
-          thread_id: subscription.threadId,
-          stream_key: turn.streamKey,
-          batch_size: context.batchSize,
-        });
-      }
-      return turn.status;
-    }
-    const currentFileSize = subscription.filePath
-      ? (() => {
-          try {
-            return statSync(subscription.filePath).size;
-          } catch {
-            return null;
-          }
-        })()
-      : null;
-    if (subscription.fileSize === null || currentFileSize !== subscription.fileSize) {
-      return turn.status;
-    }
-    const diagnostics = findNewCodexTuiDiagnostics(baseline.screen, capture.screen);
-    if (diagnostics.length === 0) return turn.status;
-    return applyCodexTuiDiagnosticsToFinalizedTurn(turn, diagnostics, 'completed_turn_probe');
-  } catch (error) {
-    if (turn.status === 'completed' && observedDiagnostics.length > 0) {
-      return applyCodexTuiDiagnosticsToFinalizedTurn(turn, observedDiagnostics, 'running_turn_probe');
-    }
-    console.warn('[bridge-manager] Codex TUI completed-turn error probe failed:', {
-      session_id: subscription.sessionId,
-      tmux_session: tmuxSessionName,
-      error: describeUnknownError(error),
-    });
-    return turn.status;
-  }
-}
-
 async function recoverMirrorTmuxSelectionPromptFromCallback(
   claim: broker.CodexSelectionCallbackClaim,
   adapter: BaseChannelAdapter,
@@ -1498,9 +1019,7 @@ async function probeMirrorTmuxSelectionPrompt(subscription: BridgeMirrorSubscrip
     return;
   }
   if (sessionSupportsCodexTuiRuntimeSignals(session)) {
-    observeCodexTuiModelMismatchWarning(subscription, capture.screen);
-    observeCodexTuiReconnectStatus(subscription, capture.screen, nowMs);
-    observeCodexTuiPendingTurnDiagnostic(subscription, capture.screen);
+    CODEX_TUI_DIAGNOSTICS.observeRunningScreen(subscription, capture.screen, nowMs);
   }
   const monitor = getTmuxSelectionPromptMonitor(subscription.sessionId);
   const prompt = observeStableCodexTuiSelectionPrompt(capture.screen, monitor);
@@ -2107,9 +1626,8 @@ function touchInboundChannelChatActivity(msg: InboundMessage): void {
   const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding) return;
   store.touchChannelChatActivity(binding.id, nowIso());
-  codexTuiIdleScreenMissingCheckedAt.delete(binding.bridgeSessionId);
+  CODEX_TUI_DIAGNOSTICS.markSessionActive(binding.bridgeSessionId);
 }
-
 
 interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiveRuntimeState {
   startedAt: string | null;
@@ -2593,13 +2111,27 @@ function getMirrorAssistantLabel(_threadId: string, sessionId?: string): string 
   return getSessionActiveRuntime(session) || getGlobalRuntimeAgent();
 }
 
+const CODEX_TUI_DIAGNOSTICS = createCodexTuiDiagnostics({
+  getStore: () => getBridgeContext().store,
+  getTmuxCore: () => tmuxCore,
+  supportsRuntimeSignals: sessionSupportsCodexTuiRuntimeSignals,
+  listMirrorSubscriptions: () => getState().mirrorSubscriptions.values(),
+  getRunningAdapter: (channelType) => {
+    const adapter = getState().adapters.get(channelType);
+    return adapter?.isRunning() ? adapter : null;
+  },
+  enqueueNotice: (adapter, address, text, options) => enqueueBridgeNotice(adapter, address, text, options),
+  onStatusProgress: (subscription, turn) => MIRROR_TURN_HOOKS.onStatusProgress?.(subscription, turn),
+  describeError: describeUnknownError,
+});
+
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
   getThreadTitle: getMirrorThreadTitle,
   getRuntimeTags: getMirrorRuntimeTags,
   getAssistantLabel: getMirrorAssistantLabel,
-  onMirrorTurnStarted: assignCodexTuiTurnScreenBaseline,
-  resolveFinalizedTurnStatus: resolveCodexTuiFinalizedTurnStatus,
+  onMirrorTurnStarted: CODEX_TUI_DIAGNOSTICS.assignTurnScreenBaseline,
+  resolveFinalizedTurnStatus: CODEX_TUI_DIAGNOSTICS.resolveFinalizedTurnStatus,
   getStructuredStreamStatusConfig: getMirrorStructuredStreamStatusConfig,
   nowIso,
   eventBatchLimit: MIRROR_EVENT_BATCH_LIMIT,
@@ -2965,7 +2497,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
   await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await ZCODE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
-  await ensureCodexTuiIdleScreenCheckpoints();
+  await CODEX_TUI_DIAGNOSTICS.ensureIdleScreenCheckpoints();
   const nowMs = Date.now();
   await Promise.allSettled(
     [
@@ -5921,12 +5453,7 @@ function resetStateForTests(): void {
   tmuxSelectionPromptLastProbeAt.clear();
   tmuxSelectionPromptFollowupUntil.clear();
   pendingTmuxSelectionPromptProbePromises.clear();
-  codexTuiIdleScreenCheckpoints.clear();
-  codexTuiTurnScreenBaselines.clear();
-  codexTuiIdleScreenMissingCheckedAt.clear();
-  codexTuiReconnectMonitors.clear();
-  codexTuiModelMismatchNoticesInFlight.clear();
-  codexTuiPendingTurnDiagnosticMonitors.clear();
+  CODEX_TUI_DIAGNOSTICS.reset();
   state.everyTaskSelections.clear();
   state.thenTaskSelections.clear();
   state.thenTaskTimers.clear();
@@ -6014,11 +5541,11 @@ export const _testOnly = {
   deliverMirrorTurns,
   flushTimedOutMirrorTurn,
   refreshMirrorStreamingStatus,
-  captureCodexTuiIdleScreenCheckpoint,
-  ensureCodexTuiIdleScreenCheckpoints,
-  assignCodexTuiTurnScreenBaseline,
-  observeCodexTuiPendingTurnDiagnostic,
-  resolveCodexTuiFinalizedTurnStatus,
+  captureCodexTuiIdleScreenCheckpoint: CODEX_TUI_DIAGNOSTICS.captureIdleScreenCheckpoint,
+  ensureCodexTuiIdleScreenCheckpoints: CODEX_TUI_DIAGNOSTICS.ensureIdleScreenCheckpoints,
+  assignCodexTuiTurnScreenBaseline: CODEX_TUI_DIAGNOSTICS.assignTurnScreenBaseline,
+  observeCodexTuiPendingTurnDiagnostic: CODEX_TUI_DIAGNOSTICS.observePendingTurnDiagnostic,
+  resolveCodexTuiFinalizedTurnStatus: CODEX_TUI_DIAGNOSTICS.resolveFinalizedTurnStatus,
   filterSuppressedMirrorRecords,
   isMirrorSuppressed,
   reconcileTerminalSessionRuntimeState: () => INTERACTIVE_RUNTIME.reconcileTerminalSessionRuntimeState(),
