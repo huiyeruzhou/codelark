@@ -99,18 +99,17 @@ function appendOrExtendHistoryModelSnapshotText(
   state: Pick<UnifiedTurnProgressState, 'historyItems'>,
   content: string,
 ): void {
-  const normalized = content.trim();
-  if (!normalized) return;
+  if (!content) return;
   const items = historyItemsForAppend(state);
   const last = items.at(-1);
   if (
     last?.type === 'markdown'
     && last.role === 'assistant'
   ) {
-    last.content = `${last.content}${normalized}`;
+    last.content = `${last.content}${content}`;
     return;
   }
-  items.push({ type: 'markdown', role: 'assistant', content: normalized });
+  items.push({ type: 'markdown', role: 'assistant', content });
 }
 
 function mergeToolCallInfo(previous: ToolCallInfo | undefined, next: ToolCallInfo): ToolCallInfo {
@@ -159,23 +158,21 @@ export function applyUnifiedTurnHistoryModelTextSnapshot(
   state: Pick<UnifiedTurnProgressState, 'historyItems' | 'historyTextSnapshot'>,
   nextText: string,
 ): void {
-  const normalizedNext = (nextText || '').trim();
-  if (!normalizedNext) return;
-  const normalizedPrevious = (state.historyTextSnapshot || '').trim();
-  if (normalizedPrevious && !normalizedNext.startsWith(normalizedPrevious)) {
+  const next = nextText || '';
+  const previous = state.historyTextSnapshot || '';
+  if (next === previous) return;
+  if (previous && !next.startsWith(previous)) {
     state.historyItems = cloneStreamingHistoryItems(state.historyItems)
       .filter((item) => item.type !== 'markdown' || item.role !== 'assistant');
-    state.historyTextSnapshot = nextText;
-    appendHistoryModelText(state, normalizedNext);
+    state.historyTextSnapshot = next;
+    appendOrExtendHistoryModelSnapshotText(state, next);
     return;
   }
-  const delta = normalizedPrevious && normalizedNext.startsWith(normalizedPrevious)
-    ? normalizedNext.slice(normalizedPrevious.length)
-    : normalizedNext;
-  state.historyTextSnapshot = nextText;
-  if (delta.trim()) {
-    appendOrExtendHistoryModelSnapshotText(state, delta);
-  }
+  // Snapshot boundaries can fall on spaces, hard breaks, or code indentation.
+  // Keep both the prefix comparison and the appended delta byte-for-byte.
+  const delta = next.slice(previous.length);
+  state.historyTextSnapshot = next;
+  appendOrExtendHistoryModelSnapshotText(state, delta);
 }
 
 export function applyUnifiedTurnThinkingSummary(

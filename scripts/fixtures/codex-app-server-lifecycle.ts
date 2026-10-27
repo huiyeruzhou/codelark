@@ -22,7 +22,7 @@ export async function waitFor<T>(read: () => T | undefined | false | Promise<T |
 }
 
 type ModelBody = { model?: string; input?: unknown[]; tools?: Array<Record<string, any>>; [key: string]: unknown };
-export type MockOutput = { text: string } | { search: string } | { tool: string; arguments: Record<string, unknown> | string; callId?: string; namespace?: string };
+export type MockOutput = { text: string; chunks?: string[]; chunkDelayMs?: number } | { search: string } | { tool: string; arguments: Record<string, unknown> | string; callId?: string; namespace?: string };
 interface Step {
   output: MockOutput | ((body: ModelBody) => MockOutput);
   gate: Promise<void>;
@@ -81,7 +81,7 @@ export async function startFixtureModel(options: { authorization?: string; rejec
       const responseId = `resp_${randomUUID()}`;
       const emit = (type: string, value: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
       emit('response.created', { response: { id: responseId, object: 'response', status: 'in_progress', output: [] } });
-      void step.gate.then(() => {
+      void step.gate.then(async () => {
         if (res.destroyed) return;
         const output = typeof step.output === 'function' ? step.output(body) : step.output;
         const itemId = `item_${randomUUID()}`;
@@ -91,8 +91,19 @@ export async function startFixtureModel(options: { authorization?: string; rejec
           : typeof output.arguments === 'string'
             ? { id: itemId, type: 'custom_tool_call', name: output.tool, call_id: output.callId || `call_${randomUUID()}`, input: output.arguments, status: 'completed' }
             : { id: itemId, type: 'function_call', name: output.tool, ...(output.namespace ? { namespace: output.namespace } : {}), call_id: output.callId || `call_${randomUUID()}`, arguments: JSON.stringify(output.arguments), status: 'completed' };
-        emit('response.output_item.added', { output_index: 0, item: { ...item, status: 'in_progress' } });
-        if ('text' in output) emit('response.output_text.delta', { item_id: itemId, output_index: 0, content_index: 0, delta: output.text });
+        emit('response.output_item.added', { output_index: 0, item: {
+          ...item, status: 'in_progress',
+          ...('text' in output && output.chunks ? { content: [{ type: 'output_text', text: '' }] } : {}),
+        } });
+        if ('text' in output) {
+          const chunks = output.chunks || [output.text];
+          assert.equal(chunks.join(''), output.text, 'fixture chunks must reconstruct the complete answer');
+          for (const [index, delta] of chunks.entries()) {
+            if (index > 0 && output.chunkDelayMs) await new Promise(resolve => setTimeout(resolve, output.chunkDelayMs));
+            if (res.destroyed) return;
+            emit('response.output_text.delta', { item_id: itemId, output_index: 0, content_index: 0, delta });
+          }
+        }
         emit('response.output_item.done', { output_index: 0, item });
         emit('response.completed', { response: {
           id: responseId, object: 'response', status: 'completed', model: body.model || fixtureModel,

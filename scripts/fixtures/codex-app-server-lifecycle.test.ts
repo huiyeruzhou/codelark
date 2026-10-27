@@ -36,3 +36,20 @@ it('keeps the default protocol fixture strict for unplanned title requests', asy
     assert.equal(model.unexpected.length, 1);
   } finally { await model.close(); }
 });
+
+
+it('preserves whitespace-only chunks in streamed fixture responses', async () => {
+  const model = await startFixtureModel();
+  try {
+    const chunks = ['This sample', ' ', 'keeps', '\n    ', 'indentation.'];
+    model.enqueue({ text: chunks.join(''), chunks, chunkDelayMs: 1 });
+    const response = await fetch(`${model.baseUrl}/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: [] }),
+    });
+    const events = (await response.text()).split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    assert.equal(events.find(event => event.type === 'response.output_item.added').item.content[0].text, '', 'the first event must not reveal the final answer before streaming');
+    assert.deepEqual(events.filter(event => event.type === 'response.output_text.delta').map(event => event.delta), chunks);
+    assert.equal(events.at(-1).response.output[0].content[0].text, chunks.join(''));
+    assert.deepEqual(model.unexpected, []);
+  } finally { await model.close(); }
+});

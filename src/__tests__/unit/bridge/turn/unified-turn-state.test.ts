@@ -197,6 +197,37 @@ describe('unified-turn-state', () => {
     );
   });
 
+  it('preserves whitespace across every snapshot boundary and repeated snapshots', () => {
+    const samples = [
+      'This sample keeps the spaces.',
+      'First paragraph.\n\nSecond paragraph with **bold words** and `inline code`.',
+      'Example:\n```python\ndef sample():\n    return 1\n```\nDone.',
+      'Columns:\nleft\tright  \nnext line',
+      '中文与 English words 混排。',
+    ];
+    for (const sample of samples) {
+      const state = createUnifiedTurnProgressState(1000);
+      for (let i = 1; i <= sample.length; i++) {
+        const snapshot = sample.slice(0, i);
+        applyUnifiedTurnHistoryModelTextSnapshot(state, snapshot);
+        applyUnifiedTurnHistoryModelTextSnapshot(state, snapshot);
+        const actual = state.historyItems.flatMap(item => item.type === 'markdown' && item.role === 'assistant' ? [item.content] : []).join('');
+        assert.equal(actual, snapshot, `snapshot boundary ${i} in ${JSON.stringify(sample)}`);
+      }
+    }
+  });
+
+  it('keeps word separators arriving with the next word or as whitespace-only deltas', () => {
+    for (const snapshots of [
+      ['This sample', 'This sample keeps', 'This sample keeps the spaces.'],
+      ['This sample', 'This sample ', 'This sample keeps', 'This sample keeps ', 'This sample keeps the spaces.'],
+    ]) {
+      const state = createUnifiedTurnProgressState(1000);
+      for (const snapshot of snapshots) applyUnifiedTurnHistoryModelTextSnapshot(state, snapshot);
+      assert.deepEqual(state.historyItems, [{ type: 'markdown', role: 'assistant', content: 'This sample keeps the spaces.' }]);
+    }
+  });
+
   it('extends SDK full-text snapshots until a tool starts, then appends following text after the tool panel', () => {
     const state = createUnifiedTurnProgressState(1000);
 
@@ -217,7 +248,7 @@ describe('unified-turn-state', () => {
         : [],
       ['tool-1'],
     );
-    assert.equal(state.historyItems[2]?.type === 'markdown' ? state.historyItems[2].content : '', '第二段');
+    assert.equal(state.historyItems[2]?.type === 'markdown' ? state.historyItems[2].content : '', '\n\n第二段');
   });
 
   it('replaces a non-prefix assistant snapshot while preserving tool history', () => {

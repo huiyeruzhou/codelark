@@ -158,6 +158,12 @@ CardKit create/update/settings/element 与 interactive/rich-card message 请求�
 
 新增工具与状态栏刷新必须保持为两个 CardKit 动作：先原子创建或更新工具 history，再单独更新 `streaming_status`。这既保持工具调用的原子边界，也让 footer 保留流式效果；不能为了合并请求而把工具正文和状态栏一起重绘成整张卡。
 
+### 流式正文的空白保留
+
+SDK 和原生 mirror 的正文快照共用 `applyUnifiedTurnHistoryModelTextSnapshot`。前缀比较和增量追加使用原始字符串，不能对快照或增量调用 `trim()`，也不能丢弃纯空白分片。例如 `This sample` → `This sample keeps` 的增量是 ` keeps`，开头的空格属于正文；换行、Markdown 硬换行和代码缩进同样必须保留。相同快照不重复追加，非前缀修订替换旧 assistant 正文并保留工具历史。
+
+回归同时覆盖逐字符输入、仅含空白的分片、同一原生消息的多次替换、SDK/Codex 共用 reducer，以及工具事件穿插。真实飞书验收使用分段模型夹具，经用户入站、独立 daemon、原生 Codex 到流式卡片，最终以用户身份读回完整单词、段落和代码缩进；记录见 [空白保留验证](../testing/real-feishu/streaming-whitespace.md)。
+
 ### 流式出站附件
 
 `<clk-send>` 不等待 turn completed。SDK runtime 从只包含 assistant answer 的累积快照检测完整块；tmux/mirror runtime 只从 assistant/commentary 正文检测。thinking、reasoning、状态栏和工具预览即使包含合法的 `<clk-send>`，也不得触发附件发送。

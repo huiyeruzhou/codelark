@@ -345,6 +345,31 @@ describe('mirror-feedback-controller', () => {
     ]);
   });
 
+  it('preserves word boundaries in successive native assistant snapshots', () => {
+    const adapter = new FakeMirrorFeishuAdapter();
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => 'Whitespace regression',
+      nowIso: () => '2026-10-27T00:00:00.000Z',
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-whitespace', sessionId: 'session-whitespace',
+      channelType: 'feishu-default', chatId: 'chat-whitespace',
+      threadId: 'thread-whitespace', filePath: 'rollout.jsonl', lastDeliveredAt: null,
+    });
+    for (const [index, content] of ['This sample', 'This sample keeps', 'This sample keeps the spaces.'].entries()) {
+      consumeMirrorRecords(subscription, [{
+        signature: `snapshot-${index}`, type: 'message', role: 'assistant',
+        replacementKey: 'same-assistant-item', content,
+        timestamp: '2026-10-27T00:00:00.000Z', turnId: 'turn-whitespace',
+      }], controller.hooks);
+      const rendered = (adapter.histories.at(-1) || []).flatMap(item => item.type === 'markdown' && item.role === 'assistant' ? [item.content] : []).join('');
+      assert.equal(rendered, content);
+    }
+  });
+
   it('never exposes final-only artifact protocol blocks in mirror card history', () => {
     const adapter = new FakeMirrorFeishuAdapter();
     const controller = createMirrorFeedbackController({
