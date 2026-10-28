@@ -5,6 +5,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
+  fileUrlToLocalPath,
   parseOutboundArtifacts,
   stripOutboundArtifactBlocksForStreaming,
   supportsOutboundArtifacts,
@@ -407,4 +408,13 @@ it('normalizes Markdown images but preserves ordinary file URLs', () => {
     { kind: 'image', path: '/tmp/a b.png' }, { kind: 'image', path: '/tmp/a(1).png' },
   ]);
   assert.equal(parsed.cleanText, `[图](</tmp/a b.png> "图标题")\n[报告](${pathToFileURL(reportPath).href})\n[转义](/tmp/a\\(1\\).png)`);
+});
+
+it('decodes file URLs the same way on every platform', () => {
+  for (const platform of ['darwin', 'linux', 'win32'] as const) {
+    assert.equal(fileUrlToLocalPath('file:///tmp/codelark-link-demo/report.pdf', platform)?.replace(/\\/g, '/'), '/tmp/codelark-link-demo/report.pdf', platform);
+    assert.equal(fileUrlToLocalPath('file:///C:/codelark-link-demo/runner.ts', platform)?.replace(/\\/g, '/').replace(/^\/(?=C:)/, ''), 'C:/codelark-link-demo/runner.ts', platform);
+  }
+  assert.equal(fileUrlToLocalPath('file://remote-host/share/a.png', 'darwin'), '\\\\remote-host\\share\\a.png');
+  assert.equal(fileUrlToLocalPath('https://example.com/a.png', 'linux'), null);
 });

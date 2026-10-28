@@ -246,12 +246,23 @@ function compactBlankLines(text: string): string {
     .trim();
 }
 
+/** Decode a file: URL with the host platform's rules, then the other platform's. */
+export function fileUrlToLocalPath(url: string, platform: NodeJS.Platform = process.platform): string | null {
+  const windows = platform === 'win32';
+  try { return fileURLToPath(url, { windows }); } catch { /* try the other platform's rules */ }
+  try { return fileURLToPath(url, { windows: !windows }); } catch { return null; }
+}
+
 function localMarkdownPath(destination: string): string | null {
   let value = destination.trim().replace(/\s+["'][^"']*["']$/, '');
   if (value.startsWith('<') && value.endsWith('>')) value = value.slice(1, -1);
   if (sourceLocationLink({ path: value })) return value;
   if (/^file:/i.test(value)) {
-    try { value = fileURLToPath(value); } catch { return null; }
+    // On Windows fileURLToPath rejects drive-less URLs such as file:///tmp/x;
+    // fall back to POSIX semantics so the link is classified the same on every OS.
+    const decoded = fileUrlToLocalPath(value);
+    if (!decoded) return null;
+    value = decoded;
   } else {
     try { value = decodeURIComponent(value); } catch { /* literal percent in a file name */ }
     value = value.replace(/\\([()\[\] ])/g, '$1');
