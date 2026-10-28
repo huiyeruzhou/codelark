@@ -1836,6 +1836,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
 
   it('cleans provider tmux sessions through the run-local server without inheriting the caller socket', () => {
     const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-real-feishu-cleanup-'));
+    // The isolated tmux server lives in a short /tmp dir keyed by the run root
+    // inode (macOS caps Unix socket paths at 104 bytes).
+    const tmuxRoot = path.join('/tmp', `clk-rf-tmux-${fs.statSync(runRoot).ino}`);
     const codelarkHome = path.join(runRoot, 'codelark-home');
     const dataDir = path.join(codelarkHome, 'data');
     const logsDir = path.join(codelarkHome, 'logs');
@@ -1844,7 +1847,8 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     const fakeTmux = path.join(fakeBin, 'tmux');
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(logsDir, { recursive: true });
-    fs.mkdirSync(path.join(runRoot, 'tmux'), { recursive: true });
+    fs.mkdirSync(tmuxRoot, { recursive: true });
+    fs.writeFileSync(path.join(tmuxRoot, '.clk-real-feishu-run'), JSON.stringify({ runRoot }), 'utf-8');
     fs.writeFileSync(fakeTmux, [
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
@@ -1917,13 +1921,15 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
       assert.ok(tmuxCalls.some((call) => call.args.slice(2).join(' ') === 'kill-server'));
       for (const call of tmuxCalls) {
         assert.equal(call.args[0], '-S');
-        assert.equal(call.args[1], path.join(runRoot, 'tmux', `tmux-${process.getuid?.() ?? 0}`, 'default'));
+        assert.equal(call.args[1], path.join(tmuxRoot, `tmux-${process.getuid?.() ?? 0}`, 'default'));
       }
       assert.ok(tmuxCalls.every((call) => call.tmux === null && call.tmuxPane === null));
-      assert.ok(tmuxCalls.every((call) => call.tmuxTmpdir === path.join(runRoot, 'tmux')));
+      assert.ok(tmuxCalls.every((call) => call.tmuxTmpdir === tmuxRoot));
       assert.equal(fs.existsSync(runRoot), false);
+      assert.equal(fs.existsSync(tmuxRoot), false, 'isolated tmux root must be removed');
     } finally {
       fs.rmSync(runRoot, { recursive: true, force: true });
+      fs.rmSync(tmuxRoot, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
     }
   });

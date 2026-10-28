@@ -2102,17 +2102,30 @@ function isPathInside(parentPath: string, childPath: string): boolean {
 }
 
 function realFeishuTmuxTempDir(options: Pick<CliOptions, 'runRoot'>): string {
-  return path.join(options.runRoot, 'tmux');
+  // macOS caps Unix socket paths at 104 bytes. The default TMPDIR prefix is
+  // ~49 bytes and runRoot names add another ~50+, so
+  // <runRoot>/tmux/tmux-<uid>/default (~109 bytes) cannot host a tmux server.
+  // Use a short private root under /tmp keyed by the run directory inode; the
+  // kill-server cleanup resolves the same path through this function.
+  const explicit = process.env.CODELARK_REAL_FEISHU_TMUX_DIR;
+  if (explicit) return path.resolve(explicit);
+  let inode = '';
+  try {
+    inode = String(fs.statSync(options.runRoot).ino);
+  } catch {
+    inode = String(process.pid);
+  }
+  return path.join('/tmp', `clk-rf-tmux-${inode}`);
 }
 
 function hasOwnedIsolatedTmuxRoot(options: Pick<CliOptions, 'runRoot'>): boolean {
-  const runRoot = path.resolve(options.runRoot);
+  // The tmux root is now a short /tmp directory derived from the run root
+  // inode, not a child of runRoot, so ownership is a marker file written by
+  // launchBridgeChild when it creates the directory.
   const tmuxTempDir = path.resolve(realFeishuTmuxTempDir(options));
-  if (!path.basename(runRoot).startsWith('clk-real-feishu-') || !isPathInside(runRoot, tmuxTempDir)) {
-    return false;
-  }
   try {
-    return fs.statSync(tmuxTempDir).isDirectory();
+    const marker = JSON.parse(fs.readFileSync(path.join(tmuxTempDir, '.clk-real-feishu-run'), 'utf-8')) as { runRoot?: unknown };
+    return typeof marker.runRoot === 'string' && path.resolve(marker.runRoot) === path.resolve(options.runRoot);
   } catch {
     return false;
   }
@@ -2136,14 +2149,17 @@ function isolatedTmuxChildEnv(
 }
 
 async function stopIsolatedTmuxServer(options: Pick<CliOptions, 'runRoot'>): Promise<void> {
+  const tmuxTempDir = realFeishuTmuxTempDir(options);
   if (!hasOwnedIsolatedTmuxRoot(options)) return;
   try {
-    await execFileAsync('tmux', ['-S', path.join(realFeishuTmuxTempDir(options), `tmux-${process.getuid?.() ?? 0}`, 'default'), 'kill-server'], {
+    await execFileAsync('tmux', ['-S', path.join(tmuxTempDir, `tmux-${process.getuid?.() ?? 0}`, 'default'), 'kill-server'], {
       env: isolatedTmuxChildEnv(options),
       timeout: 5_000,
     });
   } catch {
     // No tmux server was started for this run, or tmux is unavailable.
+  } finally {
+    fs.rmSync(tmuxTempDir, { recursive: true, force: true });
   }
 }
 
@@ -3092,6 +3108,11 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     codexAuthSource = 'env-api-key';
   } else if (codexApiKey) {
     writeCodexApiKeyAuth(options.codexHome, codexApiKey);
+    // auth.json alone is not enough: the model_provider/base_url live in
+    // config.toml. Copy the host config so the key authenticates against the
+    // same LiteLLM endpoint (or whatever the host points at).
+    const hostCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    copyFileIfExists(path.join(hostCodexHome, 'config.toml'), path.join(options.codexHome, 'config.toml'));
     codexAuthSource = 'env-api-key';
   } else {
     const hostCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
@@ -6378,6 +6399,11 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
   if (!options.launchBridge || options.dryRun) return null;
   writeIsolatedBridgeConfig(options);
   fs.mkdirSync(realFeishuTmuxTempDir(options), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(realFeishuTmuxTempDir(options), '.clk-real-feishu-run'),
+    JSON.stringify({ runRoot: options.runRoot }),
+    { mode: 0o600 },
+  );
   process.stderr.write(`[real-feishu-e2e] Launching isolated bridge with CODELARK_HOME=${options.codelarkHome} CODEX_HOME=${options.codexHome} KIMI_CODE_HOME=${options.kimiHome} CURSOR_CONFIG_DIR=${options.cursorConfigDir} CURSOR_DATA_DIR=${options.cursorDataDir} ZCODE_SESSION_DB_PATH=${options.zcodeSessionDbPath} HOME=${runtimeEnvironment.bridgeHome} claude=${options.claudeExecutable}\n`);
   const child = spawn(
     process.execPath,
@@ -6386,6 +6412,11 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
       cwd: process.cwd(),
       env: isolatedTmuxChildEnv(options, {
         CODELARK_HOME: options.codelarkHome,
+        // The isolated HOME is a long /var/folders/... path; Codex Desktop's
+        // Unix socket must be under 104 bytes, so remote sharing is impossible
+        // in the harness (same guard the whitespace acceptance script hits).
+        // Force the bundled CLI app-server instead of probing Desktop.
+        CODELARK_CODEX_DESKTOP_REMOTE: '0',
         ...(options.codexAppServerEndpoint ? { CODELARK_CODEX_APP_SERVER_URL: options.codexAppServerEndpoint } : {}),
         HOME: runtimeEnvironment.bridgeHome,
         USERPROFILE: runtimeEnvironment.bridgeHome,
