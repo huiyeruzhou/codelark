@@ -18,12 +18,14 @@ export function buildHistoryPage(
   let lastSourceItem = -1;
   while (next.historyItemOffset < history.length) {
     const source = history[next.historyItemOffset]!;
+    // 新用户输入开启新的展示页；runtime turn 和完整历史仍保持连续。
+    if (source.type === 'markdown' && source.role === 'user' && items.length > 0) break;
     const tool = source.type === 'tool_panel' ? source.tools[next.historyToolCallOffset] : undefined;
     if (source.type === 'tool_panel' && !tool) {
       next = { historyItemOffset: next.historyItemOffset + 1, historyToolCallOffset: 0, historyTextOffset: 0 };
       continue;
     }
-    const atom: StreamingHistoryItem = tool ? { type: 'tool_panel', tools: [tool] } : source;
+    const atom: StreamingHistoryItem = tool ? { type: 'tool_panel', tools: [tool], ...(source.forkSource ? { forkSource: source.forkSource } : {}) } : source;
     const previous = items.at(-1);
     const mergeTool = atom.type === 'tool_panel' && previous?.type === 'tool_panel'
       && next.historyItemOffset === lastSourceItem;
@@ -69,7 +71,7 @@ function historyAtomText(item: StreamingHistoryItem): Extract<StreamingHistoryIt
   if (item.type === 'markdown') return item;
   if (item.type === 'tool_panel') {
     const block = buildToolProgressBlocks(item.tools, { maxItems: null })[0]!;
-    return { type: 'markdown', role: 'assistant', collapseTitle: block.presentation.title, content: block.detail };
+    return { type: 'markdown', role: 'assistant', collapseTitle: block.presentation.title, content: block.detail, ...(item.forkSource ? { forkSource: item.forkSource } : {}) };
   }
   if (item.type === 'runtime_notice') {
     return { type: 'markdown', role: 'system', content: `${item.notice.title}\n${item.notice.message}` };

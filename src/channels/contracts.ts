@@ -90,6 +90,9 @@ export abstract class BaseChannelAdapter {
 
   sendCloudDocumentReply?(_target: CloudDocumentAddress, _text: string): Promise<SendResult>;
   createGroupChat?(_options: CreateGroupChatOptions): Promise<CreatedGroupChat>;
+  /** Chronological, inclusive boundary; excludes system and deleted messages. */
+  listChatMessageIdsThrough?(_chatId: string, _messageId: string, _precedingLimit: number): Promise<string[]>;
+  forwardChatMessage?(_messageId: string, _targetChatId: string): Promise<string>;
   notifyGroupChatCreated?(_address: ChannelAddress, _group: CreatedGroupChat): Promise<void>;
   renameGroupChat?(_chatId: string, _name: string): Promise<GroupChatInfo>;
   getGroupChatInfo?(_chatId: string): Promise<GroupChatInfo | null>;

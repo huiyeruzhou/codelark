@@ -705,6 +705,14 @@ export function createMirrorFeedbackController(
     hooks: {
       onTurnStarted: deps.onMirrorTurnStarted,
       onStreamText: updateMirrorStreaming,
+      onHistoryCheckpoint: (subscription, turnState) => {
+        const adapter = getMirrorStreamingAdapter(subscription);
+        if (!adapter) return;
+        pushStreamFeedbackHistory(
+          createStreamTarget(subscription, turnState, adapter),
+          stripFinalOnlyBlocksFromStreamingHistory(turnState.historyItems),
+        );
+      },
       onStatusProgress: updateMirrorStatusProgress,
       onTaskProgress: updateMirrorTaskProgress,
       onToolProgress: updateMirrorToolProgress,

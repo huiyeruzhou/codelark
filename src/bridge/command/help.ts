@@ -38,6 +38,7 @@ export function buildHelpCommandResponse(): string {
     '- `/t 0` 临时 BridgeSession',
     '- `/t 0 reset` 重置临时 BridgeSession',
     '- `/n` 打开新建 IM 群聊会话表单；`/new <name> [path]` 直接创建，未指定路径时继承当前会话目录，包括临时 BridgeSession 目录，未绑定时使用全局默认工作目录；在飞书云文档评论里 @bot 会直接把这份云文档切到群聊聊天模式，默认目录使用全局默认工作目录，默认群名为 `doc:<文档标题前缀>`，不会弹表单；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `\'`',
+    '- `/fork [新群名]`：从最近已完成的 Codex 卡片分叉；回复卡片则从该卡片分叉。Agent 继承完整历史，新群仅转发该卡片及之前最近 10 条消息，原会话保留，文件不回退',
     '- `/clear [name] [path]` 在当前聊天上下文创建新对话并绑定过去；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `\'`；可用 `/t` 附回旧对话；当前任务或 tmux TUI 追加输入运行中会先询问是否终止',
     '- `/require-at` 查看当前会话的群聊 @bot 要求；`/require-at on|off` 或 `/require_at on|off` 修改当前会话，`/clear`、`/new` 继承此设置',
     '- `/customer` 查看当前群客服模式；`/customer on` 开启，`/customer off` 关闭；群内话题也可使用，作用于整个群。权限沿用客服白名单，空名单默认 bot 创始人',

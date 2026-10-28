@@ -150,7 +150,13 @@ export interface AgentMessageSentInfo {
   messageText: string;
 }
 
-export type StreamingHistoryItem =
+export interface HistoryForkSource {
+  sessionId: string;
+  threadId: string;
+  signature: string;
+}
+
+export type StreamingHistoryItem = (
   | {
       type: 'markdown';
       role: StreamingHistoryTextRole;
@@ -173,7 +179,7 @@ export type StreamingHistoryItem =
   | {
       type: 'tool_panel';
       tools: ToolCallInfo[];
-    };
+    }) & { forkSource?: HistoryForkSource };
 
 export type TaskProgressStatus = 'in_progress' | 'pending' | 'completed';
 

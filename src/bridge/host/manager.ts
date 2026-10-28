@@ -3044,7 +3044,8 @@ function isReadOnlyOrLongIoCommandText(rawText: string): boolean {
   return resolvedCommand === '/tmux-screen'
     || resolvedCommand === '/pty-screen'
     || resolvedCommand === '/shell'
-    || resolvedCommand === '/new';
+    || resolvedCommand === '/new'
+    || resolvedCommand === '/fork';
 }
 
 function splitInboundCommandText(rawText: string): { resolvedCommand: string; args: string } {
@@ -3219,12 +3220,12 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
   if (immediateJobCommandText && isReadOnlyOrLongIoCommandText(immediateJobCommandText)) {
     const resolvedCommand = resolveInboundCommandText(immediateJobCommandText);
     const isScreenMonitor = resolvedCommand === '/tmux-screen' || resolvedCommand === '/pty-screen';
-    const blocksConversation = !isScreenMonitor && resolvedCommand !== '/new';
+    const blocksConversation = !isScreenMonitor && resolvedCommand !== '/new' && resolvedCommand !== '/fork';
     return {
       laneKey: `job:${resolvedCommand.slice(1)}:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'command'}`,
       laneKind: 'job',
       jobKind: `command:${resolvedCommand.slice(1)}`,
-      waitForConversationBarrier: !isScreenMonitor,
+      waitForConversationBarrier: !isScreenMonitor && resolvedCommand !== '/fork',
       blocksConversation,
     };
   }
