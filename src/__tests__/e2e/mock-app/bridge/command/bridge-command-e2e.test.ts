@@ -725,8 +725,10 @@ function installFakeTmux(): { binDir: string; logPath: string; statePath: string
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(statePath, '', 'utf-8');
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
+# Fixture-local defaults: late background tmux calls must not write into the cwd.
+TMUX_FAKE_LOG="\${TMUX_FAKE_LOG:-${logPath}}"
 printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
-state="$TMUX_FAKE_STATE"
+state="\${TMUX_FAKE_STATE:-${statePath}}"
 case "$1" in
   display-message)
     if [[ "$*" == *pane_start_command* ]]; then

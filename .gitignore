@@ -16,3 +16,7 @@ STATUS.md
 .lark-channel
 .lark-cli
 .codelark*
+
+# Fake tmux capture counters / upload scratch left by older test runs
+*.captures
+.codepilot-uploads/

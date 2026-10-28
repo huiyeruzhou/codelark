@@ -1,14 +1,21 @@
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const args = process.argv.slice(2);
-const logPath = process.env.TMUX_FAKE_LOG;
+// Without TMUX_FAKE_LOG (e.g. a background monitor firing after a test restored
+// its env) derived files such as `${logPath}.<target>.captures` used to resolve
+// to `.<target>.captures` in the current working directory. Fall back to a
+// private temp location so the fake never writes into the repository.
+const logPath = process.env.TMUX_FAKE_LOG || path.join(os.tmpdir(), 'codelark-fake-tmux', 'tmux.log');
+fs.mkdirSync(path.dirname(logPath), { recursive: true });
 const statePath = process.env.TMUX_FAKE_STATE_PATH || `${logPath}.sessions`;
 const fakeCodexRoot = process.env.CODELARK_FAKE_CODEX_TUI_STATE_DIR || '';
 const fakeCodexControl = process.env.CODELARK_FAKE_CODEX_TUI_CONTROL || '';
 const fakeCodexControlScript = process.env.CODELARK_FAKE_CODEX_TUI_CONTROL_SCRIPT || '';
 
-if (logPath) fs.appendFileSync(logPath, `${args.join(' ')}\n`);
+fs.appendFileSync(logPath, `${args.join(' ')}\n`);
 
 function safeName(value) {
   return String(value || 'default').replace(/[^A-Za-z0-9_.-]/g, '_');

@@ -35,4 +35,22 @@ describe('cross-platform fake tmux CLI', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it('never writes capture counters into the working directory when TMUX_FAKE_LOG is unset', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-fake-tmux-cwd-'));
+    const helperPath = path.resolve('src', '__tests__', 'helpers', 'fake-tmux-cli.cjs');
+    const statePath = path.join(cwd, '..', `${path.basename(cwd)}.sessions`);
+    const env: NodeJS.ProcessEnv = { ...process.env, TMUX_FAKE_STATE_PATH: statePath };
+    delete env.TMUX_FAKE_LOG;
+    const run = (args: string[]) => execFileAsync(process.execPath, [helperPath, ...args], { env, cwd });
+
+    try {
+      await run(['new-session', '-d', '-s', 'codex_0000:0.0', '--', 'ignored']);
+      await run(['capture-pane', '-t', 'codex_0000:0.0', '-p']);
+      assert.deepEqual(fs.readdirSync(cwd), [], 'fake tmux leaked files into the working directory');
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(statePath, { force: true });
+    }
+  });
 });

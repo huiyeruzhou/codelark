@@ -582,6 +582,7 @@ function installFakeTmux(): { binDir: string; logPath: string } {
   const tmuxPath = path.join(binDir, 'tmux');
   fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
+TMUX_FAKE_LOG="\${TMUX_FAKE_LOG:-${logPath}}"
 printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 case "$1" in
   list-sessions)

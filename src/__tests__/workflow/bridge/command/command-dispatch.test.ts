@@ -500,6 +500,10 @@ function installFakeTmux(): { binDir: string; logPath: string } {
     return { binDir, logPath };
   }
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
+	# Bind the fake's state to this fixture's temp dir. Background monitors can
+	# call tmux after the test restored TMUX_FAKE_LOG; without this default the
+	# count/buffer files landed in the current working directory.
+	TMUX_FAKE_LOG="\${TMUX_FAKE_LOG:-${logPath}}"
 	printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 	state_file="${statePath}"
 	safe_name() {
