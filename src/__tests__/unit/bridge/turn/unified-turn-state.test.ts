@@ -248,7 +248,28 @@ describe('unified-turn-state', () => {
         : [],
       ['tool-1'],
     );
-    assert.equal(state.historyItems[2]?.type === 'markdown' ? state.historyItems[2].content : '', '\n\n第二段');
+    assert.equal(state.historyItems[2]?.type === 'markdown' ? state.historyItems[2].content : '', '第二段');
+  });
+
+  it('buffers a whitespace-only delta arriving right after a tool panel instead of creating an empty item', () => {
+    const state = createUnifiedTurnProgressState(1000);
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '第一段');
+    applyUnifiedTurnToolEvent(state, codexTurnEventFromSdkToolEvent('tool-1', 'exec_command', 'running'));
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '第一段\n\n');
+    assert.deepEqual(state.historyItems.map((item) => item.type), ['markdown', 'tool_panel']);
+
+    // Once the next text chunk arrives the paragraph break is still rendered.
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '第一段\n\n第二段');
+    assert.deepEqual(state.historyItems.map((item) => item.type), ['markdown', 'tool_panel', 'markdown']);
+    assert.equal(state.historyItems[2]?.type === 'markdown' ? state.historyItems[2].content : '', '第二段');
+  });
+
+  it('treats a leading-whitespace first snapshot as not started yet', () => {
+    const state = createUnifiedTurnProgressState(1000);
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '\n');
+    assert.deepEqual(state.historyItems, []);
+    applyUnifiedTurnHistoryModelTextSnapshot(state, '\nHello world');
+    assert.deepEqual(state.historyItems, [{ type: 'markdown', role: 'assistant', content: 'Hello world' }]);
   });
 
   it('replaces a non-prefix assistant snapshot while preserving tool history', () => {

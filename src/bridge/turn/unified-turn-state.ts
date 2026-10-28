@@ -99,17 +99,25 @@ function appendOrExtendHistoryModelSnapshotText(
   state: Pick<UnifiedTurnProgressState, 'historyItems'>,
   content: string,
 ): void {
-  if (!content) return;
   const items = historyItemsForAppend(state);
   const last = items.at(-1);
   if (
     last?.type === 'markdown'
     && last.role === 'assistant'
   ) {
+    // Continuation of the same assistant message: keep the delta byte-for-byte.
+    // Snapshot boundaries fall on spaces, hard breaks and code indentation.
     last.content = `${last.content}${content}`;
     return;
   }
-  items.push({ type: 'markdown', role: 'assistant', content });
+  // A new markdown item begins after a tool panel (or as the first item). Leading
+  // whitespace is a separator between independent card elements, not content; a
+  // whitespace-only delta here must not create an invisible placeholder item
+  // that still advances pagination counters. Word spaces inside a continuation
+  // are preserved by the branch above.
+  const leading = content.trimStart();
+  if (!leading) return;
+  items.push({ type: 'markdown', role: 'assistant', content: leading });
 }
 
 function mergeToolCallInfo(previous: ToolCallInfo | undefined, next: ToolCallInfo): ToolCallInfo {
