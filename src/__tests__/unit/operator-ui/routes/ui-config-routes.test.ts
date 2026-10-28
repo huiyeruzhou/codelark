@@ -17,7 +17,18 @@ import {
   LEGACY_CONFIG_ENV_PATH as CONFIG_PATH,
   LEGACY_CONFIG_JSON_PATH as CONFIG_JSON_PATH,
 } from '../../../../configuration/migrations/legacy/paths.js';
-import { claudeProviderSchema, type ConfigV2 } from '../../../../configuration/schema.js';
+import {
+  claudeProviderSchema,
+  cursorProviderSchema,
+  cursorReasoningEffortSchema,
+  kimiProviderSchema,
+  kimiThinkingModeSchema,
+  runtimeAgentSchema,
+  zcodeModeSchema,
+  zcodeProviderSchema,
+  type ConfigV2,
+} from '../../../../configuration/schema.js';
+import { renderedShell } from '../../../helpers/operator-ui/rendered-shell.js';
 
 function createResponse(): ServerResponse & { body: string; statusCodeWritten?: number } {
   return {
@@ -250,19 +261,37 @@ describe('Ui config application', () => {
   });
 
   it('keeps the browser form submission keys equal to the backend input contract', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8').replace(/\r\n/g, '\n');
-    const body = source.match(/function formPayload\(\) \{\s*return \{([\s\S]*?)\n\s*\};\n\s*\}/)?.[1] || '';
-    const browserKeys = [...body.matchAll(/^\s+(\w+):/gm)].map((match) => match[1]).sort();
-
+    const shell = renderedShell();
+    const browserKeys = shell.returnedObjectKeys('formPayload').sort();
     assert.deepEqual(browserKeys, UI_CONFIG_INPUT_KEYS);
-    assert.doesNotMatch(source, /showToolCallDetails/);
-    assert.doesNotMatch(source, /id="historyMessageLimit"/);
-    assert.doesNotMatch(source, /id="streamStatusIdleStartSeconds"/);
-    assert.doesNotMatch(source, /id="streamStatusCheckIntervalSeconds"/);
-    assert.match(source, /id="channelHistoryMessageLimit"/);
-    assert.match(source, /id="channelStreamStatusIdleStartSeconds"/);
-    assert.match(source, /id="channelStreamStatusCheckIntervalSeconds"/);
-    assert.doesNotMatch(source, /长任务提示刷新间隔/);
+
+    // Every submitted key is read from a form control that exists on the page.
+    const bindings = shell.returnedElementBindings('formPayload');
+    assert.deepEqual(Object.keys(bindings).sort(), UI_CONFIG_INPUT_KEYS);
+    const missing = Object.values(bindings).filter((id) => !shell.elementIds.has(id));
+    assert.deepEqual(missing, [], 'formPayload reads controls missing from the rendered page');
+
+    // fillForm writes back exactly the controls formPayload submits. Two controls
+    // are filled through a local select reference rather than getElementById():
+    // defaultModel (renderDefaultModelOptions rebuilds its options) and
+    // defaultProvider (inherited-default label handling).
+    const filledViaHelper = new Set(['defaultModel', 'defaultProvider']);
+    assert.deepEqual(
+      [...new Set(shell.assignedElementIds('fillForm'))].sort(),
+      [...new Set(Object.values(bindings))].filter((id) => !filledViaHelper.has(id)).sort(),
+      'fillForm and formPayload must cover the same global config controls',
+    );
+    assert.match(shell.script, /select\.value = currentValue/);
+    assert.match(shell.script, /defaultProvider\.value = config\.defaultProviderInherited === true/);
+
+    assert.doesNotMatch(shell.html, /showToolCallDetails/);
+    assert.doesNotMatch(shell.html, /id="historyMessageLimit"/);
+    assert.doesNotMatch(shell.html, /id="streamStatusIdleStartSeconds"/);
+    assert.doesNotMatch(shell.html, /id="streamStatusCheckIntervalSeconds"/);
+    assert.match(shell.script, /id="channelHistoryMessageLimit"/);
+    assert.match(shell.script, /id="channelStreamStatusIdleStartSeconds"/);
+    assert.match(shell.script, /id="channelStreamStatusCheckIntervalSeconds"/);
+    assert.doesNotMatch(shell.html, /长任务提示刷新间隔/);
   });
 
   it('exposes and writes global Kimi runtime defaults', () => {
@@ -380,76 +409,81 @@ describe('Ui config application', () => {
   });
 
   it('keeps the Claude provider control equal to the backend enum contract', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
-    const selectBody = source.match(/<select id="claudeProvider">([\s\S]*?)<\/select>/)?.[1] || '';
-    const browserOptions = [...selectBody.matchAll(/<option value="([^"]*)">/g)].map((match) => match[1]);
-
-    assert.deepEqual(browserOptions, [...claudeProviderSchema.options]);
+    assert.deepEqual(renderedShell().selectOptions('claudeProvider'), [...claudeProviderSchema.options]);
     assert.throws(
       () => mergeConfigV2HomePatch(baseConfigV2(), { claudeProvider: '' }),
       /Invalid option/,
     );
   });
 
+  it('keeps every global runtime select equal to its backend enum', () => {
+    const shell = renderedShell();
+    const contracts: Array<[string, readonly string[]]> = [
+      ['runtime', runtimeAgentSchema.options],
+      ['kimiProvider', kimiProviderSchema.options],
+      ['kimiThinkingMode', kimiThinkingModeSchema.options],
+      ['cursorProvider', cursorProviderSchema.options],
+      ['cursorReasoningEffort', ['', ...cursorReasoningEffortSchema.options]],
+      ['zcodeProvider', zcodeProviderSchema.options],
+      ['zcodeMode', zcodeModeSchema.options],
+    ];
+    for (const [id, expected] of contracts) {
+      assert.deepEqual([...(shell.selectOptions(id) || [])].sort(), [...expected].sort(), `select#${id}`);
+    }
+    assert.deepEqual(shell.selectOptions('defaultProvider'), ['', 'tmux']);
+  });
+
   it('keeps the global config shell wired to Kimi form fields', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
-    assert.match(source, /<select id="runtime">[\s\S]*<option value="codex" selected>codex<\/option>[\s\S]*<option value="claude">claude<\/option>[\s\S]*<option value="kimi">kimi<\/option>/);
-    assert.match(source, /data-config-section="kimi"/);
-    assert.match(source, /Kimi 默认值/);
-    assert.match(source, /id="kimiProvider"/);
-    assert.match(source, /id="kimiDefaultModel"/);
-    assert.match(source, /id="kimiThinkingMode"/);
-    assert.match(source, /<select id="defaultProvider">[\s\S]*<option value="tmux">tmux<\/option>/);
-    assert.doesNotMatch(source, /<select id="defaultProvider">(?:(?!<\/select>)[\s\S])*<option value="sdk">/);
-    assert.doesNotMatch(source, /<select id="defaultProvider">(?:(?!<\/select>)[\s\S])*<option value="pty">/);
-    assert.match(source, /<option value="">跟随默认<\/option>/);
-    assert.doesNotMatch(source, /<option value="">auto<\/option>/);
-    assert.match(source, /跟随默认（默认值：/);
-    assert.match(source, /defaultProviderInherited === true/);
-    assert.match(source, /classList\.toggle\('uses-default'/);
-    assert.match(source, /kimiProvider: document\.getElementById\('kimiProvider'\)\.value/);
-    assert.match(source, /kimiDefaultModel: document\.getElementById\('kimiDefaultModel'\)\.value/);
-    assert.match(source, /document\.getElementById\('kimiProvider'\)\.value = config\.kimiProvider \|\| 'tmux'/);
-    assert.match(source, /document\.getElementById\('kimiDefaultModel'\)\.value = config\.kimiDefaultModel \|\| ''/);
+    const shell = renderedShell();
+    const html = shell.html;
+    assert.match(html, /<select id="runtime">[\s\S]*<option value="codex" selected>codex<\/option>[\s\S]*<option value="claude">claude<\/option>[\s\S]*<option value="kimi">kimi<\/option>/);
+    assert.match(html, /data-config-section="kimi"/);
+    assert.match(html, /Kimi 默认值/);
+    for (const id of ['kimiProvider', 'kimiDefaultModel', 'kimiThinkingMode']) assert.ok(shell.elementIds.has(id), id);
+    assert.match(html, /<option value="">跟随默认<\/option>/);
+    assert.doesNotMatch(html, /<option value="">auto<\/option>/);
+    assert.match(shell.script, /跟随默认（默认值：/);
+    assert.match(shell.script, /classList\.toggle\('uses-default'/);
+    const bindings = shell.returnedElementBindings('formPayload');
+    assert.equal(bindings.kimiProvider, 'kimiProvider');
+    assert.equal(bindings.kimiDefaultModel, 'kimiDefaultModel');
+    const filled = shell.assignedElementIds('fillForm');
+    assert.ok(filled.includes('kimiProvider') && filled.includes('kimiDefaultModel'));
+    assert.match(shell.script, /document\.getElementById\('kimiProvider'\)\.value = config\.kimiProvider \|\| 'tmux'/);
   });
 
   it('keeps the global and session config shell wired to Cursor form fields', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
-    assert.match(source, /<option value="cursor">cursor<\/option>/);
-    assert.match(source, /data-config-section="cursor"/);
-    assert.match(source, /Cursor 默认值/);
-    assert.match(source, /id="cursorProvider"/);
-    assert.match(source, /id="cursorDefaultModel"/);
-    assert.match(source, /id="cursorReasoningEffort"/);
-    assert.match(source, /id="cursorForce"/);
-    assert.match(source, /id="sessionConfigCursorBlock"/);
-    assert.match(source, /id="sessionConfigCursorReasoning"/);
-    assert.match(source, /cursorProvider: document\.getElementById\('cursorProvider'\)\.value/);
-    assert.match(source, /cursorReasoningEffort: document\.getElementById\('cursorReasoningEffort'\)\.value/);
-    assert.match(source, /document\.getElementById\('cursorForce'\)\.checked = config\.cursorForce === true/);
+    const shell = renderedShell();
+    assert.match(shell.html, /data-config-section="cursor"/);
+    assert.match(shell.html, /Cursor 默认值/);
+    for (const id of ['cursorProvider', 'cursorDefaultModel', 'cursorReasoningEffort', 'cursorForce', 'sessionConfigCursorBlock', 'sessionConfigCursorReasoning']) {
+      assert.ok(shell.elementIds.has(id), id);
+    }
+    const bindings = shell.returnedElementBindings('formPayload');
+    assert.equal(bindings.cursorProvider, 'cursorProvider');
+    assert.equal(bindings.cursorReasoningEffort, 'cursorReasoningEffort');
+    assert.ok(shell.assignedElementIds('fillForm').includes('cursorForce'));
+    assert.match(shell.script, /document\.getElementById\('cursorForce'\)\.checked = config\.cursorForce === true/);
   });
 
   it('keeps the global and session config shell wired to ZCode tmux fields', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
-    assert.match(source, /<option value="zcode">zcode<\/option>/);
-    assert.match(source, /data-config-section="zcode"/);
-    assert.match(source, /ZCode 默认值/);
-    assert.match(source, /id="zcodeProvider"/);
-    assert.match(source, /id="zcodeDefaultModel"/);
-    assert.match(source, /id="zcodeMode"/);
-    assert.match(source, /id="sessionConfigZcodeBlock"/);
-    assert.match(source, /id="sessionConfigZcodeProvider"/);
-    assert.match(source, /id="sessionConfigZcodeMode"/);
-    assert.match(source, /zcodeProvider: document\.getElementById\('zcodeProvider'\)\.value/);
-    assert.match(source, /zcodeMode: document\.getElementById\('zcodeMode'\)\.value/);
-    assert.match(source, /document\.getElementById\('zcodeProvider'\)\.value = config\.zcodeProvider \|\| 'tmux'/);
+    const shell = renderedShell();
+    assert.match(shell.html, /data-config-section="zcode"/);
+    assert.match(shell.html, /ZCode 默认值/);
+    for (const id of ['zcodeProvider', 'zcodeDefaultModel', 'zcodeMode', 'sessionConfigZcodeBlock', 'sessionConfigZcodeProvider', 'sessionConfigZcodeMode']) {
+      assert.ok(shell.elementIds.has(id), id);
+    }
+    const bindings = shell.returnedElementBindings('formPayload');
+    assert.equal(bindings.zcodeProvider, 'zcodeProvider');
+    assert.equal(bindings.zcodeMode, 'zcodeMode');
+    assert.match(shell.script, /document\.getElementById\('zcodeProvider'\)\.value = config\.zcodeProvider \|\| 'tmux'/);
   });
 
   it('describes /t runtime identities as thread or session ids', () => {
-    const source = fs.readFileSync(path.join(process.cwd(), 'src/operator-ui/shell.ts'), 'utf-8');
-    assert.match(source, /thread\/session id/);
-    assert.doesNotMatch(source, /\/t &lt;序号\|thread id\|bridge id\|名称&gt;/);
-    assert.doesNotMatch(source, /\/t archive \[序号\|bridge id\|thread id\|名称\]/);
+    const { markup } = renderedShell();
+    assert.match(markup, /thread\/session id/);
+    assert.doesNotMatch(markup, /\/t &lt;序号\|thread id\|bridge id\|名称&gt;/);
+    assert.doesNotMatch(markup, /\/t archive \[序号\|bridge id\|thread id\|名称\]/);
   });
 });
 
