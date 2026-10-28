@@ -15,4 +15,12 @@
 
 飞书回读会在 fenced code 内插入额外空行，因此缩进按代码行逐行检查，不以相邻非空行之间的空行数量判断缩进是否丢失。首轮夹具还在 item-added 事件携带了完整正文，不能证明真实分片链路；该轮报告保留为无效验收记录。修正夹具并补断言后重跑通过。
 
-最终证据在任务 worktree 的 `work/whitespace/real-chunks/report.json`，中途与终态原始用户回读均保存。隔离进程已停止，测试群保留当前用户以便查看。此验证使用确定性模型，覆盖实际出站交付与卡片内容；没有把 OpenAPI 成功码或日志预览作为显示验收。
+### 段落到代码块的边界
+
+2026-10-27 验收还发现：回读的最终卡片里 `Second paragraph.` 与 ```` ```python ```` 之间的空行消失（发送侧为正确的 `\n\n`，24 次 API 回读均为直接相邻）。因此脚本现在显式记录 `paragraphToFenceNewlines`；该边界在 10-27 那次验收没有检查，不能把"段落与代码块之间的空行"算作已验证项。
+
+### 复跑
+
+真实验收脚本已入库：`npm run real:feishu:streaming-whitespace`（需要 `CODELARK_REAL_FEISHU_E2E=1`、已降级的 lark-cli profile 和测试 App 通道；可选 `CODELARK_REAL_FEISHU_RETAIN_GROUP=1` 保留测试群，默认解散）。证据默认写到 `work/whitespace/real-chunks/report.json`，可用 `CODELARK_REAL_FEISHU_WHITESPACE_DIR` 改位置。`work/` 不入库，证据请在合并前归档或重跑。
+
+最终证据字段：中途与终态原始用户回读、模型分片、`cardSyncPlans`。隔离进程在 `finally` 中停止。此验证使用确定性模型，覆盖实际出站交付与卡片内容；没有把 OpenAPI 成功码或日志预览作为显示验收。

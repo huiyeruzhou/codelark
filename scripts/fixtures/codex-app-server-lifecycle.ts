@@ -97,7 +97,10 @@ export async function startFixtureModel(options: { authorization?: string; rejec
         } });
         if ('text' in output) {
           const chunks = output.chunks || [output.text];
-          assert.equal(chunks.join(''), output.text, 'fixture chunks must reconstruct the complete answer');
+          if (chunks.join('') !== output.text) {
+            // Dynamic outputs are only known per request; record instead of throwing in the handler.
+            unexpected.push('fixture chunks do not reconstruct the complete answer');
+          }
           for (const [index, delta] of chunks.entries()) {
             if (index > 0 && output.chunkDelayMs) await new Promise(resolve => setTimeout(resolve, output.chunkDelayMs));
             if (res.destroyed) return;
@@ -121,6 +124,11 @@ export async function startFixtureModel(options: { authorization?: string; rejec
     baseUrl: `http://127.0.0.1:${address.port}/v1`, requests, auxiliaryRequests, unexpected,
     get rejectedWebSockets() { return rejectedWebSockets; },
     enqueue(output: Step['output'], hold = false) {
+      // Validate at the call site: inside the SSE handler a failed assertion
+      // only became an unhandled rejection / destroyed socket, not a test failure.
+      if (typeof output !== 'function' && 'text' in output && output.chunks) {
+        assert.equal(output.chunks.join(''), output.text, 'fixture chunks must reconstruct the complete answer');
+      }
       let release!: () => void;
       const gate = new Promise<void>((resolve) => { release = resolve; });
       const step: Step = { output, gate, release };

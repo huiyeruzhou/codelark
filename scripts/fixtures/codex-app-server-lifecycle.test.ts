@@ -53,3 +53,13 @@ it('preserves whitespace-only chunks in streamed fixture responses', async () =>
     assert.deepEqual(model.unexpected, []);
   } finally { await model.close(); }
 });
+
+it('rejects chunk plans that do not rebuild the answer when they are enqueued', async () => {
+  const model = await startFixtureModel();
+  try {
+    assert.throws(
+      () => model.enqueue({ text: 'This sample', chunks: ['This', 'sample'] }),
+      /reconstruct the complete answer/,
+    );
+  } finally { await model.close(); }
+});
