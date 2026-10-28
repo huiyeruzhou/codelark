@@ -3222,34 +3222,48 @@ function copySeedLarkCliConfig(seedHome: string, runtimeHome: string): boolean {
   return true;
 }
 
-function initializeIsolatedLarkCliConfig(options: CliOptions): RuntimeEnvironmentPlan['larkCliConfigSource'] {
-  if (options.dryRun || !options.launchBridge) return 'not-needed';
-  if (!options.testFeishuAppId || !options.testFeishuAppSecret) return 'missing';
+function softInitializeIsolatedLarkCliConfig(options: CliOptions): void {
+  // Creates the isolated runtime directories and copies a keychain-downgraded
+  // seed when one is configured. Missing/invalid seeds are NOT fatal here: the
+  // user-authorization preflight must still run (its failure messages are the
+  // documented gate), and assertIsolatedLarkCliConfigReady enforces the seed
+  // before the bridge actually starts.
+  if (options.dryRun || !options.launchBridge) return;
   fs.mkdirSync(options.runtimeHome, { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.join(options.runtimeHome, '.local', 'share'), { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.join(options.runtimeHome, '.config'), { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.join(options.runtimeHome, '.cache'), { recursive: true, mode: 0o700 });
   const larkCliConfigPath = path.join(options.runtimeHome, '.lark-cli', 'config.json');
   const existingConfig = readJsonIfExists<{ apps?: Array<{ appId?: string }> }>(larkCliConfigPath, {});
-  if (!existingConfig.apps?.some((app) => app.appId === options.testFeishuAppId)) {
-    // macOS 上 `lark-cli config init` 必然把 appSecret 写进系统钥匙串（全新 HOME 首次写入触发系统弹窗）。
-    // 这里不再 spawn config init：改为复制一份已完成 keychain-downgrade 且初始化过的种子配置
-    // （appSecret 已加密落地为 *.enc + master.key.file），lark-cli 全程读文件，不触碰钥匙串。
-    const seedHome = options.larkCliSeedHome;
-    if (!seedHome) {
-      throw new Error(
-        '[real-feishu-e2e] --lark-cli-seed-home (or CODELARK_REAL_FEISHU_AUTH_HOME) is required to seed isolated lark-cli config ' +
-          '(run `lark-cli config keychain-downgrade` once on the seed profile from an interactive session to avoid macOS keychain prompts)',
-      );
-    }
-    if (!copySeedLarkCliConfig(seedHome, options.runtimeHome)) {
-      throw new Error(`[real-feishu-e2e] seed lark-cli home ${seedHome} is missing .lark-cli/config.json; initialize it first`);
-    }
+  if (existingConfig.apps?.some((app) => app.appId === options.testFeishuAppId)) return;
+  if (options.larkCliSeedHome && copySeedLarkCliConfig(options.larkCliSeedHome, options.runtimeHome)) {
     process.stderr.write(
-      `[real-feishu-e2e] Seeded isolated lark-cli config from ${seedHome} into HOME=${options.runtimeHome} app=${options.testFeishuAppId} (no keychain access)\n`,
+      `[real-feishu-e2e] Seeded isolated lark-cli config from ${options.larkCliSeedHome} into HOME=${options.runtimeHome} app=${options.testFeishuAppId} (no keychain access)\n`,
     );
   }
-  return 'test-env-app';
+}
+
+function assertIsolatedLarkCliConfigReady(options: CliOptions): void {
+  const larkCliConfigPath = path.join(options.runtimeHome, '.lark-cli', 'config.json');
+  const config = readJsonIfExists<{ apps?: Array<{ appId?: string }> }>(larkCliConfigPath, {});
+  if (config.apps?.some((app) => app.appId === options.testFeishuAppId)) return;
+  throw new Error(
+    '[real-feishu-e2e] isolated lark-cli config for the test app is not initialized, and spawning '
+      + '`lark-cli config init` would write the macOS Keychain and raise a system prompt. '
+      + 'Provide a keychain-downgraded seed via --lark-cli-seed-home or CODELARK_REAL_FEISHU_AUTH_HOME '
+      + '(run `lark-cli config keychain-downgrade` once on that profile from an interactive session).',
+  );
+}
+
+// Kept for prepareRuntimeEnvironment(): idempotent, throws the seed error only
+// if the post-preflight assertion somehow did not run.
+function initializeIsolatedLarkCliConfig(options: CliOptions): RuntimeEnvironmentPlan['larkCliConfigSource'] {
+  if (options.dryRun || !options.launchBridge) return 'not-needed';
+  if (!options.testFeishuAppId || !options.testFeishuAppSecret) return 'missing';
+  softInitializeIsolatedLarkCliConfig(options);
+  const larkCliConfigPath = path.join(options.runtimeHome, '.lark-cli', 'config.json');
+  const existingConfig = readJsonIfExists<{ apps?: Array<{ appId?: string }> }>(larkCliConfigPath, {});
+  return existingConfig.apps?.some((app) => app.appId === options.testFeishuAppId) ? 'test-env-app' : 'missing';
 }
 
 function isolatedLarkCliEnv(options: CliOptions): Record<string, string> {
@@ -7450,12 +7464,19 @@ async function main(): Promise<void> {
   const messageObservations: MessageObservation[] = [];
   try {
     if (options.launchBridge && !options.dryRun) {
-      initializeIsolatedLarkCliConfig(options);
+      // Host Kimi credentials are copied before the lark-cli preflight so that a
+      // preflight failure still leaves the environment populated for debugging.
+      // The lark-cli seed is applied softly here; the hard requirement is
+      // checked after the user-authorization preflight passes.
+      softInitializeIsolatedLarkCliConfig(options);
       if (!usesFakeKimiBackend(options)) {
         copyHostKimiConfig(os.homedir(), options.kimiHome);
       }
     }
     const userAuthorization = await assertLarkCliUserAuthorizationPreflight(options);
+    if (options.launchBridge && !options.dryRun) {
+      assertIsolatedLarkCliConfigReady(options);
+    }
     startupChatCleanup = await cleanupRegisteredTestChats(options);
     appLock = acquireAppLock(options);
     if (options.scenario === 'app-server-lifecycle' && !options.dryRun) {
