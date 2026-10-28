@@ -111,6 +111,8 @@ interface CliOptions {
   testUserAccessToken: string;
   testLarkCliConfigDir: string;
   testLarkCliXdgDataHome: string;
+  /** 已降级（keychain-downgrade 完成）且已初始化过的 lark-cli 配置目录，作为隔离 runtime HOME 的种子，避免 config init 触碰 macOS 系统钥匙串弹窗。 */
+  larkCliSeedHome: string;
   feishuSite: FeishuSite;
   larkProfile: string;
   scenario: string;
@@ -1345,6 +1347,11 @@ function parseOptions(argv: string[]): CliOptions {
     testUserAccessToken: valueArg(argv, '--test-user-access-token', process.env.CODELARK_REAL_FEISHU_TEST_USER_ACCESS_TOKEN || ''),
     testLarkCliConfigDir: valueArg(argv, '--test-lark-cli-config-dir', process.env.CODELARK_REAL_FEISHU_TEST_LARK_CLI_CONFIG_DIR || ''),
     testLarkCliXdgDataHome: valueArg(argv, '--test-lark-cli-xdg-data-home', process.env.CODELARK_REAL_FEISHU_TEST_LARK_CLI_XDG_DATA_HOME || ''),
+    larkCliSeedHome: valueArg(
+      argv,
+      '--lark-cli-seed-home',
+      process.env.CODELARK_REAL_FEISHU_TEST_LARK_CLI_SEED_HOME || process.env.CODELARK_REAL_FEISHU_AUTH_HOME || '',
+    ),
     feishuSite: parseFeishuSite(siteArg),
     larkProfile: valueArg(argv, '--lark-profile', ''),
     scenario,
@@ -1424,6 +1431,7 @@ function printUsage(): void {
     '  --test-user-access-token <u-...> Optional current bridge app user access token for deleting user-owned test groups',
     '  --test-lark-cli-config-dir <dir> Optional lark-cli config dir used for user-side send/read/create/delete actions',
     '  --test-lark-cli-xdg-data-home <dir> Optional XDG_DATA_HOME used for user-side lark-cli auth tokens',
+    '  --lark-cli-seed-home <dir>   Keychain-downgraded lark-cli home copied into the isolated runtime HOME so the bridge never writes the macOS Keychain; defaults to CODELARK_REAL_FEISHU_AUTH_HOME (env CODELARK_REAL_FEISHU_TEST_LARK_CLI_SEED_HOME)',
     '  --feishu-site <site>       feishu|lark, default feishu',
     '  --lark-profile <name>      Optional lark-cli profile for user identity',
     '  --test-bot-open-id <ou_>        Optional bot open_id for structured cloud document mention comments',
@@ -3199,6 +3207,21 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
   };
 }
 
+function copySeedLarkCliConfig(seedHome: string, runtimeHome: string): boolean {
+  const seedLarkCliDir = path.join(seedHome, '.lark-cli');
+  const seedKeychainDir = path.join(seedHome, 'Library', 'Application Support', 'lark-cli');
+  if (!fs.existsSync(path.join(seedLarkCliDir, 'config.json'))) return false;
+  const runtimeLarkCliDir = path.join(runtimeHome, '.lark-cli');
+  fs.mkdirSync(runtimeLarkCliDir, { recursive: true, mode: 0o700 });
+  fs.cpSync(seedLarkCliDir, runtimeLarkCliDir, { recursive: true });
+  if (fs.existsSync(seedKeychainDir)) {
+    const runtimeKeychainDir = path.join(runtimeHome, 'Library', 'Application Support', 'lark-cli');
+    fs.mkdirSync(runtimeKeychainDir, { recursive: true, mode: 0o700 });
+    fs.cpSync(seedKeychainDir, runtimeKeychainDir, { recursive: true });
+  }
+  return true;
+}
+
 function initializeIsolatedLarkCliConfig(options: CliOptions): RuntimeEnvironmentPlan['larkCliConfigSource'] {
   if (options.dryRun || !options.launchBridge) return 'not-needed';
   if (!options.testFeishuAppId || !options.testFeishuAppSecret) return 'missing';
@@ -3209,32 +3232,22 @@ function initializeIsolatedLarkCliConfig(options: CliOptions): RuntimeEnvironmen
   const larkCliConfigPath = path.join(options.runtimeHome, '.lark-cli', 'config.json');
   const existingConfig = readJsonIfExists<{ apps?: Array<{ appId?: string }> }>(larkCliConfigPath, {});
   if (!existingConfig.apps?.some((app) => app.appId === options.testFeishuAppId)) {
-    execFileSync(
-      'npx',
-      [
-        'lark-cli',
-        'config',
-        'init',
-        '--app-id',
-        options.testFeishuAppId,
-        '--brand',
-        options.feishuSite,
-        '--app-secret-stdin',
-      ],
-      {
-        cwd: process.cwd(),
-        env: sanitizedChildEnv({
-          HOME: options.runtimeHome,
-          USERPROFILE: options.runtimeHome,
-          XDG_DATA_HOME: path.join(options.runtimeHome, '.local', 'share'),
-          XDG_CONFIG_HOME: path.join(options.runtimeHome, '.config'),
-          XDG_CACHE_HOME: path.join(options.runtimeHome, '.cache'),
-        }),
-        input: options.testFeishuAppSecret,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
+    // macOS 上 `lark-cli config init` 必然把 appSecret 写进系统钥匙串（全新 HOME 首次写入触发系统弹窗）。
+    // 这里不再 spawn config init：改为复制一份已完成 keychain-downgrade 且初始化过的种子配置
+    // （appSecret 已加密落地为 *.enc + master.key.file），lark-cli 全程读文件，不触碰钥匙串。
+    const seedHome = options.larkCliSeedHome;
+    if (!seedHome) {
+      throw new Error(
+        '[real-feishu-e2e] --lark-cli-seed-home (or CODELARK_REAL_FEISHU_AUTH_HOME) is required to seed isolated lark-cli config ' +
+          '(run `lark-cli config keychain-downgrade` once on the seed profile from an interactive session to avoid macOS keychain prompts)',
+      );
+    }
+    if (!copySeedLarkCliConfig(seedHome, options.runtimeHome)) {
+      throw new Error(`[real-feishu-e2e] seed lark-cli home ${seedHome} is missing .lark-cli/config.json; initialize it first`);
+    }
+    process.stderr.write(
+      `[real-feishu-e2e] Seeded isolated lark-cli config from ${seedHome} into HOME=${options.runtimeHome} app=${options.testFeishuAppId} (no keychain access)\n`,
     );
-    process.stderr.write(`[real-feishu-e2e] Initialized isolated lark-cli config in HOME=${options.runtimeHome} app=${options.testFeishuAppId}\n`);
   }
   return 'test-env-app';
 }
