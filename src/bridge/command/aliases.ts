@@ -63,6 +63,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/start',
   '/new',
   '/new-form',
+  '/fork',
   '/clear',
   '/clear-cancel',
   '/thread',

@@ -2298,6 +2298,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const inbound = await adapter.consumeOne();
     assert.ok(inbound);
     assert.equal(inbound.text, '按这个窗口发');
+    assert.equal(inbound.replyToMessageId, 'card-parent-1');
     assert.equal(getCalls[0]?.path?.message_id, 'card-parent-1');
     assert.equal(getCalls[0]?.params?.card_msg_content_type, 'user_card_content');
     assert.match(inbound.contextText || '', /<quoted_message platform="feishu" message_id="card-parent-1" message_type="interactive">/);

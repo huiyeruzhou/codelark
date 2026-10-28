@@ -25,6 +25,7 @@ import {
   handleHistoryCommand,
 } from './diagnostics.js';
 import { handleStopCommand } from './control.js';
+import { handleForkSessionCommand } from '../session/command-use-cases/fork-session.js';
 import { buildHelpCommandResponse } from './help.js';
 import {
   buildStartCommandResponse,
@@ -648,6 +649,13 @@ export async function handleBridgeCommand(
         }));
         backgroundEffects.push(...(result.backgroundEffects || []));
       }
+      break;
+    }
+
+    case '/fork': {
+      const result = await handleForkSessionCommand({ adapter, msg, args, commandBinding, store });
+      response = result.response;
+      afterDelivery = result.afterDelivery;
       break;
     }
 
