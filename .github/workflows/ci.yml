@@ -6,6 +6,13 @@ env:
   CODELARK_CI_CODEX_VERSION: 0.163.0
   CODELARK_CI_CLAUDE_VERSION: 2.1.312
   CODELARK_CI_KIMI_VERSION: 2.4.0
+  # The newest CLIs are not compatible with the psmux-backed real-runtime e2e
+  # on Windows (codex sessions vanish, kimi stays on the trust page, claude
+  # cannot be identified on the cwd trust screen). These versions were the
+  # last fully green set on windows-latest; bump only after re-verification.
+  CODELARK_CI_WINDOWS_CODEX_VERSION: 0.145.0
+  CODELARK_CI_WINDOWS_CLAUDE_VERSION: 2.1.220
+  CODELARK_CI_WINDOWS_KIMI_VERSION: 0.34.0
 
 on:
   workflow_dispatch:
@@ -202,7 +209,12 @@ jobs:
 
       - name: Install real agent CLIs
         shell: bash
-        run: npm install --global @openai/codex@${CODELARK_CI_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_KIMI_VERSION}
+        run: |
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            npm install --global @openai/codex@${CODELARK_CI_WINDOWS_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_WINDOWS_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_WINDOWS_KIMI_VERSION}
+          else
+            npm install --global @openai/codex@${CODELARK_CI_CODEX_VERSION} @anthropic-ai/claude-code@${CODELARK_CI_CLAUDE_VERSION} @moonshot-ai/kimi-code@${CODELARK_CI_KIMI_VERSION}
+          fi
 
       - name: Smoke test real agent executables
         run: node scripts/verify-ci-runtime-clis.js
