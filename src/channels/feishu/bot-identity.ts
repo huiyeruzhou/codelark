@@ -90,3 +90,13 @@ export function buildFeishuBotChatAppLink(site: FeishuSite | string | undefined,
   url.searchParams.set('openId', botOpenId.trim());
   return url.toString();
 }
+
+/** Site-aware deep link that opens a chat by its open_chat_id (groups, P2P, etc.). */
+export function buildFeishuChatOpenLink(site: FeishuSite | string | undefined, chatId: string): string {
+  const host = normalizeFeishuSite(site) === 'lark'
+    ? 'applink.larksuite.com'
+    : 'applink.feishu.cn';
+  const url = new URL(`https://${host}/client/chat/open`);
+  url.searchParams.set('openChatId', chatId.trim());
+  return url.toString();
+}

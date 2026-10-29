@@ -15,12 +15,15 @@ export function readCodexForkPrefix(filePath: string, threadId: string, signatur
   const lines = input.split('\n');
   // An active writer may have an incomplete trailing line. It is never a checkpoint.
   if (!input.endsWith('\n')) lines.pop();
+  // app-server protocol records sign as `app:<thread>:<turn>:<itemId>:<digest>`;
+  // the item id anchors the same native JSONL row the card boundary rendered.
+  const appServerItemId = parseAppServerSignatureItemId(signature);
   const retained: string[] = [];
   let checkedMeta = false;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const record = JSON.parse(trimmed) as { type?: string; payload?: { id?: string } };
+    const record = JSON.parse(trimmed) as { type?: string; payload?: Record<string, any> };
     if (!checkedMeta) {
       if (record.type !== 'session_meta' || record.payload?.id !== threadId) {
         throw new Error('原始 Codex 历史与卡片的 thread 不一致。');
@@ -28,11 +31,28 @@ export function readCodexForkPrefix(filePath: string, threadId: string, signatur
       checkedMeta = true;
     }
     retained.push(trimmed);
+    if (appServerItemId) {
+      if (record.payload?.item?.id === appServerItemId || record.payload?.id === appServerItemId) {
+        return `${retained.join('\n')}\n`;
+      }
+      continue;
+    }
     if (crypto.createHash('sha1').update(trimmed).digest('hex') === signature) {
       return `${retained.join('\n')}\n`;
     }
   }
   throw new Error('原始 Codex 历史中找不到该卡片的边界，未使用当前最新历史替代。');
+}
+
+function parseAppServerSignatureItemId(signature: string): string | null {
+  if (!signature.startsWith('app:')) return null;
+  const parts = signature.split(':');
+  // app:<thread>:<turn>:<itemId>:<digest> -> the identity segment can be
+  // `itemId` or `itemId:completed`, so take everything after the third colon
+  // except the trailing digest.
+  const identity = parts.slice(3, -1).join(':');
+  const itemId = identity.replace(/:true$|:false$/, '');
+  return itemId || null;
 }
 
 /** A prefix is a standalone rollout, not another path for the registered source. */

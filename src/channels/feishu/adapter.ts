@@ -47,7 +47,7 @@ import {
   feishuSiteToApiBaseUrl,
   normalizeFeishuSite,
 } from './site.js';
-import { fetchFeishuBotIdentity, readFeishuAppCreator } from './bot-identity.js';
+import { fetchFeishuBotIdentity, readFeishuAppCreator, buildFeishuChatOpenLink } from './bot-identity.js';
 import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
 import {
   BaseChannelAdapter,
@@ -3175,6 +3175,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     };
   }
 
+  buildChatOpenLink(chatId: string): string | null {
+    return buildFeishuChatOpenLink(this.site, chatId);
+  }
+
   async notifyGroupChatCreated(address: ChannelAddress, _group: CreatedGroupChat): Promise<void> {
     if (this.isGroupAuthorized()) return;
     const result = await this.send({
@@ -3182,8 +3186,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       text: '群聊消息权限确认',
       richCard: await this.buildGroupAuthorizationCard(),
     });
-    if (!result.ok) {
-      console.warn('[feishu-adapter] Failed to send group authorization card:', result.error || result.httpStatus);
+    if (!result.ok) {      console.warn('[feishu-adapter] Failed to send group authorization card:', result.error || result.httpStatus);
     }
   }
 

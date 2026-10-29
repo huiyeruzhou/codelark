@@ -90,6 +90,8 @@ export abstract class BaseChannelAdapter {
 
   sendCloudDocumentReply?(_target: CloudDocumentAddress, _text: string): Promise<SendResult>;
   createGroupChat?(_options: CreateGroupChatOptions): Promise<CreatedGroupChat>;
+  /** Site-aware deep link used to open a chat; falls back to the channel default. */
+  buildChatOpenLink?(_chatId: string): string | null;
   /** Chronological, inclusive boundary; excludes system and deleted messages. */
   listChatMessageIdsThrough?(_chatId: string, _messageId: string, _precedingLimit: number): Promise<string[]>;
   forwardChatMessage?(_messageId: string, _targetChatId: string): Promise<string>;

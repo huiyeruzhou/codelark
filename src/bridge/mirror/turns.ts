@@ -97,7 +97,10 @@ export interface MirrorTurnHooks<TSubscription extends MirrorTurnStateHolder = M
 
 function stampHistoryForkSource(subscription: MirrorTurnStateHolder, state: BridgeMirrorTurnState, record: BridgeMirrorRecord): void {
   const last = state.historyItems.at(-1);
-  if (!last || !/^[a-f0-9]{40}$/.test(record.signature)) return;
+  // tmux records carry the sha1 of the native JSONL line; app-server records
+  // carry an `app:` protocol signature that fork-thread resolves by item id.
+  // Either one anchors a card boundary; anything else is not a fork anchor.
+  if (!last || !/^(?:[a-f0-9]{40}|app:)/.test(record.signature)) return;
   state.historyItems = [...state.historyItems.slice(0, -1), {
     ...last,
     forkSource: { sessionId: subscription.sessionId, threadId: subscription.threadId, signature: record.signature },

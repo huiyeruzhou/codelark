@@ -52,6 +52,27 @@ it('remaps inherited card boundaries after native timestamps change and rejects 
   assert.throws(() => remapCodexForkSignatures(sourceId, forkId, [hash(source)]), /无法唯一对应/);
 });
 
+it('resolves app-server protocol signatures by the native item id', () => {
+  const rows = [
+    { type: 'session_meta', payload: { id: 'app-thread' } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'A' }] } },
+    { type: 'event_msg', payload: { type: 'item_completed', thread_id: 'app-thread', turn_id: 'turn-1', item: { id: 'item-42', type: 'agentMessage', text: 'answer A' }, completed_at_ms: 1 } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'B' }] } },
+  ].map((row) => JSON.stringify(row));
+  const file = path.join(process.env.CODELARK_HOME!, 'fork-app-server.jsonl');
+  fs.writeFileSync(file, rows.join('\n') + '\n');
+  const signature = `app:app-thread:turn-1:item-42:true:${'a'.repeat(20)}`;
+  assert.equal(readCodexForkPrefix(file, 'app-thread', signature), rows.slice(0, 3).join('\n') + '\n');
+  // The completed marker suffix is optional and must not break resolution.
+  const bareSignature = `app:app-thread:turn-1:item-42:${'b'.repeat(20)}`;
+  assert.equal(readCodexForkPrefix(file, 'app-thread', bareSignature), rows.slice(0, 3).join('\n') + '\n');
+  // A missing native item must fail loudly, never fall back to a partial read.
+  assert.throws(
+    () => readCodexForkPrefix(file, 'app-thread', `app:app-thread:turn-1:missing:${'c'.repeat(20)}`),
+    /找不到.*边界/,
+  );
+});
+
 it('fork prefix retains native compaction and tools but excludes later user input, including in the same turn', () => {
   const rows = [
     { type: 'session_meta', payload: { id: 'source-thread' } },

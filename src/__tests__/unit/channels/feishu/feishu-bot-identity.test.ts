@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import {
   buildFeishuBotChatAppLink,
+  buildFeishuChatOpenLink,
   fetchFeishuBotIdentity,
   readFeishuAppCreator,
 } from '../../../../channels/feishu/bot-identity.js';
@@ -62,5 +63,20 @@ test('builds site-specific bot private-chat AppLinks', () => {
   assert.equal(
     buildFeishuBotChatAppLink('lark', 'ou bot/demo'),
     'https://applink.larksuite.com/client/chat/open?openId=ou+bot%2Fdemo',
+  );
+});
+
+test('builds site-specific chat open links by open chat id', () => {
+  assert.equal(
+    buildFeishuChatOpenLink('feishu', 'oc_group_demo'),
+    'https://applink.feishu.cn/client/chat/open?openChatId=oc_group_demo',
+  );
+  assert.equal(
+    buildFeishuChatOpenLink('lark', 'oc group/demo'),
+    'https://applink.larksuite.com/client/chat/open?openChatId=oc+group%2Fdemo',
+  );
+  assert.equal(
+    buildFeishuChatOpenLink(undefined, 'oc_default'),
+    'https://applink.feishu.cn/client/chat/open?openChatId=oc_default',
   );
 });

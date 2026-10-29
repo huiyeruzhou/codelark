@@ -183,3 +183,32 @@ it('reports native fork and group failures without claiming completion or changi
   assert.match(groupFailed.response, /recoverable-thread.*建群失败.*permission denied/);
   assert.equal(options.store.getChannelChat('feishu', options.msg.address.chatId)?.bridgeSessionId, options.commandBinding.bridgeSessionId);
 });
+
+it('prefers the site-aware chat link exposed by the adapter over the feishu default', async () => {
+  const options = setup();
+  options.adapter.buildChatOpenLink = (chatId) => `https://applink.larksuite.com/client/chat/open?openChatId=${chatId}`;
+  const result = await handleForkSessionCommand({ ...options, forkThread: async () => ({ threadId: 'child-thread' }) });
+  const group = options.adapter.createdGroups[0]!;
+  assert.ok(result.response.includes(`applink.larksuite.com/client/chat/open?openChatId=${group.chatId}`));
+  assert.ok(!result.response.includes('applink.feishu.cn'));
+});
+
+it('forks from an app-server protocol checkpoint signature', async () => {
+  const options = setup();
+  const appSignature = `app:source-thread:turn-1:item-42:true:${'a'.repeat(20)}`;
+  saveCardForkCheckpoint({ ...options.checkpoint, messageId: 'app-card', signature: appSignature, sealedAt: 30 });
+  options.adapter.historyIds = [options.checkpoint.messageId, 'app-card', 'after-app-card'];
+  const result = await handleForkSessionCommand({
+    ...options,
+    msg: { ...options.msg, replyToMessageId: 'app-card' },
+    forkThread: async (input) => {
+      assert.equal(input.threadId, 'source-thread');
+      assert.equal(input.signature, appSignature);
+      return { threadId: 'app-child-thread' };
+    },
+  });
+  assert.match(result.response, /已创建分支/);
+  const group = options.adapter.createdGroups[0]!;
+  assert.equal(options.store.getSession(options.store.getChannelChat('feishu', group.chatId)!.bridgeSessionId)
+    ?.runtime?.codex?.threadId, 'app-child-thread');
+});

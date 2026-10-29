@@ -84,7 +84,7 @@ export async function handleForkSessionCommand(options: {
   } catch (error) {
     return { response: `分支群 ${group.chatId} 与 Codex thread ${fork.threadId} 已创建，但绑定失败：${error instanceof Error ? error.message : String(error)}。请修复绑定后继续，原会话未改变。` };
   }
-  const link = `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(group.chatId)}`;
+  const link = adapter.buildChatOpenLink?.(group.chatId) || `https://applink.feishu.cn/client/chat/open?openChatId=${encodeURIComponent(group.chatId)}`;
   let forwarded = 0;
   try {
     const checkpoints = new Map(historyMessageIds.map(id => [id,
