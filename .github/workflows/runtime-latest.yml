@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload real runtime failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: latest-runtime-e2e
           if-no-files-found: warn
@@ -78,7 +78,7 @@ jobs:
 
       - name: Upload latest Codex protocol evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-latest-protocol
           if-no-files-found: warn
