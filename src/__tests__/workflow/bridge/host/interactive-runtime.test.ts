@@ -287,27 +287,45 @@ describe('interactive-runtime', () => {
       queuedCounts: new Map(),
       sessionLocks: new Map(),
     };
+    // Deterministic injected clock/wait: real timers make this flaky when the
+    // runner schedules the cooldown wake-up a few ms early.
+    let virtualNow = 100_000;
+    const waits: number[] = [];
+    let releaseCooldown: () => void = () => {};
     const runtime = createInteractiveRuntime(() => state, {
       getStore: () => store,
       nowIso: () => '2026-04-20T16:12:00.000Z',
       sessionTurnCooldownMs: 25,
+      nowMs: () => virtualNow,
+      waitMs: (durationMs) => new Promise<void>((resolve) => {
+        waits.push(durationMs);
+        releaseCooldown = () => {
+          virtualNow += durationMs;
+          resolve();
+        };
+      }),
     });
     const events: string[] = [];
 
     await runtime.processWithSessionLock(session.id, async () => {
       events.push('first');
     });
+    virtualNow += 5;
 
-    const startedAt = Date.now();
+    const secondStartedAt = virtualNow;
     const second = runtime.processWithSessionLock(session.id, async () => {
       events.push('second');
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    // Until the cooldown wait is released the second job stays queued.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(events, ['first']);
+    assert.deepEqual(waits, [20]);
 
+    releaseCooldown();
     await second;
     assert.deepEqual(events, ['first', 'second']);
-    assert.ok(Date.now() - startedAt >= 20);
+    assert.equal(virtualNow - secondStartedAt, 20);
   });
 });

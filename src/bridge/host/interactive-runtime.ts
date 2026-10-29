@@ -16,6 +16,9 @@ export interface CreateInteractiveRuntimeDeps {
   nowIso(): string;
   isExternalThreadActive?(session: BridgeSession): boolean;
   sessionTurnCooldownMs?: number;
+  /** Injectable clock/wait for deterministic cooldown tests; defaults to real time. */
+  nowMs?(): number;
+  waitMs?(durationMs: number): Promise<void>;
 }
 
 export interface InteractiveRuntime {
@@ -66,6 +69,8 @@ export function createInteractiveRuntime(
       sessionExecutor = createSessionExecutor(getState, {
         onQueuedCountChanged: syncSessionRuntimeState,
         sessionTurnCooldownMs,
+        ...(deps.nowMs ? { nowMs: deps.nowMs } : {}),
+        ...(deps.waitMs ? { waitMs: deps.waitMs } : {}),
       });
     }
     return sessionExecutor;

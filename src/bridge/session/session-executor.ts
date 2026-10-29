@@ -12,6 +12,7 @@ export interface SessionExecutorJobOptions {
 export interface CreateSessionExecutorDeps {
   onQueuedCountChanged(sessionId: string): void;
   nowMs?: () => number;
+  waitMs?(durationMs: number): Promise<void>;
   sessionTurnCooldownMs?: number;
 }
 
@@ -42,6 +43,12 @@ export function createSessionExecutor(
 
   function nowMs(): number {
     return deps.nowMs?.() ?? Date.now();
+  }
+
+  function waitFor(durationMs: number): Promise<void> {
+    return deps.waitMs
+      ? deps.waitMs(durationMs)
+      : new Promise((resolve) => setTimeout(resolve, durationMs));
   }
 
   function getSessionLockVersion(sessionId: string): number {
@@ -115,7 +122,7 @@ export function createSessionExecutor(
       if (lastFinishedAt && sessionTurnCooldownMs > 0) {
         const remainingMs = sessionTurnCooldownMs - (nowMs() - lastFinishedAt);
         if (remainingMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, remainingMs));
+          await waitFor(remainingMs);
         }
       }
       const startedAtMs = nowMs();
