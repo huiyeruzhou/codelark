@@ -1,9 +1,11 @@
 name: CI
 
 env:
-  CODELARK_CI_CODEX_VERSION: 0.145.0
-  CODELARK_CI_CLAUDE_VERSION: 2.1.220
-  CODELARK_CI_KIMI_VERSION: 0.34.0
+  # Pinned CLIs verified green on this repo's real-runtime e2e suite.
+  # runtime-latest.yml tracks npm @latest on a schedule to surface upstream drift.
+  CODELARK_CI_CODEX_VERSION: 0.163.0
+  CODELARK_CI_CLAUDE_VERSION: 2.1.312
+  CODELARK_CI_KIMI_VERSION: 2.4.0
 
 on:
   workflow_dispatch:

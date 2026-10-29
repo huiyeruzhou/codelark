@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex: ['0.145.0', '0.153.4', '0.160.0', '0.163.0']
+        codex: ['0.145.0', '0.153.4', '0.160.0', '0.163.0', '0.165.0']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -51,13 +51,13 @@ jobs:
       - run: npm ci
       - run: npm install --global @openai/codex@${{ matrix.codex }}
       - name: Install tmux for current CLI compatibility
-        if: matrix.codex == '0.163.0'
+        if: matrix.codex == '0.163.0' || matrix.codex == '0.165.0'
         run: sudo apt-get update && sudo apt-get install -y tmux
       - name: 检查验收代码
         run: |
           npx tsc --noEmit --strict --module Node16 --moduleResolution Node16 --target ES2023 --esModuleInterop --skipLibCheck --resolveJsonModule scripts/verify-codex-app-server-lifecycle.ts scripts/verify-codex-default-app-server.ts scripts/verify-codex-local-bootstrap.ts scripts/verify-codex-desktop-macos.ts scripts/fixtures/codex-app-server-provider-client.ts
       - name: 验证本地 bootstrap 不调用自定义模型服务
-        if: matrix.codex == '0.153.4' || matrix.codex == '0.163.0'
+        if: matrix.codex == '0.153.4' || matrix.codex == '0.163.0' || matrix.codex == '0.165.0'
         run: >-
           node --import tsx scripts/verify-codex-local-bootstrap.ts
           --cli "$(command -v codex)"
@@ -104,7 +104,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm install --global @openai/codex@0.160.0
+      - run: npm install --global @openai/codex@0.163.0
       - name: Typecheck and test connection management
         run: |
           npm run typecheck

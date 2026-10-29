@@ -1,0 +1,85 @@
+name: Runtime compatibility · latest
+
+# Tracks the newest agent CLIs (@latest on npm) so upstream behavior drift is
+# caught shortly after release instead of on the next PR. Runs on a schedule
+# (every 2 days) and can be triggered manually from the Actions tab.
+#
+# Failures here are expected to surface real upstream regressions: fix the
+# integration or pin the affected CLI in ci.yml until the drift is resolved.
+# Unlike the deterministic ci.yml pin, this workflow intentionally installs
+# whatever is current.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 5 */2 * *'
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-latest:
+    name: Real runtime e2e · @latest CLIs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - name: Install tmux for real runtime lifecycle tests
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Install the latest agent CLIs globally
+        run: npm install --global @openai/codex@latest @anthropic-ai/claude-code@latest @moonshot-ai/kimi-code@latest
+
+      - name: Smoke test real agent executables
+        run: node scripts/verify-ci-runtime-clis.js
+
+      - name: Test real agent tmux lifecycles with fake model proxies
+        timeout-minutes: 20
+        env:
+          CODELARK_CODEX_APP_SERVER: '0'
+          CODELARK_RUNTIME_E2E_PRESERVE_FAILURES: '1'
+          CODELARK_RUNTIME_E2E_LOG_DIR: ${{ runner.temp }}/codelark-latest-runtime-e2e
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          KIMI_CODE_NO_AUTO_UPDATE: '1'
+          KIMI_CODE_LEGACY_FLAG: '1'
+        run: node scripts/run-real-runtime-e2e.js
+
+      - name: Upload real runtime failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-runtime-e2e
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/codelark-latest-runtime-e2e
+            ${{ runner.temp }}/clk-real-*
+
+      - name: Verify Codex app-server protocol on the latest CLI
+        timeout-minutes: 10
+        run: >-
+          node --import tsx scripts/verify-codex-app-server-lifecycle.ts
+          --cli "$(command -v codex)"
+          --expect-version "$(codex --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+          --evidence '${{ runner.temp }}/codex-latest-protocol-evidence'
+
+      - name: Verify Codex default app-server ownership on the latest CLI
+        timeout-minutes: 10
+        run: >-
+          node --import tsx scripts/verify-codex-default-app-server.ts
+          --cli "$(command -v codex)"
+          --evidence '${{ runner.temp }}/codex-latest-protocol-evidence/default-backend'
+
+      - name: Upload latest Codex protocol evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-latest-protocol
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/codex-latest-protocol-evidence
