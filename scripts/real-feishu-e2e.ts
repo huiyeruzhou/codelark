@@ -303,6 +303,7 @@ interface MessageObservation {
 interface CommandReplyExpectation {
   command: string;
   expectedTexts: string[];
+  matchAnyText?: boolean;
   expectedForbiddenTexts?: string[];
   expectedReplyMessageTypes: string[];
   expectedReplyContentKeys: string[];
@@ -316,6 +317,9 @@ interface ReplyExpectation {
   forbiddenTexts: string[];
   messageTypes: string[];
   contentKeys: string[];
+  // When true, any bot reply in the thread may contain any one of `texts`,
+  // instead of requiring a single reply to contain all of them.
+  matchAnyText?: boolean;
 }
 
 interface ScenarioDefinition {
@@ -3505,6 +3509,11 @@ function hasBotReplyToMessageMatching(
     const content = messageContent(message);
     if (forbiddenTexts.some((forbiddenText) => content.includes(forbiddenText))) return false;
     if (requiredTexts.length === 0) return true;
+    if (expectation.matchAnyText) {
+      // Split across multiple replies (e.g. an immediate ack followed by a
+      // background tmux-view readiness notice): any key phrase in any reply.
+      return requiredTexts.some((requiredText) => containsGeneratedReplyTexts(content, sourceText, [requiredText]));
+    }
     return containsGeneratedReplyTexts(content, sourceText, requiredTexts);
   });
 }
@@ -5059,6 +5068,11 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
   const command = text.trim();
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
+    if (options.runtime === 'codex' && options.provider === 'tmux') {
+      // Same shared-thread/tmux-view phrasing as runtime-message; may split
+      // across two replies, hence the OR match flag at expectation build time.
+      return [runtimeProviderCommandTitle(options.runtime), '共享 Codex 线程已就绪', '已建立 tmux 查看入口'];
+    }
     return [
       runtimeProviderCommandTitle(options.runtime),
       options.provider,
@@ -5145,8 +5159,15 @@ function runtimeProviderSeedExpectedTexts(options: CliOptions, text: string): st
   const command = text.trim();
   if (command === `/runtime ${options.runtime}`) return ['Runtime', options.runtime];
   if (command === `/p ${options.provider}`) {
-    if (options.codexAppServer && options.provider === 'tmux') {
-      return ['共享 Codex 线程已就绪', '可直接发送消息'];
+    if (options.runtime === 'codex' && options.provider === 'tmux') {
+      if (options.codexAppServer) {
+        // The response may arrive as one card or split into an immediate ack
+        // plus a background tmux-view readiness notice.
+        return ['共享 Codex 线程已就绪', '已建立 tmux 查看入口'];
+      }
+      // tmux execution path: either the switch card or the shared-thread
+      // readiness phrasing depending on backend state.
+      return [runtimeProviderCommandTitle(options.runtime), '共享 Codex 线程已就绪', '已建立 tmux 查看入口'];
     }
     return [
       runtimeProviderCommandTitle(options.runtime),
@@ -5154,6 +5175,14 @@ function runtimeProviderSeedExpectedTexts(options: CliOptions, text: string): st
     ];
   }
   return [];
+}
+
+// Codex `/p tmux` can split its answer across an immediate ack and a separate
+// background notice, so its key phrases must match across replies with OR.
+function runtimeProviderSeedMatchesAnyReply(options: CliOptions, text: string): boolean {
+  return options.runtime === 'codex'
+    && options.provider === 'tmux'
+    && text.trim() === `/p ${options.provider}`;
 }
 
 function newSessionRuntimeExpectedTexts(options: CliOptions, command: string): string[] {
@@ -5234,7 +5263,11 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
       || options.scenario === 'agent-question-forms'
     )
   ) {
-    return { ...empty, texts: runtimeSeedTexts };
+    return {
+      ...empty,
+      texts: runtimeSeedTexts,
+      matchAnyText: runtimeProviderSeedMatchesAnyReply(options, text),
+    };
   }
   if (options.scenario === 'card-forms') {
     const command = text.trim();
@@ -5289,7 +5322,9 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
   }
   if (options.scenario === 'markdown-rendering') {
     const seedTexts = runtimeProviderSeedExpectedTexts(options, text);
-    if (seedTexts.length > 0) return { ...empty, texts: seedTexts };
+    if (seedTexts.length > 0) {
+      return { ...empty, texts: seedTexts, matchAnyText: runtimeProviderSeedMatchesAnyReply(options, text) };
+    }
   }
   if (options.scenario === 'markdown-rendering' && label.includes('final message')) {
     return { ...empty, texts: markdownRenderingExpectedTexts(options) };
@@ -5317,7 +5352,9 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
   }
   if (options.scenario === 'session-management') {
     const semanticTexts = sessionManagementExpectedTexts(options, text);
-    if (semanticTexts.length > 0) return { ...empty, texts: semanticTexts };
+    if (semanticTexts.length > 0) {
+      return { ...empty, texts: semanticTexts, matchAnyText: runtimeProviderSeedMatchesAnyReply(options, text) };
+    }
   }
   if (options.scenario === 'session-management' && text.trim() === '/his 5') {
     return { ...empty, texts: [options.message] };
@@ -5505,6 +5542,7 @@ function commandReplyExpectations(options: CliOptions): CommandReplyExpectation[
       return {
         command,
         expectedTexts: expectation.texts,
+        ...(expectation.matchAnyText ? { matchAnyText: true } : {}),
         ...(expectation.forbiddenTexts.length > 0 ? { expectedForbiddenTexts: expectation.forbiddenTexts } : {}),
         expectedReplyMessageTypes: expectation.messageTypes,
         expectedReplyContentKeys: expectation.contentKeys,

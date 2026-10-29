@@ -2485,8 +2485,8 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
     assert.ok(parsed.commands.includes('请只回复下面这个 marker，不要添加解释：\nCODELARK_UNIT_SESSION_MANAGEMENT_CODEX_TMUX'));
     assert.equal(parsed.commandReplyExpectations.some((item) => item.command.includes('CODELARK_UNIT_SESSION_MANAGEMENT_CODEX_TMUX')), false);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, `/clear clear-unit-session-management-codex-tmux ${DEFAULT_WORKSPACE_ROOT}`).expectedTexts, ['已清空当前聊天上下文', 'clear-unit-session-management-codex-tmux', DEFAULT_WORKSPACE_ROOT, 'Provider', 'tmux']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, sessionManagementShellCommand('unit-session-management-codex-tmux')).expectedTexts, ['/shell 执行完成', 'CODELARK_SHELL_UNIT_SESSION_MANAGEMENT_CODEX_TMUX', 'Codex sandbox', 'read-only', '退出码', '0']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/t n 50').expectedTexts, ['本地会话']);
@@ -2889,9 +2889,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     ]);
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     for (const command of [
       '/runtime codex',
       '/p tmux',
@@ -3223,9 +3223,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
     assert.deepEqual(parsed.commands.slice(7), ['/his raw 2', '/his msg 2']);
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 1);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     for (const command of [
       '/runtime codex',
       '/p tmux',
@@ -3419,9 +3419,9 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
 
     assert.equal(parsed.commandReplyExpectations.length, parsed.commands.length - 2);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 0).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 0).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex', 1).expectedTexts, ['Runtime', 'codex']);
-    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/p tmux', 1).expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     for (const command of [
       '/runtime codex',
       '/p tmux',
@@ -3920,7 +3920,7 @@ describe('unit::real-feishu-e2e-harness::session-management-command-plan', () =>
 
     assert.deepEqual(expectationAt(parsed.commandReplyExpectations, '/runtime codex').expectedTexts, ['Runtime', 'codex']);
     const providerExpectation = expectationAt(parsed.commandReplyExpectations, '/p tmux');
-    assert.deepEqual(providerExpectation.expectedTexts, ['Codex Provider', 'tmux']);
+    assert.deepEqual(providerExpectation.expectedTexts, ['Codex Provider', '共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
     assert.equal(providerExpectation.reason, 'markdown rendering runtime/provider seed must reach the final selected state before sending the markdown prompt');
 
     const expectation = expectationAt(parsed.commandReplyExpectations, parsed.commands[2]);
@@ -4460,7 +4460,8 @@ describe('app-server real Feishu execution selection', () => {
     assert.equal(report.coverage.executionBackend, 'app-server');
     assert.match(report.coverage.testName, /::app-server$/);
     assert.deepEqual(report.commandReplyExpectations.find((item: { command: string }) => item.command === '/p tmux').expectedTexts,
-      ['共享 Codex 线程已就绪', '可直接发送消息']);
+      ['共享 Codex 线程已就绪', '已建立 tmux 查看入口']);
+    assert.equal(report.commandReplyExpectations.find((item: { command: string }) => item.command === '/p tmux').matchAnyText, true);
   });
   it('refuses an app-server test against a live bridge or a different runtime', () => {
     assert.match(runHarnessFailure(['--dry-run', '--codex-app-server', '--runtime', 'codex']), /requires an isolated Codex bridge/);
