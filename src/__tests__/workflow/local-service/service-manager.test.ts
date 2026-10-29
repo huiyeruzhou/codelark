@@ -428,6 +428,23 @@ describe('service-manager startup config and daemon env', () => {
     );
   });
 
+  it('launches long-lived services outside the replaceable package directory', () => {
+    const managerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'local-service', 'manager.ts'), 'utf-8');
+    const bridgeStart = managerSource.slice(
+      managerSource.indexOf('export async function startBridge'),
+      managerSource.indexOf('export async function stopBridge'),
+    );
+    const uiStart = managerSource.slice(
+      managerSource.indexOf('export async function ensureUiServerRunning'),
+      managerSource.indexOf('export async function stopUiServer'),
+    );
+
+    assert.match(bridgeStart, /cwd: os\.homedir\(\)/);
+    assert.match(uiStart, /cwd: os\.homedir\(\)/);
+    assert.doesNotMatch(bridgeStart, /cwd: packageRoot/);
+    assert.doesNotMatch(uiStart, /cwd: packageRoot/);
+  });
+
   it('does not maintain an isolated lark-cli runtime anymore', () => {
     const managerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'local-service', 'manager.ts'), 'utf-8');
 

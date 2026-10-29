@@ -37,7 +37,7 @@ if (args.includes('--help')) {
 if (mode === 'startup-failure') { console.error('mock invalid configuration'); process.exit(23); }
 if (mode === 'delayed-start') await new Promise(r => setTimeout(r, 500));
 const endpoint = args[args.indexOf('--listen') + 1];
-record({ started: endpoint, args, bridgeKeySelected: process.env.CODEX_API_KEY === 'fixture-bridge-key' && process.env.OPENAI_API_KEY === 'fixture-bridge-key' });
+record({ started: endpoint, args, cwd: process.cwd(), bridgeKeySelected: process.env.CODEX_API_KEY === 'fixture-bridge-key' && process.env.OPENAI_API_KEY === 'fixture-bridge-key' });
 const threads = fs.existsSync(${JSON.stringify(stateFile)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)}, 'utf8')) : {};
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
@@ -49,7 +49,7 @@ wss.on('connection', socket => socket.on('message', data => {
   if (mode === 'rpc-error') { socket.send(JSON.stringify({ id: m.id, error: { code: -32000, message: 'fixture permission denied' } })); return; }
   if (m.method === 'initialize') reply({ codexHome: mode === 'wrong-home' ? ${JSON.stringify(path.join(root, 'other-home'))} : process.env.CODEX_HOME });
   else if (m.method === 'thread/loaded/list') reply({ data: Object.keys(threads) });
-  else if (m.method === 'config/read') reply({ config: { cli_auth_credentials_store: mode === 'persistent-auth' ? 'file' : 'ephemeral' } });
+  else if (m.method === 'config/read') reply({ config: { cli_auth_credentials_store: mode === 'persistent-auth' ? 'file' : 'ephemeral' }, cwd: process.cwd() });
   else if (m.method === 'account/login/start' && mode === 'login-error') socket.send(JSON.stringify({ id: m.id, error: { code: -32000, message: 'mock login rejected' } }));
   else if (m.method === 'thread/start') {
     const thread = { id: 'thread-' + Object.keys(threads).length, turns: [] };
@@ -181,6 +181,31 @@ test('without an explicit key startup preserves Codex provider and authenticatio
   const started = f.records().find((m) => m.started);
   assert(!started.args.some((arg: string) => /model_provider|auth|env_key/.test(arg)));
   assert.equal(f.records().some((m) => m.method === 'account/login/start'), false);
+});
+
+test('owned backend keeps a stable cwd after the launching release directory is removed', { skip: process.platform === 'win32' }, async (t) => {
+  const f = fixture(t);
+  const release = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-replaced-release-'));
+  const stableHome = path.join(f.root, 'home');
+  fs.mkdirSync(stableHome);
+  f.env.HOME = stableHome;
+  f.env.USERPROFILE = stableHome;
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(release);
+    await f.prepare();
+  } finally {
+    process.chdir(originalCwd);
+  }
+  fs.rmSync(release, { recursive: true, force: true });
+
+  const started = f.records().find((record) => record.started);
+  assert.equal(started.cwd, fs.realpathSync(stableHome));
+  const client = await CodexAppServerClient.connect(f.endpoint);
+  try {
+    const result = await client.request<{ cwd: string }>('config/read');
+    assert.equal(result.cwd, fs.realpathSync(stableHome));
+  } finally { client.close(); }
 });
 
 test('a different CODEX_HOME is rejected while prepare is in flight and after it is ready', async (t) => {

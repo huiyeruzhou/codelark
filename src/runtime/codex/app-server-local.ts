@@ -23,6 +23,17 @@ function canonical(value: string): string {
   }
 }
 
+function stableServiceCwd(env: NodeJS.ProcessEnv): string {
+  const candidates = [env.HOME, env.USERPROFILE, os.homedir()];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      if (fs.statSync(candidate).isDirectory()) return fs.realpathSync(candidate);
+    } catch { /* Try the next stable user directory. */ }
+  }
+  throw new Error('Codex app-server 缺少可用的稳定用户目录，未启动长驻进程。');
+}
+
 /** Stable across Bridge restarts; never publish this private address to Desktop. */
 export function codexLocalAppServerEndpoint(home = CODELARK_HOME, platform = process.platform): string {
   const identity = canonical(home);
@@ -180,6 +191,7 @@ export function prepareCodexLocalAppServer(options: {
 }): Promise<string | undefined> {
   const endpoint = codexLocalAppServerEndpoint(options.codelarkHome);
   const codexHome = canonical(options.env.CODEX_HOME || path.join(options.env.HOME || options.env.USERPROFILE || os.homedir(), '.codex'));
+  const serviceCwd = stableServiceCwd(options.env);
   const pending = preparing.get(endpoint);
   if (pending) return pending.codexHome === codexHome ? pending.promise
     : Promise.reject(new Error('同一私有地址正在准备另一份 CODEX_HOME，未接管。'));
@@ -223,7 +235,7 @@ export function prepareCodexLocalAppServer(options: {
     let help: string;
     try {
       const result = await execFileAsync(invocation.command, [...invocation.args, 'app-server', '--help'], {
-        env: options.env, timeout: 15_000, maxBuffer: 1024 * 1024, windowsHide: true,
+        cwd: serviceCwd, env: options.env, timeout: 15_000, maxBuffer: 1024 * 1024, windowsHide: true,
       });
       help = result.stdout;
     } catch (error) {
@@ -251,7 +263,7 @@ export function prepareCodexLocalAppServer(options: {
     if (apiKey) args.push('-c', 'preferred_auth_method="apikey"', '-c', 'cli_auth_credentials_store="ephemeral"');
     args.push('app-server', '--listen', endpoint);
     const child = spawn(invocation.command, args, {
-      env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+      cwd: serviceCwd, env, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
     });
     status.owner = 'bridge'; status.state = 'starting';
     delete status.pid; delete status.startedAt;

@@ -863,7 +863,10 @@ export async function startBridge(options: ServiceConfigOverrideOptions = {}): P
     const stderrFd = fs.openSync(path.join(logsDir, 'bridge-launcher.err.log'), 'a');
 
     const child = spawn(process.execPath, [daemonEntry], {
-      cwd: packageRoot,
+      // packageRoot can be atomically replaced by npm while this daemon stays
+      // alive. A long-lived service must not retain that release directory as
+      // its process cwd.
+      cwd: os.homedir(),
       detached: true,
       env: buildDaemonEnv(options),
       stdio: ['ignore', stdoutFd, stderrFd],
@@ -1071,7 +1074,8 @@ export async function ensureUiServerRunning(options: ServiceConfigOverrideOption
   const stderrFd = fs.openSync(path.join(logsDir, 'ui-server.err.log'), 'a');
 
   const child = spawn(process.execPath, [serverEntry], {
-    cwd: packageRoot,
+    // Keep the UI alive across atomic npm package replacement as well.
+    cwd: os.homedir(),
     detached: true,
     env: buildUiServerEnv(options),
     stdio: ['ignore', stdoutFd, stderrFd],
