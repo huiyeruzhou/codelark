@@ -71,6 +71,7 @@ import {
 import {
   ensureKimiTmuxInputSession,
   kimiTmuxSessionName,
+  resolveKimiDeferredSession,
   retryKimiSubmitIfNoActivity,
   sendKimiTmuxExplicitSteer,
   syncKimiTmuxTurnStateFromSession,
@@ -1870,6 +1871,24 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
             });
             if (!accepted) {
               throw new Error('Kimi Code 输入未能启动 turn；已根据 wire 状态重发完整输入或提交键，仍未提交。');
+            }
+            // Kimi 2.4.0+ defers session creation until the first accepted
+            // turn; persist the now-known id so later resumes use it.
+            if (!kimiSubmission.sessionId) {
+              const resolved = await resolveKimiDeferredSession({
+                sessionName: target,
+                cwd: kimiSubmission.cwd || getSessionWorkingDirectory(effectiveSession) || '',
+                previousSessionFilePath: kimiSubmission.sessionFilePath,
+              });
+              if (resolved?.sessionId) {
+                store.updateSession(effectiveSession.id, {
+                  ...setSessionKimiIdentityUpdate(resolved.sessionId, resolved.cwd),
+                  runtime: {
+                    ...setSessionKimiIdentityUpdate(resolved.sessionId, resolved.cwd).runtime,
+                    general: { tmuxSessionName: target },
+                  },
+                });
+              }
             }
           }
         } else {

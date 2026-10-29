@@ -275,8 +275,11 @@ export function formatCommandPath(cwd: string | undefined | null): string {
   return cwd?.trim() || '~';
 }
 
-function formatThreadActivityTime(value: string | null | undefined): string {
-  const trimmed = value?.trim();
+function formatThreadActivityTime(value: string | number | null | undefined): string {
+  const normalized = typeof value === 'number' && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : value;
+  const trimmed = typeof normalized === 'string' ? normalized.trim() : '';
   if (!trimmed) return '-';
 
   return formatLocalMonthDayTime(trimmed) || trimmed;
@@ -434,8 +437,9 @@ export function buildBoundThreadCommandTableRows(
   });
 }
 
-function threadActivityTimeMs(value: string | null | undefined): number {
-  const time = Date.parse(value || '');
+function threadActivityTimeMs(value: string | number | null | undefined): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const time = Date.parse(typeof value === 'string' ? value : '');
   return Number.isNaN(time) ? 0 : time;
 }
 

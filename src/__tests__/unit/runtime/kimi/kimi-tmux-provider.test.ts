@@ -289,6 +289,31 @@ describe('Kimi tmux provider helpers', () => {
     assert.equal(commandSessions?.[0]?.userInputTurns, 1);
   });
 
+  it('normalizes epoch-millis state timestamps from Kimi 2.4.0+ to ISO strings', () => {
+    const cwd = path.join(os.tmpdir(), 'kimi-epoch-timestamps');
+    const sessionId = 'session_22222222-2222-4222-8222-222222222222';
+    const sessionDir = path.join(kimiHome, 'sessions', computeKimiWorkspaceDirName(cwd), sessionId);
+    const agentDir = path.join(sessionDir, 'agents', 'main');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionDir, 'state.json'), JSON.stringify({
+      createdAt: 1_782_470_400_000,
+      updatedAt: 1_782_470_460_000,
+      title: 'Kimi epoch session',
+    }), 'utf-8');
+    fs.writeFileSync(path.join(agentDir, 'wire.jsonl'), '{}', 'utf-8');
+
+    const summary = listKimiSessionFileSummaries().find((candidate) => candidate.sessionId === sessionId);
+    assert.ok(summary);
+    assert.equal(summary.firstSeenAt, new Date(1_782_470_400_000).toISOString());
+    assert.equal(summary.updatedAt, new Date(1_782_470_460_000).toISOString());
+
+    const commandSessions = listCommandLocalRuntimeSessions(10, 'kimi');
+    const commandSession = commandSessions?.find((item) => item.threadId === sessionId);
+    assert.ok(commandSession);
+    // The thread card presentation must not crash on a non-string timestamp.
+    assert.match(commandSession.lastEventAt, /^\d{4}-\d{2}-\d{2}T/);
+  });
+
   it('keeps Kimi session id fallback discovery scoped to the requested cwd', () => {
     const sessionId = 'session_55555555-5555-4555-8555-555555555555';
     const cwdA = path.join(os.tmpdir(), 'kimi-fallback-a');

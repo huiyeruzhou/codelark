@@ -607,6 +607,37 @@ function resolveKimiSessionFileBySessionId(
   return true;
 }
 
+/**
+ * Kimi 2.4.0+ creates the session only after the first message is submitted.
+ * Call this once the turn has been accepted: read the session id the TUI now
+ * prints and locate its JSONL, so the bridge can persist the runtime identity.
+ */
+export async function resolveKimiDeferredSession(params: {
+  sessionName: string;
+  cwd: string;
+  previousSessionId?: string;
+  previousSessionFilePath?: string;
+  timeoutMs?: number;
+}): Promise<{ sessionId?: string; sessionFilePath?: string; cwd?: string } | null> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_KIMI_SESSION_ID_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let sessionId = params.previousSessionId;
+  while (Date.now() <= deadline) {
+    if (!sessionId) {
+      const capture = await tmuxCore.capturePane(`${params.sessionName}:0.0`, 160);
+      sessionId = parseKimiActiveSessionIdFromScreen(capture.screen) || undefined;
+    }
+    if (sessionId) {
+      const summary = findKimiSessionFileById(sessionId, params.cwd);
+      if (summary?.filePath) {
+        return { sessionId: summary.sessionId, sessionFilePath: summary.filePath, cwd: summary.cwd || params.cwd };
+      }
+    }
+    await sleep(DEFAULT_KIMI_POLL_INTERVAL_MS);
+  }
+  return null;
+}
+
 type KimiSubmissionState = 'missing' | 'accepted' | 'started';
 
 function inspectKimiTurnActive(sessionFilePath: string, endOffset?: number): boolean {

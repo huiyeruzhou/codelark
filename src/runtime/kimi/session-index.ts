@@ -30,11 +30,16 @@ interface KimiSessionIndexEntry {
 }
 
 interface KimiSessionState {
-  createdAt?: string;
-  updatedAt?: string;
+  createdAt?: string | number;
+  updatedAt?: string | number;
   title?: string;
   lastPrompt?: string;
 }
+
+type NormalizedKimiSessionState = Omit<KimiSessionState, 'createdAt' | 'updatedAt'> & {
+  createdAt?: string;
+  updatedAt?: string;
+};
 
 interface ArchivedKimiSessionEntry {
   sessionId: string;
@@ -179,12 +184,25 @@ function readKimiSessionIndexEntries(): KimiSessionIndexEntry[] {
   }
 }
 
-function readKimiSessionState(sessionDir: string): KimiSessionState {
+function readKimiSessionState(sessionDir: string): NormalizedKimiSessionState {
   try {
-    return JSON.parse(fs.readFileSync(path.join(sessionDir, 'state.json'), 'utf-8')) as KimiSessionState;
+    const parsed = JSON.parse(fs.readFileSync(path.join(sessionDir, 'state.json'), 'utf-8')) as KimiSessionState;
+    return {
+      ...parsed,
+      // Kimi 2.4.0+ writes epoch millis; normalize to ISO strings at the boundary.
+      createdAt: normalizeKimiStateTimestamp(parsed.createdAt),
+      updatedAt: normalizeKimiStateTimestamp(parsed.updatedAt),
+    };
   } catch {
     return {};
   }
+}
+
+function normalizeKimiStateTimestamp(value: string | number | undefined): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function readFileRange(filePath: string, startOffset: number, endOffset: number): string {
