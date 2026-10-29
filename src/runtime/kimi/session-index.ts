@@ -365,6 +365,10 @@ interface KimiWireLine {
   turnsUsed?: number;
   tokensUsed?: number;
   usage?: KimiLoopEvent['usage'];
+  /** Kimi 2.4.0+ turn.ended payload: reason + provider error detail. */
+  turnId?: string | number;
+  reason?: string;
+  error?: { code?: string; message?: string; name?: string; details?: unknown };
 }
 
 function toIsoTimestamp(time?: number): string {
@@ -516,11 +520,25 @@ export function parseKimiWireRecords(
           case 'step.end': {
             // Kimi 每个 agentic loop step 都会写 step.end；只有终态 step 才代表 turn 结束。
             // finishReason "tool_use" 表示 step 为了调用工具而结束，turn 仍在继续。
+            // Kimi 2.4.0+ 在失败 step 后补写 turn.ended(reason="failed", error.message)，
+            // 错误详情由 turn.ended 提供；这里跳过失败/中断 step，以免提前终结 turn 或丢失详情。
             const finishReason = typeof ev.finishReason === 'string' ? ev.finishReason : '';
             if (finishReason === 'tool_use') break;
+            if (finishReason === 'error' || finishReason === 'failed'
+              || finishReason === 'aborted' || finishReason === 'interrupted') break;
+            if (finishReason === 'cancelled') {
+              records.push({
+                signature: ensureUnique(`step.end:${ev.stepUuid || ev.uuid}`),
+                type: 'task_aborted',
+                content: '',
+                timestamp: toIsoTimestamp(parsed.time),
+                turnId: ev.turnId,
+              });
+              break;
+            }
             records.push({
               signature: ensureUnique(`step.end:${ev.stepUuid || ev.uuid}`),
-              type: finishReason && finishReason !== 'end_turn' ? 'task_aborted' : 'task_complete',
+              type: 'task_complete',
               content: '',
               timestamp: toIsoTimestamp(parsed.time),
               turnId: ev.turnId,
@@ -538,6 +556,46 @@ export function parseKimiWireRecords(
           type: 'task_aborted',
           content: '',
           timestamp: toIsoTimestamp(parsed.time),
+        });
+        break;
+      }
+
+      case 'turn.ended': {
+        // Kimi 2.4.0+ 的 turn 终态事件。reason="failed" 时携带完整 provider 错误详情，
+        // 供上游透传（此前版本只能从 runtime log 的 "ERROR turn failed" 解析）。
+        // 正常完成已由 step.end(finishReason=completed/end_turn) 产 task_complete，这里不重复。
+        const endedTurnId = typeof parsed.turnId === 'string' || typeof parsed.turnId === 'number'
+          ? String(parsed.turnId)
+          : undefined;
+        const errorMessage = typeof parsed.error?.message === 'string'
+          ? parsed.error.message.trim()
+          : '';
+        if (parsed.reason === 'failed' && errorMessage) {
+          records.push({
+            signature: ensureUnique('turn.ended:failed'),
+            type: 'task_aborted',
+            content: errorMessage,
+            errorText: errorMessage,
+            isError: true,
+            timestamp: toIsoTimestamp(parsed.time),
+            turnId: endedTurnId,
+          });
+          break;
+        }
+        if (parsed.reason === 'completed' || parsed.reason === 'success'
+          || parsed.reason === 'end_turn' || parsed.reason === 'cancelled'
+          || parsed.reason === 'aborted' || parsed.reason === 'interrupted') {
+          // Normal completion is already emitted by step.end; cancellation is
+          // already emitted by step.end(finishReason=cancelled) / turn.cancel.
+          // Skipping avoids double-finalizing the same mirror turn.
+          break;
+        }
+        records.push({
+          signature: ensureUnique(`turn.ended:${parsed.reason || 'other'}`),
+          type: 'task_aborted',
+          content: '',
+          timestamp: toIsoTimestamp(parsed.time),
+          turnId: endedTurnId,
         });
         break;
       }

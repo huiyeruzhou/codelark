@@ -23,6 +23,7 @@ import {
 } from '../codex/shell-snapshot.js';
 import {
   findKimiSessionFileById,
+  findLatestKimiSessionFile,
   readKimiSessionMirrorRecordDeltaByFilePath,
 } from './session-index.js';
 import {
@@ -143,13 +144,31 @@ function parseKimiActiveSessionIdFromScreen(screenText: string): string | null {
   return normalized.match(/\bSession:\s*(session_[A-Za-z0-9-]+)/i)?.[1] || null;
 }
 
+/**
+ * Kimi 2.4.0+ defers session creation until the first message is submitted:
+ * the startup screen shows an empty `Session:` field plus the banner
+ * "No session yet — one will be created on your first message.".
+ * Older versions printed the session id immediately, so this detection
+ * keeps the legacy fast path while letting the new flow proceed without one.
+ */
+export function isKimiPendingSessionScreen(screenText: string): boolean {
+  const normalized = normalizeKimiScreenText(screenText);
+  return /no\s+session\s+yet/i.test(normalized)
+    && /will\s+be\s+created\s+on\s+your\s+first\s+message/i.test(normalized);
+}
+
 export function isKimiInputReadyScreen(
   screenText: string,
   expectedSessionId?: string,
 ): boolean {
   const normalized = normalizeKimiScreenText(screenText);
   const activeSessionId = parseKimiActiveSessionIdFromScreen(normalized);
-  if (!activeSessionId || (expectedSessionId && activeSessionId !== expectedSessionId)) return false;
+  if (!activeSessionId) {
+    // Kimi 2.4.0+ shows no session header until the first message; the editor
+    // is still fully ready for input, so accept that pending state.
+    return isKimiPendingSessionScreen(normalized) && isKimiEditorReadyScreen(normalized);
+  }
+  if (expectedSessionId && activeSessionId !== expectedSessionId) return false;
   return isKimiEditorReadyScreen(normalized);
 }
 
@@ -326,7 +345,11 @@ function enqueueKimiRecordAsSse(
       context.terminalSeen = true;
       context.hasError = true;
       setRuntimeTmuxTurnState('kimi', context.sessionName, 'idle', 'Kimi wire reported task_aborted');
-      controller.enqueue(sseEvent('error', record.content || 'Kimi task aborted.'));
+      // Kimi 2.4.0+ carries the provider error in turn.ended(error.message);
+      // older versions surface it through the runtime log ("ERROR turn failed").
+      controller.enqueue(sseEvent('error', record.content
+        ? `Kimi Code request failed: ${record.content}`
+        : 'Kimi task aborted.'));
       break;
 
     case 'goal_status':
@@ -362,6 +385,7 @@ async function pollKimiSessionFile(
   );
 
   let lastActivityAtMs = Date.now();
+  let fatalDetailEmitted = false;
 
   while (true) {
     assertRuntimeTmuxInputOwner('kimi', context.sessionName);
@@ -391,13 +415,19 @@ async function pollKimiSessionFile(
       context.nextSpecialCallIds = delta.nextSpecialCallIds;
       for (const record of delta.records) {
         enqueueKimiRecordAsSse(controller, context, record);
+        // Kimi 2.4.0+ reports provider errors inline via turn.ended(error.message);
+        // when that detail is already emitted, the legacy runtime-log fallback
+        // must not double-report the same failure.
+        if (record.type === 'task_aborted' && record.content) fatalDetailEmitted = true;
       }
       if (delta.nextOffset > previousOffset) lastActivityAtMs = Date.now();
     }
 
     const logDelta = readKimiRuntimeErrorDelta(context);
     if (logDelta.advanced) lastActivityAtMs = Date.now();
-    if (logDelta.error) throw new Error(`Kimi Code request failed: ${logDelta.error}`);
+    if (logDelta.error && !fatalDetailEmitted) {
+      throw new Error(`Kimi Code request failed: ${logDelta.error}`);
+    }
 
     if (context.terminalSeen) break;
 
@@ -499,7 +529,7 @@ async function ensureKimiTmuxInputKeysWithRelaunch(
   return false;
 }
 
-async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string> {
+async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise<string | null> {
   const expectedSessionId = context.sessionId;
   transitionRuntimeTmuxInputState(
     'kimi',
@@ -519,9 +549,11 @@ async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise
   );
   let deadline = Date.now() + timeoutMs;
   let trustConfirmationSent = false;
+  let lastScreen = '';
   while (Date.now() <= deadline) {
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     context.lastScreen = capture.screen;
+    lastScreen = capture.screen;
     assertKimiPaneAlive(capture.screen);
     if (isKimiWorkspaceTrustPrompt(capture.screen)) {
       if (!trustConfirmationSent) {
@@ -541,7 +573,17 @@ async function waitForKimiSessionIdFromTmux(context: KimiTuiRunContext): Promise
       context.sessionId = parsed;
       return parsed;
     }
+    if (isKimiPendingSessionScreen(capture.screen) && !expectedSessionId) {
+      // Kimi 2.4.0+ creates the session on the first submitted message; there
+      // is nothing to resolve yet, so report "pending" instead of timing out.
+      console.log('[kimi-tmux] Kimi session is pending until the first message:', context.targetPane);
+      return null;
+    }
     await sleep(pollIntervalMs);
+  }
+  if (isKimiPendingSessionScreen(lastScreen) && !expectedSessionId) {
+    console.log('[kimi-tmux] Kimi session stayed pending through the timeout window:', context.targetPane);
+    return null;
   }
   throw new Error('Timed out waiting for Kimi to print its session id.');
 }
@@ -769,7 +811,6 @@ async function waitForKimiSessionFileBySessionId(
   context: KimiTuiRunContext,
   options: { startAtEnd: boolean },
 ): Promise<void> {
-  if (!context.sessionId) throw new Error('Kimi session id is required before locating wire.jsonl.');
   const timeoutMs = parsePositiveIntEnv(
     'CODELARK_KIMI_TMUX_SESSION_FILE_TIMEOUT_MS',
     DEFAULT_KIMI_SESSION_FILE_TIMEOUT_MS,
@@ -783,12 +824,29 @@ async function waitForKimiSessionFileBySessionId(
   const startedAtMs = Date.now();
   while (Date.now() - startedAtMs <= timeoutMs) {
     if (resolveKimiSessionFileBySessionId(context, options.startAtEnd)) return;
+    // Kimi 2.4.0+ creates the session only after the first message lands;
+    // fall back to the newest session file for this workspace while waiting.
+    if (!context.sessionId) {
+      const latest = findLatestKimiSessionFile(context.cwd);
+      if (latest?.filePath) {
+        context.sessionFilePath = latest.filePath;
+        context.sessionId = latest.sessionId;
+        context.cwd = latest.cwd || context.cwd;
+        context.nextOffset = options.startAtEnd ? fs.statSync(latest.filePath).size : 0;
+        console.log('[kimi-tmux] Session file resolved from latest workspace session:', {
+          session_id: context.sessionId,
+          file_path: context.sessionFilePath,
+          start_offset: context.nextOffset,
+        });
+        return;
+      }
+    }
     const capture = await tmuxCore.capturePane(context.targetPane, 160);
     context.lastScreen = capture.screen;
     assertKimiPaneAlive(capture.screen);
     await sleep(pollIntervalMs);
   }
-  throw new Error(`Timed out waiting for Kimi session file for ${context.sessionId}.`);
+  throw new Error(`Timed out waiting for Kimi session file for ${context.sessionId || '<pending>'}.`);
 }
 
 async function waitForKimiInputReady(
@@ -895,15 +953,18 @@ async function waitForKimiInputReadyWithRelaunch(
 
 export function isKimiWorkspaceTrustPrompt(screenText: string): boolean {
   const normalized = normalizeKimiScreenText(screenText);
-  return /Trust this folder/i.test(normalized)
-    && /Enable project MCP servers/i.test(normalized)
-    && /Don't trust/i.test(normalized);
+  if (!/Trust this folder/i.test(normalized)) return false;
+  // Kimi 2.4.0 simplified the trust dialog ("Trust and continue / Exit");
+  // older versions listed MCP opt-in ("Enable project MCP servers / Don't trust").
+  // Accept any trust screen whose default action can be confirmed with Enter.
+  return /Trust and continue/i.test(normalized)
+    || /Enable project MCP servers/i.test(normalized);
 }
 
 export interface KimiTmuxInputSession {
   sessionName: string;
   targetPane: string;
-  sessionId: string;
+  sessionId?: string;
   cwd?: string;
   sessionFilePath?: string;
   nextOffset: number;
@@ -963,8 +1024,10 @@ export async function ensureKimiTmuxInputSession(
     }
 
     if (!context.sessionFilePath) resolveKimiSessionFileBySessionId(context, true);
-    if (!context.sessionId) {
-      throw new Error('Kimi tmux input lifecycle did not resolve a session id.');
+    if (!context.sessionId && !context.sessionFilePath) {
+      // Kimi 2.4.0+ defers session creation until the first message; the
+      // submit-and-resolve path in streamChat recovers the id and wire file.
+      console.log('[kimi-tmux] Kimi session id pending until first message submission:', context.targetPane);
     }
     launched = (await waitForKimiInputReadyWithRelaunch(context, params, {
       requireSessionHeader: !hasPersistedResumeIdentity,

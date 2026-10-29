@@ -835,7 +835,7 @@ async function ensureRuntimeTmuxSessionForProvider(
   error?: string;
   kimiSubmission?: {
     sessionFilePath?: string;
-    sessionId: string;
+    sessionId?: string;
     cwd?: string;
     startOffset: number;
   };

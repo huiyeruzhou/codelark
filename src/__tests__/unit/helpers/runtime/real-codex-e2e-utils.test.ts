@@ -16,7 +16,7 @@ describe('real runtime command helpers', () => {
     );
   });
 
-  it('preserves only Windows directories still held by a runtime process', () => {
+  it('preserves directories still held by a late writer on any platform', () => {
     assert.equal(
       shouldPreserveRuntimeTestDirectoryAfterCleanupError({ code: 'EPERM' }, 'win32'),
       true,
@@ -31,6 +31,14 @@ describe('real runtime command helpers', () => {
     );
     assert.equal(
       shouldPreserveRuntimeTestDirectoryAfterCleanupError({ code: 'EPERM' }, 'linux'),
+      true,
+    );
+    assert.equal(
+      shouldPreserveRuntimeTestDirectoryAfterCleanupError({ code: 'ENOTEMPTY' }, 'darwin'),
+      true,
+    );
+    assert.equal(
+      shouldPreserveRuntimeTestDirectoryAfterCleanupError({ code: 'EACCES' }, 'linux'),
       false,
     );
   });

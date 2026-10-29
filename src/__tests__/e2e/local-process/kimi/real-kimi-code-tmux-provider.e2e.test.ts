@@ -246,7 +246,9 @@ describe('real Kimi Code tmux provider e2e', () => {
         true,
       );
       const runtimeLog = fs.readFileSync(kimiSessionLogFilePath(sessionFile.filePath), 'utf8');
-      assert.match(runtimeLog, /ERROR\s+turn failed/);
+      // Kimi <2.4.0 logged "ERROR turn failed"; 2.4.0+ logs the same failure as
+      // "WARN llm request failed" with errorMessage="..." on the same line.
+      assert.match(runtimeLog, /(ERROR\s+turn failed|WARN\s+llm request failed)/);
       assert.match(runtimeLog, new RegExp(fatalMarker));
       completed = true;
     } finally {

@@ -47,9 +47,15 @@ export function shouldPreserveRuntimeTestDirectoryAfterCleanupError(
   error: unknown,
   platform = process.platform,
 ): boolean {
-  if (platform !== 'win32' || typeof error !== 'object' || error === null) return false;
+  if (typeof error !== 'object' || error === null) return false;
   const code = (error as NodeJS.ErrnoException).code;
-  return code === 'EPERM' || code === 'EBUSY' || code === 'ENOTEMPTY';
+  if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'ENOTEMPTY') return false;
+  // Windows keeps directories held by the tmux/psmux process group. macOS and
+  // Linux can also race with a CLI's background writer (e.g. Claude flushing
+  // its session JSONL) right after the tmux session is killed; in both cases
+  // the fixture is disposable, so preserve it with a warning instead of failing
+  // the whole shard on cleanup noise.
+  return true;
 }
 
 export function removeRuntimeTestDirectory(directory: string): void {
@@ -57,14 +63,14 @@ export function removeRuntimeTestDirectory(directory: string): void {
     fs.rmSync(directory, {
       recursive: true,
       force: true,
-      maxRetries: 20,
-      retryDelay: 100,
+      maxRetries: 50,
+      retryDelay: 200,
     });
   } catch (error) {
     if (!shouldPreserveRuntimeTestDirectoryAfterCleanupError(error)) throw error;
     const code = (error as NodeJS.ErrnoException).code || 'unknown';
     process.stderr.write(
-      `[real-runtime-e2e] preserved Windows fixture still held by tmux (${code}): ${directory}\n`,
+      `[real-runtime-e2e] preserved runtime fixture still held by a late writer (${code}): ${directory}\n`,
     );
   }
 }
