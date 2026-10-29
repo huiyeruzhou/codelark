@@ -22,6 +22,8 @@ export interface BridgeMessage {
 
 export interface InboundMessage {
   messageId: string;
+  /** Platform message explicitly replied to by the sender. */
+  replyToMessageId?: string;
   address: ChannelAddress;
   text: string;
   timestamp: number;

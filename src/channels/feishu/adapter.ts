@@ -21,6 +21,7 @@ import { canControlCustomerService, isCustomerServiceChat, parseTopicConversatio
 import { isBridgeCommandText } from '../../bridge/command/aliases.js';
 import { editCustomerServiceMode, editCustomerServiceWhitelist, isCustomerServiceManagementCommand } from './customer-service-admin.js';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { HttpsProxyAgent } from 'https-proxy-agent';
@@ -83,6 +84,8 @@ import {
   type FeishuCardActionButton,
 } from './markdown.js';
 import { buildHistoryPage, type HistoryPageCursor } from './streaming-history-page.js';
+import { saveCardForkCheckpoint } from '../../storage/card-fork-checkpoints.js';
+import type { HistoryForkSource } from '../../domain/progress.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import {
   formatFooterClockTime,
@@ -166,6 +169,7 @@ interface FeishuCardState {
   renderedComponentCount: number;
   renderedPageNext?: HistoryPageCursor;
   renderedPageHasMore?: boolean;
+  renderedForkSource?: HistoryForkSource;
   desiredRevision: number;
   shadowRevision: number;
   shadowTrust: StreamingRemoteShadowTrust;
@@ -1325,7 +1329,8 @@ function buildStreamingCardRender(params: {
       tools, params.actionRows, params.chatId, params.metadata, historyItems);
     return { body, componentCount: countFeishuCardComponents(body), historyItems, tools };
   };
-  if (params.historyItems && (maxComponents !== Number.MAX_SAFE_INTEGER || params.historyTextOffset)) {
+  // 容量探测也遵守用户消息边界，不能把下一条输入计入当前卡片。
+  if (params.historyItems) {
     const page = buildHistoryPage(params.historyItems, {
       historyItemOffset, historyToolCallOffset, historyTextOffset: params.historyTextOffset,
     }, (items) => {
@@ -1340,15 +1345,19 @@ function buildStreamingCardRender(params: {
     return { ...render(page.items), historyItemOffset, historyToolCallOffset,
       historyTextOffset: params.historyTextOffset || 0, toolCallOffset, next: page.next, hasMore: page.hasMore };
   }
-  let result = render(params.historyItems
-    ? sliceStreamingHistoryItems(params.historyItems, historyItemOffset, historyToolCallOffset)
-    : undefined);
+  let result = render(undefined);
   // 无结构化历史的旧调用方仍使用原有工具列表裁剪规则。
   while (!params.historyItems && result.componentCount > maxComponents && toolCallOffset < params.tools.length) {
     toolCallOffset += 1;
     result = render(undefined);
   }
   return { ...result, historyItemOffset, historyToolCallOffset, toolCallOffset };
+}
+
+function renderedForkSource(render: StreamingCardRenderResult): HistoryForkSource | undefined {
+  // A partial native record cannot be resumed without importing undisplayed content.
+  if (render.next?.historyTextOffset || render.next?.historyToolCallOffset) return undefined;
+  return render.historyItems?.findLast((item) => item.forkSource)?.forkSource;
 }
 
 function extractTerminalContextUsage(statusText: string | null | undefined): string {
@@ -1426,21 +1435,6 @@ function buildRenderedHistoryToolEventCounts(items: StreamingHistoryItem[] | und
 
 function renderedStreamingToolCount(state: FeishuCardState): number {
   return state.renderedToolEventCounts.stream_tool_1 || 0;
-}
-
-function sliceStreamingHistoryItems(
-  items: StreamingHistoryItem[],
-  historyItemOffset: number,
-  historyToolCallOffset: number,
-): StreamingHistoryItem[] {
-  const visible = items.slice(Math.max(0, historyItemOffset)).map((item) => (
-    item.type === 'tool_panel' ? { ...item, tools: item.tools.slice() } : { ...item }
-  ));
-  const first = visible[0];
-  if (first?.type === 'tool_panel' && historyToolCallOffset > 0) {
-    first.tools = first.tools.slice(historyToolCallOffset);
-  }
-  return visible;
 }
 
 function renderedHistoryContinuationCursor(
@@ -3045,6 +3039,64 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return message;
   }
 
+  async listChatMessageIdsThrough(chatId: string, messageId: string, precedingLimit: number): Promise<string[]> {
+    if (!this.restClient) throw new Error('Feishu client is not initialized');
+    if (!Number.isSafeInteger(precedingLimit) || precedingLimit < 0) throw new Error('Invalid preceding message limit');
+    const boundaryResponse = await this.restClient.im.message.get({ path: { message_id: messageId } });
+    assertFeishuApiOk(boundaryResponse, 'im.message.get:fork');
+    const boundary = boundaryResponse.data?.items?.find(item => item.message_id === messageId);
+    if (!boundary || boundary.chat_id !== chatId) throw new Error('飞书历史中找不到分叉卡片');
+    if (boundary.deleted || boundary.msg_type === 'system') throw new Error('分叉卡片已删除或无法转发');
+    const createdAt = Number(boundary.create_time);
+    if (!Number.isSafeInteger(createdAt) || createdAt <= 0) throw new Error('分叉卡片缺少有效创建时间');
+    // Feishu filters by seconds; retain the boundary's entire second, then find its exact ID.
+    const endTime = String(Math.floor(createdAt / 1000) + 1);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    const tokens = new Set<string>();
+    let pageToken: string | undefined;
+    let foundBoundary = false;
+    do {
+      const response = await this.restClient.im.message.list({ params: {
+        container_id_type: 'chat', container_id: chatId, page_size: 50,
+        sort_type: 'ByCreateTimeDesc', end_time: endTime, page_token: pageToken,
+      } });
+      assertFeishuApiOk(response, 'im.message.list:fork');
+      if (!response.data?.items) throw new Error('飞书未返回历史消息列表');
+      for (const item of response.data.items) {
+        if (!item.message_id) throw new Error('飞书历史消息缺少 message_id');
+        if (item.message_id === messageId) {
+          if (item.deleted || item.msg_type === 'system') throw new Error('分叉卡片已删除或无法转发');
+          foundBoundary = true;
+        }
+        if (!foundBoundary) continue;
+        if (!item.deleted && item.msg_type !== 'system' && !seen.has(item.message_id)) {
+          ids.push(item.message_id);
+          seen.add(item.message_id);
+        }
+        if (ids.length === precedingLimit + 1) return ids.reverse();
+      }
+      if (!response.data.has_more) break;
+      pageToken = response.data.page_token;
+      if (!pageToken || tokens.has(pageToken)) throw new Error('飞书历史消息分页未前进');
+      tokens.add(pageToken);
+    } while (pageToken);
+    if (foundBoundary) return ids.reverse();
+    throw new Error('飞书历史中找不到分叉卡片，未转发其他历史替代');
+  }
+
+  async forwardChatMessage(messageId: string, targetChatId: string): Promise<string> {
+    if (!this.restClient) throw new Error('Feishu client is not initialized');
+    const response = await this.restClient.im.message.forward({
+      path: { message_id: messageId }, data: { receive_id: targetChatId },
+      params: { receive_id_type: 'chat_id',
+        uuid: createHash('sha256').update(JSON.stringify([targetChatId, messageId])).digest('hex').slice(0, 32) },
+    });
+    assertFeishuApiOk(response, 'im.message.forward:fork');
+    if (!response.data?.message_id) throw new Error('飞书转发成功响应缺少 message_id');
+    return response.data.message_id;
+  }
+
   async createGroupChat(options: CreateGroupChatOptions): Promise<CreatedGroupChat> {
     const configError = this.validateConfig();
     if (configError) throw new Error(configError);
@@ -3721,6 +3773,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         historyTextOffset: render.historyTextOffset,
         renderedPageNext: render.next,
         renderedPageHasMore: render.hasMore,
+        renderedForkSource: renderedForkSource(render),
         toolCallOffset: render.toolCallOffset,
         historyDriven: initialState?.historyDriven ?? false,
         thinking: initialState ? false : true,
@@ -4237,6 +4290,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         },
       }));
       assertFeishuApiOk(updateResult, 'card.update:rollover_static');
+      this.saveForkCheckpoint(state, state.renderedForkSource, 'continued');
       this.markCardFlushSuccess(state);
     } catch (error) {
       this.markCardFlushFailure(state, error);
@@ -4455,6 +4509,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           if (renderedHistoryMatchesDesired(state, desiredHistory)) {
             state.renderedHistorySignature = historySignature;
             state.renderedHistoryItemCount = desiredRender.render.historyItems?.length || 0;
+            state.renderedForkSource = renderedForkSource(desiredRender.render);
           }
         },
       });
@@ -4584,6 +4639,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const plan = this.planStreamingSync(state, desiredRender);
     this.logStreamingSyncPlan(streamKey, state, plan);
     if (plan.kind === 'noop') {
+      state.renderedForkSource = renderedForkSource(desiredRender.render);
       state.perf.noopCount += 1;
       return;
     }
@@ -5158,6 +5214,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.perf.finalUpdateMs = Date.now() - updateStartedAt;
       assertFeishuApiOk(updateResult, 'card.update');
 
+      this.saveForkCheckpoint(state, renderedForkSource(finalRender), status);
+
       if (terminalReactionEmoji) {
         await this.addTerminalReaction(cardKey, state.messageId, terminalReactionEmoji);
       }
@@ -5620,6 +5678,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.historyTextOffset = render.historyTextOffset;
       state.renderedPageNext = render.next;
       state.renderedPageHasMore = render.hasMore;
+      state.renderedForkSource = renderedForkSource(render);
       if (render.hasMore) this.markCardFlushQueued(state);
       state.toolCallOffset = render.toolCallOffset;
       state.renderedToolSnapshots = state.historyDriven
@@ -5808,6 +5867,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     state.consecutiveFlushFailures += 1;
     state.shadowTrust = 'unknown';
     state.nextFlushEarliestAt = now + this.getCongestedCardIntervalMs(state.consecutiveFlushFailures);
+  }
+
+  private saveForkCheckpoint(state: FeishuCardState, source: HistoryForkSource | undefined,
+    status: 'completed' | 'interrupted' | 'error' | 'continued'): void {
+    if (!source) return;
+    saveCardForkCheckpoint({ ...source, channelType: this.channelType, chatId: state.chatId, messageId: state.messageId,
+      status, sealedAt: Date.now() });
   }
 
   private markCardFlushSuccess(state: FeishuCardState): void {
@@ -7196,6 +7262,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     const inbound: InboundMessage = {
       messageId: msg.message_id,
+      replyToMessageId: msg.parent_id,
       address,
       text: text.trim(),
       timestamp,
