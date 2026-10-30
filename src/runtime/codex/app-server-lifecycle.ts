@@ -52,6 +52,11 @@ interface ThreadState {
   serial: Promise<unknown>;
 }
 
+interface AppServerResumeResult {
+  thread: AppServerThread;
+  initialTurnsPage?: { data?: AppServerTurn[] };
+}
+
 /** One backend owns execution. This object owns only a connection and thread subscriptions. */
 export class CodexAppServerLifecycle {
   private client?: CodexAppServerClient;
@@ -177,34 +182,26 @@ export class CodexAppServerLifecycle {
     const before = state.revision;
     const resumeConfig = config || this.options.resumeConfig;
     const client = this.client!;
-    const result = await client.request<{ thread: AppServerThread }>('thread/resume', { threadId, ...(resumeConfig ? { config: resumeConfig } : {}) });
+    // A thread can retain hundreds of MiB of tool output. Full-history resume
+    // puts that history in one WebSocket response and can disconnect every
+    // thread sharing this backend. One summarized turn is sufficient to
+    // recover the current turn identity and an uncertain input's clientId.
+    const result = await client.request<AppServerResumeResult>('thread/resume', {
+      threadId,
+      ...(resumeConfig ? { config: resumeConfig } : {}),
+      excludeTurns: true,
+      initialTurnsPage: { limit: 1, sortDirection: 'desc', itemsView: 'summary' },
+    });
     this.assertAttached(state, client);
-    this.applyThread(result.thread, true, state.revision !== before);
+    const turns = result.initialTurnsPage?.data;
+    this.applyThread(Array.isArray(turns) ? { ...result.thread, turns } : result.thread, true, state.revision !== before);
   }
 
   async refresh(threadId: string): Promise<void> {
     const state = this.requireThread(threadId);
     await this.connect();
     this.assertAttached(state);
-    const client = this.client!;
-    const before = state.revision;
-    let result: { thread: AppServerThread };
-    try { result = await client.request('thread/read', { threadId, includeTurns: true }); }
-    catch (error) {
-      if (!(error instanceof AppServerRpcError) || !(
-        (error.code === -32601 && error.message.endsWith('list_turns is not supported yet'))
-        || (error.code === -32600 && (
-          error.message.endsWith('paginated threads do not support thread/read(includeTurns=true)')
-          || error.message.endsWith('ephemeral threads do not support includeTurns')
-          || error.message.endsWith(`thread ${threadId} is not materialized yet; includeTurns is unavailable before first user message`)
-        ))
-      )) throw error;
-      this.assertAttached(state, client);
-      result = await client.request('thread/read', { threadId, includeTurns: false });
-    }
-    this.assertAttached(state, client);
-    this.applyThread(result.thread, true, state.revision !== before);
-    if (state.snapshot.activity === 'unknown') await this.resume(threadId);
+    await this.resume(threadId);
   }
 
   async submit(threadId: string, input: AppServerInput[], turnOptions: Record<string, unknown> = {}): Promise<string> {

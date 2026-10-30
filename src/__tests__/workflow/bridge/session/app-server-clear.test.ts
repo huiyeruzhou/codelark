@@ -80,7 +80,7 @@ for (const completion of ['missing-terminal', 'event', 'rebind', 'stop-failure',
     const reply = (result: unknown) => socket.send(JSON.stringify({ id: message.id, result }));
     if (message.method === 'initialize') reply({ codexHome: process.env.CODEX_HOME });
     else if (message.method === 'thread/loaded/list') reply({ data: [] });
-    else if (message.method === 'thread/read' && completion === 'stop-failure') socket.send(JSON.stringify({ id: message.id, error: { code: -32603, message: 'state unavailable' } }));
+    else if (message.method === 'thread/resume' && completion === 'stop-failure') socket.send(JSON.stringify({ id: message.id, error: { code: -32603, message: 'state unavailable' } }));
     else if (['thread/start', 'thread/read', 'thread/resume'].includes(message.method)) reply({ thread });
     else if (message.method === 'turn/start') {
       thread.turns.push(turn);

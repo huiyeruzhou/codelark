@@ -26,7 +26,23 @@ async function fixture(t: TestContext) {
       const m = JSON.parse(String(data)); received.push(m);
       if (handler?.(m, s)) return;
       if (m.method === 'initialize') respond(m, { codexHome: '/fixture', userAgent: 'old fixture' });
-      if (['thread/start', 'thread/resume', 'thread/read'].includes(m.method)) respond(m, { thread });
+      if (m.method === 'thread/start') respond(m, { thread });
+      if (m.method === 'thread/resume') {
+        const turns = thread.turns || [];
+        const latest = turns.at(-1);
+        const summary = latest && {
+          ...latest,
+          items: [
+            latest.items?.find((item) => item.type === 'userMessage'),
+            [...(latest.items || [])].reverse().find((item) => item.type === 'agentMessage'),
+          ].filter(Boolean),
+        };
+        respond(m, {
+          thread: { ...thread, turns: m.params.excludeTurns ? [] : turns },
+          ...(m.params.initialTurnsPage ? { initialTurnsPage: { data: summary ? [summary] : [] } } : {}),
+        });
+      }
+      if (m.method === 'thread/read') respond(m, { thread });
       if (m.method === 'thread/unsubscribe') respond(m, {});
       if (m.method === 'turn/start') {
         const turn: AppServerTurn = { id: `turn-${thread.turns!.length}`, status: 'inProgress', items: [] };
@@ -106,14 +122,17 @@ test('completion before start response never resurrects an active turn or drops 
   assert(f.runtime.recordsAfter('thread').records.some((r) => r.content === 'finished'));
 });
 
-test('paginated Desktop without list_turns can stop an active turn and safely stop again when idle', async (t) => {
+test('bounded resume can stop an active turn and safely stop again when idle', async (t) => {
   const f = await fixture(t);
   const turnId = await f.runtime.submit('thread', text);
   let active = true;
-  f.handle((m, socket) => {
-    if (m.method !== 'thread/read') return false;
-    if (m.params.includeTurns) socket.send(JSON.stringify({ id: m.id, error: { code: -32601, message: 'list_turns is not supported yet' } }));
-    else f.respond(m, { thread: { id: 'thread', status: { type: active ? 'active' : 'idle' } } });
+  f.handle((m) => {
+    if (m.method !== 'thread/resume') return false;
+    assert.equal(m.params.excludeTurns, true);
+    f.respond(m, {
+      thread: { id: 'thread', status: { type: active ? 'active' : 'idle' }, turns: [] },
+      initialTurnsPage: { data: active ? [{ id: turnId, status: 'inProgress', items: [] }] : [] },
+    });
     return true;
   });
   assert.equal(await f.runtime.interrupt('thread'), true);
@@ -124,7 +143,7 @@ test('paginated Desktop without list_turns can stop an active turn and safely st
   await until(() => f.runtime.snapshot('thread').activity === 'idle');
   assert.equal(await f.runtime.interrupt('thread'), false);
   assert.equal(f.received.filter(m => m.method === 'turn/interrupt').length, 1);
-  assert.equal(f.received.filter(m => m.method === 'thread/read' && m.params.includeTurns === false).length, 2);
+  assert.equal(f.received.filter(m => m.method === 'thread/resume' && m.params.excludeTurns === true).length, 2);
 });
 
 test('late item and plan events cannot revive a terminal turn', async (t) => {
@@ -256,6 +275,44 @@ test('initial resume does not redeliver old history; detach never interrupts or 
   assert(!f.received.some((m) => m.method === 'turn/interrupt' || m.method === 'thread/archive'));
 });
 
+test('all reconnects use a bounded latest-turn page so a huge thread cannot poison its backend siblings', async (t) => {
+  const f = await fixture(t);
+  f.handle((message) => {
+    if (message.method !== 'thread/resume') return false;
+    assert.equal(message.params.excludeTurns, true);
+    assert.deepEqual(message.params.initialTurnsPage, {
+      limit: 1, sortDirection: 'desc', itemsView: 'summary',
+    });
+    f.respond(message, {
+      thread: { id: message.params.threadId, status: { type: 'idle' }, turns: [] },
+      initialTurnsPage: { data: [] },
+    });
+    return true;
+  });
+  await f.runtime.ensureThread({ threadId: 'huge-history' });
+  f.socket().close();
+  await until(() => f.runtime.snapshot('thread').connection === 'disconnected');
+  await f.runtime.connect();
+  assert.equal(f.runtime.snapshot('thread').connection, 'ready');
+  assert.equal(f.runtime.snapshot('huge-history').connection, 'ready');
+  assert.equal(await f.runtime.submit('thread', text), 'turn-0');
+  assert.equal(f.received.filter((message) => message.method === 'turn/start').length, 1);
+});
+
+test('reconnect summary does not re-emit an already observed commentary item', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  const commentary = { id: 'progress', type: 'agentMessage', phase: 'commentary', text: 'still working' };
+  f.thread.turns![0]!.items!.push(commentary);
+  f.send('item/completed', { turnId, item: commentary });
+  await until(() => f.runtime.recordsAfter('thread').records.some((record) => record.content === commentary.text));
+  const cursor = f.runtime.recordsAfter('thread').cursor;
+  f.socket().close();
+  await until(() => f.runtime.snapshot('thread').connection === 'disconnected');
+  await f.runtime.connect();
+  assert.deepEqual(f.runtime.recordsAfter('thread', cursor).records, []);
+});
+
 test('replayed usage of a completed turn cannot create a new output turn on attachment', async (t) => {
   const f = await fixture(t);
   f.thread.id = 'resumed-with-usage';
@@ -362,12 +419,12 @@ test('definitive validation rejection permits a later corrected input without re
 });
 
 
-for (const method of ['thread/read', 'thread/resume']) test(`detach rejects a late ${method} reply without reviving the subscription`, async (t) => {
+for (const operationName of ['refresh', 'resume']) test(`detach rejects a late ${operationName} reply without reviving the subscription`, async (t) => {
   const f = await fixture(t);
-  if (method === 'thread/resume') await f.runtime.detach('thread');
+  if (operationName === 'resume') await f.runtime.detach('thread');
   let request: any;
-  f.handle((m) => { if (m.method !== method) return false; request = m; return true; });
-  const operation = method === 'thread/read' ? f.runtime.refresh('thread') : f.runtime.ensureThread({ threadId: 'thread' });
+  f.handle((m) => { if (m.method !== 'thread/resume') return false; request = m; return true; });
+  const operation = operationName === 'refresh' ? f.runtime.refresh('thread') : f.runtime.ensureThread({ threadId: 'thread' });
   const rejected = assert.rejects(operation, /订阅或连接已结束/);
   await until(() => !!request);
   await f.runtime.detach('thread');
