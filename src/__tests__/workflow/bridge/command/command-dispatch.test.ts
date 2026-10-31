@@ -130,11 +130,12 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 1000): Pro
 }
 
 describe('runtime settings internals', () => {
-  it('pins synthetic bootstrap to the loopback OpenAI provider instead of a configured custom provider', () => {
-    const args = _testOnlyCodexThreadBootstrap.buildLocalBootstrapArgs({ mode: 'code' });
+  it('redirects synthetic bootstrap without changing the effective provider identity', () => {
+    const args = _testOnlyCodexThreadBootstrap.buildLocalBootstrapArgs({ mode: 'code' }, 'custom.provider');
     const config = args.flatMap((arg, index) => arg === '--config' ? [args[index + 1]] : []);
-    assert.ok(config.includes('model_provider="openai"'));
+    assert.ok(config.includes('model_provider="custom.provider"'));
     assert.ok(config.includes('openai_base_url="http://127.0.0.1:9/v1"'));
+    assert.ok(config.includes('model_providers={"custom.provider"={name="custom.provider",base_url="http://127.0.0.1:9/v1",wire_api="responses",requires_openai_auth=false}}'));
   });
 
   it('allows a loaded hosted runner enough time to start Codex bootstrap', () => {
@@ -943,6 +944,13 @@ function bootstrapThread(args) {
 
 const args = process.argv.slice(2);
 log(args);
+if (args[0] === 'app-server') {
+  require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+    const m = JSON.parse(line);
+    if (m.id) console.log(JSON.stringify({ id: m.id, result: m.method === 'config/read' ? { config: { model_provider: 'openai' } } : {} }));
+  });
+  return;
+}
 if (args[0] === '__codelark_fake_tui') {
   const command = args[1];
   const target = args[2];
@@ -1102,6 +1110,13 @@ const path = require('node:path');
 
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, args.join(' ') + '\\n');
+if (args[0] === 'app-server') {
+  require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+    const m = JSON.parse(line);
+    if (m.id) console.log(JSON.stringify({ id: m.id, result: m.method === 'config/read' ? { config: { model_provider: 'openai' } } : {} }));
+  });
+  return;
+}
 if (args[0] !== 'exec' || !args.includes('--json')) {
   process.stderr.write('unexpected fake codex command\\n');
   process.exit(2);

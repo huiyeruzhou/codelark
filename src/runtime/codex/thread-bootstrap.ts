@@ -39,7 +39,7 @@ function commandPreview(command: string, args: string[]): string {
   return [command, ...args].map(shellQuote).join(' ');
 }
 
-function buildLocalBootstrapArgs(options: LocalCodexThreadBootstrapOptions): string[] {
+function buildLocalBootstrapArgs(options: LocalCodexThreadBootstrapOptions, modelProvider = 'openai'): string[] {
   const args = ['exec', '--json'];
   if (options.model) args.push('--model', options.model);
   if (options.mode === 'yolo') {
@@ -56,11 +56,16 @@ function buildLocalBootstrapArgs(options: LocalCodexThreadBootstrapOptions): str
     args.push('--config', `sandbox_workspace_write.network_access=${options.networkAccessEnabled}`);
   }
   args.push('--config', 'preferred_auth_method="apikey"');
-  // openai_base_url only affects the built-in OpenAI provider. A configured
-  // custom provider would otherwise receive this synthetic bootstrap prompt.
-  // This override belongs only to the short-lived exec, never the resumed TUI.
-  args.push('--config', 'model_provider="openai"');
+  // Codex persists provider identity and newer TUIs reject a resume under a
+  // different provider. Keep the effective provider, redirect only this exec's
+  // endpoint, and never send the synthetic prompt to the configured model.
+  args.push('--config', `model_provider=${JSON.stringify(modelProvider)}`);
   args.push('--config', `openai_base_url="${LOCAL_BOOTSTRAP_BASE_URL}"`);
+  if (modelProvider !== 'openai') {
+    // Older CLIs split dotted override paths without parsing quoted keys.
+    // Override the table as TOML so provider names containing dots also work.
+    args.push('--config', `model_providers={${JSON.stringify(modelProvider)}={name=${JSON.stringify(modelProvider)},base_url="${LOCAL_BOOTSTRAP_BASE_URL}",wire_api="responses",requires_openai_auth=false}}`);
+  }
   args.push(LOCAL_BOOTSTRAP_PROMPT);
   return args;
 }
@@ -244,10 +249,67 @@ async function stopBootstrapProcess(
   }
 }
 
+async function readBootstrapModelProvider(executable: string, env: NodeJS.ProcessEnv, cwd?: string): Promise<string> {
+  // Let Codex resolve user/project configuration and profiles itself. Guessing
+  // from one config.toml misses overrides and can stamp the wrong provider.
+  const invocation = buildLocalBootstrapInvocation(executable, ['app-server'], env);
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(invocation.command, invocation.args, {
+      env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: process.platform === 'win32',
+    });
+    let settled = false;
+    let childClosed = false;
+    let pending = '';
+    let stderr = '';
+    const closed = new Promise<void>((done) => child.once('close', () => { childClosed = true; done(); }));
+    const finish = (result: string | Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      void stopBootstrapProcess(child, closed, () => childClosed).then(() => {
+        if (result instanceof Error) reject(result); else resolve(result);
+      }, reject);
+    };
+    const send = (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`);
+    const timeout = setTimeout(() => finish(new Error('读取 Codex bootstrap provider 配置超时。')), LOCAL_BOOTSTRAP_TIMEOUT_MS);
+    child.stdin.on('error', (error) => finish(error));
+    child.on('error', (error) => finish(error));
+    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-8_000); });
+    child.stdout.on('data', (chunk) => {
+      pending += chunk.toString();
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim() || settled) continue;
+        try {
+          const message = JSON.parse(line);
+          if (message.id !== 1 && message.id !== 2) continue;
+          if (message.error) throw new Error(`读取 Codex bootstrap provider 失败：${message.error.message}`);
+          if (message.id === 1) {
+            send({ method: 'initialized' });
+            send({ id: 2, method: 'config/read', params: { includeLayers: false, ...(cwd ? { cwd } : {}) } });
+          } else {
+            const config = message.result?.config;
+            if (!config || (config.model_provider != null && (typeof config.model_provider !== 'string' || !config.model_provider.trim()))) {
+              throw new Error('Codex config/read 未返回有效的 model_provider 配置。');
+            }
+            finish(config.model_provider || 'openai');
+          }
+        } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+      }
+    });
+    child.on('close', (code) => finish(new Error(`读取 Codex bootstrap provider 失败（${code ?? 'unknown'}）：${stderr.trim()}`)));
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'codelark_bootstrap', version: '1' } } });
+  });
+}
+
 export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstrapOptions): Promise<string> {
   const env = buildLocalBootstrapEnv();
   const executable = resolveCodexCliExecutable({ env: env as Record<string, string> });
-  const args = buildLocalBootstrapArgs(options);
+  const modelProvider = await readBootstrapModelProvider(executable, env, options.workingDirectory).catch((error) => {
+    throw new Error(`本地 Codex thread bootstrap 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  });
+  const args = buildLocalBootstrapArgs(options, modelProvider);
   console.log('[codex-thread-bootstrap] Local Codex thread bootstrap start:', {
     bridge_session_id: options.bridgeSessionId,
     command: commandPreview(executable, args),

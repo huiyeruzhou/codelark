@@ -84,7 +84,7 @@ Codex 保留 `startCodexResumeTmuxSession` 和 `waitForCodexResumeTmuxReady` 作
 
 当用户把当前 Codex runtime 切到 `/provider tmux` 时，`src/bridge/command/provider-settings.ts` 先从 `BridgeSession.runtime.codex.threadId` 或 binding 推导已有 Codex thread。若没有 thread，会通过 `bootstrapCodexThreadLocally` 本地预创建 Codex thread，并把结果写回 `BridgeSession`。
 
-旧适配器的 bootstrap `exec` 临时指定内建 `model_provider="openai"` 和 loopback `openai_base_url`，避免占位提示落到用户配置的自定义模型服务。只设置 `openai_base_url` 无法覆盖自定义 provider。这个临时参数不写入用户配置，也不传给后续 TUI；恢复线程仍使用原配置的 provider。普通用户配置场景已由两个真实 CLI 版本验证；这不是覆盖管理员强制 provider 要求的机制。
+旧适配器先通过短命 stdio app-server 的 `config/read` 获取有效 `model_provider`（由 CLI 解析用户和项目配置），再用相同 provider 创建 bootstrap `exec`。占位请求只临时覆盖该 provider 的 base URL 为 loopback；内建 OpenAI 使用 `openai_base_url`。参数不写入用户配置，也不传给恢复后的 TUI。Codex 0.166 会拒绝 bootstrap 与恢复 provider 不一致的线程；无法读取有效配置时直接失败，不猜测 provider，也不发送占位请求到真实模型。两个短命子进程均在继续前完成关闭和输出管道清理。
 
 完成 thread 解析后，`codexTmuxSessionName(threadId)` 生成 `codex_<threadId>`，`startCodexResumeTmuxSession` 用 `codex resume <threadId>` 启动 TUI。启动参数来自 `resolveSessionRuntimeConfig`，包括 model、sandbox、network、reasoning effort、mode 和 skipGitRepoCheck。
 
@@ -126,7 +126,7 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 
 `app-server-local.ts` 使用当前安装的普通 `codex app-server --listen`，不调用要求 managed standalone 安装的 `app-server daemon start`，不替用户安装或复制二进制。各平台的 npm 入口解析到同一安装自带的原生 Codex（包括 Windows 的 `codex.exe`），避免只持有命令或 Node 包装层的句柄。私有启动保留 `CODELARK_CODEX_BASE_URL` 与 `CODELARK_CODEX_API_KEY > CODEX_API_KEY > OPENAI_API_KEY` 的既有优先级。原生 app-server 不自动读取环境中的登录 key；有显式 key 时，私有子进程使用官方 `cli_auth_credentials_store="ephemeral"`，核对有效配置后通过 `account/login/start` 注入内存认证。密钥不放进命令参数，不写入或替换用户的 `auth.json`；已有服务复用不修改其认证。没有显式 key 时沿用原有 Codex 登录配置。
 
-地址由规范化的 `CODELARK_HOME` 哈希确定；目录尚不存在时先解析最近存在父路径的 realpath，再拼接未创建的后缀，确保 macOS `/tmp` 与 symlink 父目录不会使创建前后的地址改变。Unix 使用 `/tmp/codelark-codex-<hash>/rpc.sock`，目录属于当前用户且权限为 `0700`；Windows 使用确定的 `127.0.0.1` 高位端口。准备时先以 `initialize` 核对 `CODEX_HOME`，再查询 `thread/loaded/list`；同地址已有兼容后端就连接它。地址已被其他程序或不同 `CODEX_HOME` 使用、握手/鉴权/协议失败均直接报错。已有但不可连接、且没有本进程创建证据的 Unix socket 不会被删除或替换；确定的端口冲突也不会改选另一个地址。
+地址由规范化的 `CODELARK_HOME` 哈希确定；目录尚不存在时先解析最近存在父路径的 realpath，再拼接未创建的后缀，确保 macOS `/tmp` 与 symlink 父目录不会使创建前后的地址改变。Unix 使用 `/tmp/codelark-codex-<hash>/rpc.sock`，目录属于当前用户且权限为 `0700`；Windows 使用确定的 `127.0.0.1:40000–48999` 端口，避开默认动态端口及其系统保留范围（49152–65535）；自定义系统保留或地址冲突仍明确报错。准备时先以 `initialize` 核对 `CODEX_HOME`，再查询 `thread/loaded/list`；同地址已有兼容后端就连接它。地址已被其他程序或不同 `CODEX_HOME` 使用、握手/鉴权/协议失败均直接报错。已有但不可连接、且没有本进程创建证据的 Unix socket 不会被删除或替换；确定的端口冲突也不会改选另一个地址。
 
 本机版本升级的已验证范围与 legacy TUI 未通过项见 [Codex CLI 兼容性验收](../testing/codex-cli-compatibility.md)。
 
@@ -498,3 +498,7 @@ Bridge 启动器以及 Claude tmux、PTY、SDK 的环境边界清除 `CLAUDECODE
 旧窗口的自动迁移复用现有恢复流程，在就绪和会话 ID 再次验证后才转发原输入，后续输入不重复重建。自定义 statusLine/无快捷键页脚的输入框仍可识别。明确显示继承子会话标记导致 transcript 关闭的窗口，在原绑定记录可恢复且空闲时也会重建；没有保存的内容无法由已有 JSONL 重建，不以同目录其它日志代替。
 
 验证覆盖脏父进程及脏 tmux server 的真实 CLI 保存失败负对照、新版启动的 JSONL 落盘、无启动 ID 的旧 CLI 自动恢复原历史及连续两条原消息各发送一次。真实飞书回归可用 `scripts/real-feishu-claude-binding.ts --upgrade-legacy`：两个隔离群先完成首轮，重建为通过 CLI `/resume` 恢复历史的无启动 ID 窗口，重启 Bridge 后通过真实群消息触发自动迁移并以用户身份读回。
+
+### Claude 选项导航确认
+
+Claude trust 和 bypass 菜单每次只发送一个导航键，随后重新捕获屏幕并计算目标选项；仅当新屏幕确认目标已被选中时发送 Enter。这样启动吞键不会把后续 Enter 应用到旧的退出选项。bypass 仍要求明确的用户选择，不能自动同意。

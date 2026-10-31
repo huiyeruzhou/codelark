@@ -1,4 +1,20 @@
-# Codex CLI 0.163.0 兼容性验收
+# Codex CLI 兼容性验收
+
+## 2026-10-31：0.166.0 与 CI 兼容性回归
+
+macOS arm64、Node.js 24 的隔离 CLI 验证：修复前 0.166.0 legacy TUI 为 5/7，两个失败均因 bootstrap 写入 `openai`，而恢复使用自定义 provider，原生返回 `modelProviderMismatch`。
+
+修复先通过短命 stdio app-server `config/read` 获取 CLI 有效 provider，再仅为 bootstrap `exec` 覆盖该 provider 的 loopback 地址；保持线程 provider 身份，不修改用户配置和真实输入。使用 `model_providers` 根表的 TOML inline value，避免 0.163 对带引号 dotted override 路径的旧解析行为。配置读取失败时关闭所有自有子进程，停止启动，不猜测 provider。
+
+- Codex 0.166.0 legacy TUI：7/7；包含生成终态前文件交付、429 滚屏、首轮输入、长文本、同线程恢复与 goal 选择。
+- Codex 0.145.0、0.163.0、0.166.0 的 `verify-codex-local-bootstrap.ts` 均通过：占位模型请求数为零，配置字节不变，恢复同线程后仅发送一次真实输入。
+- Codex 0.166.0 的协议生命周期与默认私有后端原生验收通过。`runtime-latest.yml` 新增独立 bootstrap custom-provider gate，防止后续版本把占位请求送到真实模型。
+- Claude 2.1.312 的真实 tmux provider 3/3 通过；导航与 Enter 分轮捕获，吞键不能导致确认旧的退出选项。
+- Windows 私有端点范围改为 40000–48999，避开默认动态端口段；稳定性和范围断言已覆盖，Windows 实机/远端 CI 尚未复测。自定义系统保留和明确端口冲突仍报错。
+
+这轮只验证隔离真实 CLI 与本地模型，未推送或部署生产 Bridge。后文保留 0.163.0 的历史来源与验收记录。
+
+## 2026-10-16：0.163.0 历史验收
 
 2026-10-16，在 macOS arm64、Node.js 24 上将全局 npm Codex CLI 从 0.153.4 更新为 npm `latest` 稳定版 0.163.0。使用真实 CLI、隔离 HOME/CODEX_HOME/工作目录和本地 Responses 模型 fixture；请求不会发往真实模型服务。Desktop App 与生产 Bridge 没有重启。
 
@@ -41,7 +57,7 @@
 
 ## 原生验收
 
-真实飞书入口补测发现旧 tmux 的本地 bootstrap 只设置了 `openai_base_url`。当 `config.toml` 选择自定义 provider 时，占位请求实际到达该服务，可能污染首轮输出。现在短命 bootstrap exec 同时指定内建 OpenAI provider 和 loopback；0.163.0、0.153.4 均验证 bootstrap 的模型请求数为零、占位内容被清理、配置字节不变，随后恢复同一线程仍向原自定义服务发送真实输入。此验证覆盖普通配置，不代表管理员强制 provider 路由已被覆盖。
+真实飞书入口补测发现旧 tmux 的本地 bootstrap 只设置了 `openai_base_url`。当 `config.toml` 选择自定义 provider 时，占位请求实际到达该服务，可能污染首轮输出。当时的修复让短命 bootstrap exec 同时指定内建 OpenAI provider 和 loopback（已被本文 2026-10-31 provider 保留方案替代）；0.163.0、0.153.4 当时均验证 bootstrap 的模型请求数为零、占位内容被清理、配置字节不变，随后恢复同一线程仍向原自定义服务发送真实输入。此验证覆盖普通配置，不代表管理员强制 provider 路由已被覆盖。
 
 - **0.163.0 legacy TUI：7/7；0.153.4 对照：7/7。** 同一测试文件覆盖恢复线程与警告去重、生成结束前发送文件且不重复、429 错误滚屏后保留、全新 YOLO 首条输入、`/new` 首条输入、中英文多行和数千字输入、活动 goal 替换选择。未删除原失败断言。
 - **0.163.0 app-server：协议生命周期、默认 OpenAI provider、自定义 provider 均通过。** 包括同轮 steer、并发 start 的实际 turn 身份、interrupt、断线/丢失响应后不重复提交、审批与动态请求、线程工具环境、跨进程复用、拥有者退出、SIGKILL 后同地址恢复。原 auth.json 字节不变。
@@ -104,6 +120,6 @@ CODELARK_REAL_FEISHU_E2E=1 CODELARK_CODEX_CLI_PATH="$(command -v codex)" \
 
 ## bootstrap 进程回收回归
 
-`codex-bootstrap-process.test.ts` 使用隔离的假 CLI 验证成功和缺少 session 文件两条路径：函数返回前，启动的进程必须全部退出。Windows fixture 模拟 `.cmd → Node 包装器 → writer` 并继承输出管道；Linux/macOS fixture 忽略 SIGTERM，验证强制终止兜底。只清理该用例记录的 PID，不操作用户的 Codex 或 tmux 进程。
+`codex-bootstrap-process.test.ts` 使用隔离的假 CLI 验证成功、缺少 session 文件和配置读取失败三条路径：函数返回前，启动的进程必须全部退出。Windows fixture 模拟 `.cmd → Node 包装器 → writer` 并继承输出管道；Linux/macOS fixture 忽略 SIGTERM，验证强制终止兜底。只清理该用例记录的 PID，不操作用户的 Codex 或 tmux 进程。
 
 Windows bootstrap 使用 PID 定位的进程树终止，并等待输出管道实际关闭，才修剪 JSONL 和交接给 TUI；超时或启动失败也经过同一清理流程。清理失败会拒绝交接，避免已返回的 bootstrap 继续写文件。CI 在真实运行时生命周期测试前执行此回归，真实 Codex 七个用例还必须自然退出，不能以断言通过替代进程退出。

@@ -39,7 +39,9 @@ export function codexLocalAppServerEndpoint(home = CODELARK_HOME, platform = pro
   const identity = canonical(home);
   const hash = createHash('sha256').update(platform === 'win32' ? identity.toLowerCase() : identity).digest();
   return platform === 'win32'
-    ? `ws://127.0.0.1:${40_000 + hash.readUInt32BE(0) % 20_000}`
+    // Windows reserves ranges within its default dynamic ports (49152–65535),
+    // including ports that look unused but fail bind with WSAEACCES.
+    ? `ws://127.0.0.1:${40_000 + hash.readUInt32BE(0) % 9_000}`
     : `unix:///tmp/codelark-codex-${hash.toString('hex').slice(0, 24)}/rpc.sock`;
 }
 

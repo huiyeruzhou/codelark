@@ -14,6 +14,17 @@ import { CodexAppServerClient } from '../../../../runtime/codex/app-server-clien
 
 const execFileAsync = promisify(execFile);
 
+test('Windows private endpoints stay below the OS dynamic reservation range and remain stable', () => {
+  for (let index = 0; index < 100; index += 1) {
+    const home = path.join(os.tmpdir(), `codelark-port-${index}`);
+    const endpoint = codexLocalAppServerEndpoint(home, 'win32');
+    const url = new URL(endpoint);
+    assert.equal(url.hostname, '127.0.0.1');
+    assert(Number(url.port) >= 1024 && Number(url.port) < 49152);
+    assert.equal(codexLocalAppServerEndpoint(home, 'win32'), endpoint);
+  }
+});
+
 function fixture(t: TestContext, mode = 'ok') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-local-fixture-'));
   const executable = path.join(root, 'codex.mjs');

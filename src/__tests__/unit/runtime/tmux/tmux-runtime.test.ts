@@ -1110,21 +1110,22 @@ describe('codex tmux runtime', () => {
     }
   });
 
-  it('moves from the default No choice to Yes before confirming a Claude trust prompt', async () => {
+  it('recaptures Claude trust selection after swallowed navigation before confirming Yes', async () => {
     const oldTimeout = process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
     const oldPoll = process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS;
     try {
-      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '500';
+      process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '2000';
       process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
       let sessionExists = true;
       let trusted = false;
+      let selected = 2;
+      let swallowNavigation = true;
       const sentActions: TmuxSendAction[][] = [];
-      const trustScreen = [
+      const trustScreen = () => [
         'Quick safety check: Is this a project you created or one you trust?',
         '',
-        '  1. Yes, I trust this folder',
-        '  2. No, continue without these permissions',
-        '❯ 3. No, exit!',
+        ...['1. Yes, I trust this folder', '2. No, continue without these permissions', '3. No, exit!']
+          .map((label, index) => `${selected === index ? '❯' : ' '} ${label}`),
         '',
         'Enter to confirm · Esc to cancel',
       ].join('\n');
@@ -1138,12 +1139,16 @@ describe('codex tmux runtime', () => {
           if (!sessionExists) throw new Error("can't find pane: claude_default_no");
           return {
             command: 'tmux capture-pane -t claude_default_no',
-            screen: trusted ? 'Claude Code v2.1.220\n❯ \n? for shortcuts' : trustScreen,
+            screen: trusted ? 'Claude Code v2.1.220\n❯ \n? for shortcuts' : trustScreen(),
           };
         },
         sendActions: async (_target, actions) => {
           sentActions.push(actions);
-          if (actions.some((action) => action.type === 'key' && action.key === 'Up')) {
+          assert.equal(actions.length, 1, 'navigation and confirmation need separate captures');
+          if (actions[0]?.type === 'key' && actions[0].key === 'Up') {
+            if (swallowNavigation) swallowNavigation = false;
+            else selected -= 1;
+          } else if (selected === 0) {
             trusted = true;
           } else {
             sessionExists = false;
@@ -1162,11 +1167,7 @@ describe('codex tmux runtime', () => {
       });
 
       assert.equal(result.ready, true);
-      assert.deepEqual(sentActions, [[
-        { type: 'key', key: 'Up' },
-        { type: 'key', key: 'Up' },
-        { type: 'key', key: 'Enter' },
-      ]]);
+      assert.deepEqual(sentActions, ['Up', 'Up', 'Up', 'Enter'].map((key) => [{ type: 'key', key }]));
     } finally {
       if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
       else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;
@@ -1223,6 +1224,7 @@ describe('codex tmux runtime', () => {
       process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = '500';
       process.env.CODELARK_CLAUDE_TMUX_READY_POLL_MS = '50';
       let accepted = false;
+      let yesSelected = false;
       const sentActions: TmuxSendAction[][] = [];
       const promptKinds: string[] = [];
       const warningScreen = [
@@ -1244,11 +1246,14 @@ describe('codex tmux runtime', () => {
         ensureDetachedSession: async () => ({ existed: false, commands: [] }),
         capturePane: async () => ({
           command: 'tmux capture-pane -t claude_bypass_permissions',
-          screen: accepted ? 'Claude Code v2.1.220\n❯ \n? for shortcuts' : warningScreen,
+          screen: accepted ? 'Claude Code v2.1.220\n❯ \n? for shortcuts'
+            : yesSelected ? warningScreen.replace('❯ 1.', '  1.').replace('  2.', '❯ 2.') : warningScreen,
         }),
         sendActions: async (_target, actions) => {
           sentActions.push(actions);
-          accepted = actions.some((action) => action.type === 'key' && action.key === 'Down');
+          assert.equal(actions.length, 1);
+          if (actions[0]?.type === 'key' && actions[0].key === 'Down') yesSelected = true;
+          else { assert(yesSelected); accepted = true; }
           return { commands: actions.map((action) => `tmux send-keys ${action.type === 'key' ? action.key : action.text}`) };
         },
         sendInterrupt: async () => '',
@@ -1269,10 +1274,7 @@ describe('codex tmux runtime', () => {
 
       assert.equal(result.ready, true);
       assert.deepEqual(promptKinds, ['bypass_permissions']);
-      assert.deepEqual(sentActions, [[
-        { type: 'key', key: 'Down' },
-        { type: 'key', key: 'Enter' },
-      ]]);
+      assert.deepEqual(sentActions, [[{ type: 'key', key: 'Down' }], [{ type: 'key', key: 'Enter' }]]);
     } finally {
       if (oldTimeout === undefined) delete process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS;
       else process.env.CODELARK_CLAUDE_TMUX_READY_TIMEOUT_MS = oldTimeout;

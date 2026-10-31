@@ -39,6 +39,13 @@ jobs:
       - name: Smoke test real agent executables
         run: node scripts/verify-ci-runtime-clis.js
 
+      - name: Verify local bootstrap preserves the custom provider without model requests
+        timeout-minutes: 3
+        run: >-
+          node --import tsx scripts/verify-codex-local-bootstrap.ts
+          --cli "$(command -v codex)"
+          --evidence '${{ runner.temp }}/codex-latest-protocol-evidence/bootstrap'
+
       - name: Test real agent tmux lifecycles with fake model proxies
         timeout-minutes: 20
         env:

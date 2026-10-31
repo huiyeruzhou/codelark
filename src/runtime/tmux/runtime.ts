@@ -407,7 +407,10 @@ function buildClaudeSelectionActions(
         choice === 'yes_proceed' ? 'yes_proceed' : 'no',
       )
     : buildClaudeTrustPromptKeys(screen);
-  return keys?.map((key) => ({ type: 'key' as const, key })) || null;
+  // TUI input handlers can render a menu before they can consume navigation.
+  // Confirm only after a fresh capture shows the requested option selected;
+  // sending Down/Up and Enter together can accept the previous (exit) choice.
+  return keys?.slice(0, 1).map((key) => ({ type: 'key' as const, key })) || null;
 }
 
 function detectRuntimeTmuxSelectionPrompt(
