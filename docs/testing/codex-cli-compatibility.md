@@ -122,4 +122,6 @@ CODELARK_REAL_FEISHU_E2E=1 CODELARK_CODEX_CLI_PATH="$(command -v codex)" \
 
 `codex-bootstrap-process.test.ts` 使用隔离的假 CLI 验证成功、缺少 session 文件和配置读取失败三条路径：函数返回前，启动的进程必须全部退出。Windows fixture 模拟 `.cmd → Node 包装器 → writer` 并继承输出管道；Linux/macOS fixture 忽略 SIGTERM，验证强制终止兜底。只清理该用例记录的 PID，不操作用户的 Codex 或 tmux 进程。
 
+Windows bootstrap 直接启动原生可执行文件；仅 `.cmd`/`.bat` 包装器经过显式转义的 cmd 启动，保留 TOML 双引号、参数边界和特殊字符，避免 PowerShell legacy 参数转换丢失引号。进程回归同时核对带双引号和 `&` 的模型参数。CI 专用 Codex shim 必须实现 bootstrap 所需的 `initialize`、`config/read` 和 `exec --json`；同一回归文件实际安装该 shim 并完成一次 bootstrap，防止真实 CLI 通过而稳定套件的假 CLI 协议过期。
+
 Windows bootstrap 使用 PID 定位的进程树终止，并等待输出管道实际关闭，才修剪 JSONL 和交接给 TUI；超时或启动失败也经过同一清理流程。清理失败会拒绝交接，避免已返回的 bootstrap 继续写文件。CI 在真实运行时生命周期测试前执行此回归，真实 Codex 七个用例还必须自然退出，不能以断言通过替代进程退出。

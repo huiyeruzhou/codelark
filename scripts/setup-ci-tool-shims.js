@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const selfPath = fileURLToPath(import.meta.url);
@@ -12,6 +13,19 @@ function runFakeCodex() {
   const args = process.argv.slice(2);
   const logPath = process.env.CODELARK_FAKE_CODEX_LOG;
   if (logPath) fs.appendFileSync(logPath, `${args.join(' ')}\n`);
+  if (args[0] === 'app-server') {
+    createInterface({ input: process.stdin }).on('line', (line) => {
+      const message = JSON.parse(line);
+      if (message.id === undefined) return;
+      const response = message.method === 'initialize'
+        ? { result: {} }
+        : message.method === 'config/read'
+          ? { result: { config: { model_provider: 'openai' } } }
+          : { error: { code: -32601, message: `Unsupported CI fixture method: ${message.method}` } };
+      process.stdout.write(`${JSON.stringify({ id: message.id, ...response })}\n`);
+    });
+    return;
+  }
   if (args[0] !== 'exec' || !args.includes('--json')) return;
 
   const randomHex = (size) => crypto.randomBytes(size).toString('hex');

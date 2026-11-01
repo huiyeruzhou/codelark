@@ -1,12 +1,10 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 
 import type { CodexReasoningEffort, CodexSandboxMode } from '../options.js';
 import { resolveCodexCliExecutable } from './cli-executable.js';
-import {
-  buildShellSnapshotLaunchArgs,
-  ensureShellSnapshot,
-} from './shell-snapshot.js';
+import { quoteCommandLineArg } from './shell-snapshot.js';
 import { buildCodexTuiEnv, findSessionFileByThreadId } from './tmux-provider.js';
 
 const LOCAL_BOOTSTRAP_BASE_URL = 'http://127.0.0.1:9/v1';
@@ -82,18 +80,27 @@ function buildLocalBootstrapInvocation(
   executable: string,
   args: string[],
   env: NodeJS.ProcessEnv,
-): { command: string; args: string[] } {
+): { command: string; args: string[]; windowsVerbatimArguments?: boolean } {
   if (process.platform !== 'win32') return { command: executable, args };
-  const definedEnv = Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-  );
-  const launchArgs = buildShellSnapshotLaunchArgs(
-    executable,
-    args,
-    ensureShellSnapshot(definedEnv),
-    { platform: process.platform },
-  );
-  return { command: launchArgs[0]!, args: launchArgs.slice(1) };
+  if (/\.[cm]?js$/i.test(executable)) return { command: process.execPath, args: [executable, ...args] };
+  if (!/\.(cmd|bat)$/i.test(executable)) return { command: executable, args };
+
+  // PowerShell's legacy native argument conversion strips the TOML quotes.
+  // Use cmd only for batch launchers, preserving both CRT argument boundaries
+  // and cmd metacharacters. npm .bin shims add one more cmd expansion layer.
+  const escapeMeta = (value: string) => value.replace(/([()\][%!^"`<>&|;, *?])/g, '^$1');
+  const doubleEscape = /[\\/]node_modules[\\/]\.bin[\\/]/i.test(executable);
+  const escapedArgs = args.map((arg) => {
+    const quoted = quoteCommandLineArg(arg, 'win32');
+    const escaped = escapeMeta(quoted.startsWith('"') ? quoted : `"${quoted}"`);
+    return doubleEscape ? escapeMeta(escaped) : escaped;
+  });
+  const command = [escapeMeta(path.win32.normalize(executable)), ...escapedArgs].join(' ');
+  return {
+    command: env.ComSpec || env.comspec || 'cmd.exe',
+    args: ['/d', '/s', '/c', `"${command}"`],
+    windowsVerbatimArguments: true,
+  };
 }
 
 function readThreadIdFromCodexExecLine(line: string): string | null {
@@ -256,6 +263,7 @@ async function readBootstrapModelProvider(executable: string, env: NodeJS.Proces
   return new Promise<string>((resolve, reject) => {
     const child = spawn(invocation.command, invocation.args, {
       env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: process.platform === 'win32',
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
     let settled = false;
     let childClosed = false;
@@ -322,6 +330,7 @@ export async function bootstrapLocalCodexThread(options: LocalCodexThreadBootstr
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: process.platform === 'win32',
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
     let pending = '';
     let stderr = '';

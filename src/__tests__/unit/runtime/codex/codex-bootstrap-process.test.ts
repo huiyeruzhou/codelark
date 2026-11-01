@@ -21,6 +21,7 @@ for (const mode of ['ready', 'missing', 'config-error']) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-bootstrap-process-'));
     const oldEnv = { CODEX_HOME: process.env.CODEX_HOME, CODELARK_CODEX_CLI_PATH: process.env.CODELARK_CODEX_CLI_PATH };
     const threadId = randomUUID();
+    const model = 'fixture "quoted" & literal';
     const pidsFile = path.join(root, 'owned-pids.txt');
     const writer = path.join(root, 'writer.cjs');
     const wrapper = path.join(root, 'wrapper.cjs');
@@ -44,6 +45,7 @@ for (const mode of ['ready', 'missing', 'config-error']) {
             if (message.id) console.log(JSON.stringify({ id: message.id, result: message.method === 'config/read' ? { config: { model_provider: 'custom' } } : {} }));
           });
         } else {
+        if (process.argv[process.argv.indexOf('--model') + 1] !== ${JSON.stringify(model)}) throw new Error('bootstrap changed the model argument');
         if (!process.argv.includes('model_provider="custom"')) throw new Error('bootstrap lost the effective provider');
         if (!process.argv.some(arg => arg.startsWith('model_providers={') && arg.includes('base_url="http://127.0.0.1:9/v1"'))) throw new Error('bootstrap did not redirect the custom provider');
         if (${sessionReady}) fs.writeFileSync(${JSON.stringify(sessionFile)}, JSON.stringify({ type: 'session_meta', payload: { id: ${JSON.stringify(threadId)} } }) + '\\n');
@@ -63,7 +65,7 @@ for (const mode of ['ready', 'missing', 'config-error']) {
       }
       process.env.CODEX_HOME = root;
       process.env.CODELARK_CODEX_CLI_PATH = executable;
-      const bootstrap = bootstrapLocalCodexThread({ mode: 'yolo', workingDirectory: root });
+      const bootstrap = bootstrapLocalCodexThread({ mode: 'yolo', workingDirectory: root, model });
       if (sessionReady) assert.equal(await bootstrap, threadId);
       else if (mode === 'config-error') await assert.rejects(bootstrap, /fixture config failure/);
       else await assert.rejects(bootstrap, /未找到可用 session JSONL/);
@@ -91,3 +93,32 @@ for (const mode of ['ready', 'missing', 'config-error']) {
     }
   });
 }
+
+test('installed CI Codex shim supports provider lookup before local thread bootstrap', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-ci-bootstrap-'));
+  const envKeys = ['CODEX_HOME', 'CODELARK_CODEX_CLI_PATH', 'CODELARK_FAKE_CODEX_LOG', 'TMUX_FAKE_BOOTSTRAP_THREAD_ID'] as const;
+  const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  const threadId = randomUUID();
+  const log = path.join(root, 'commands.log');
+  try {
+    execFileSync(process.execPath, ['scripts/setup-ci-tool-shims.js'], {
+      env: { ...process.env, RUNNER_TEMP: root, GITHUB_PATH: path.join(root, 'github-path'), GITHUB_ENV: path.join(root, 'github-env') },
+      stdio: 'pipe',
+    });
+    process.env.CODEX_HOME = path.join(root, 'codex-home');
+    process.env.CODELARK_CODEX_CLI_PATH = path.join(root, 'codelark-ci-bin', process.platform === 'win32' ? 'codex.cmd' : 'codex');
+    process.env.CODELARK_FAKE_CODEX_LOG = log;
+    process.env.TMUX_FAKE_BOOTSTRAP_THREAD_ID = threadId;
+    assert.equal(await bootstrapLocalCodexThread({ mode: 'code', workingDirectory: root }), threadId);
+    const commands = fs.readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(commands.length, 2);
+    assert.equal(commands[0], 'app-server');
+    assert.match(commands[1]!, /^exec --json /);
+  } finally {
+    for (const key of envKeys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
