@@ -43,6 +43,13 @@ async function fixture(t: TestContext) {
         });
       }
       if (m.method === 'thread/read') respond(m, { thread });
+      if (m.method === 'thread/items/list') {
+        const entries = (thread.turns || []).flatMap((turn) =>
+          !m.params.turnId || turn.id === m.params.turnId ? (turn.items || []).map((item) => ({ turnId: turn.id, item })) : []).reverse();
+        const offset = Number(m.params.cursor || 0);
+        const data = entries.slice(offset, offset + m.params.limit);
+        respond(m, { data, nextCursor: offset + data.length < entries.length ? String(offset + data.length) : null });
+      }
       if (m.method === 'thread/unsubscribe') respond(m, {});
       if (m.method === 'turn/start') {
         const turn: AppServerTurn = { id: `turn-${thread.turns!.length}`, status: 'inProgress', items: [] };
@@ -57,15 +64,15 @@ async function fixture(t: TestContext) {
       if (m.method === 'turn/interrupt') respond(m, {});
     });
   });
-  let persisted: AppServerSubmission | undefined;
+  const persisted = new Map<string, AppServerSubmission>();
   const runtime = new CodexAppServerLifecycle(`ws://127.0.0.1:${address.port}`, {
     connect: () => CodexAppServerClient.connect(`ws://127.0.0.1:${address.port}`, 200),
-    loadSubmission: () => persisted,
-    saveSubmission: (_, value) => { persisted = value; },
+    loadSubmission: (id) => persisted.get(id),
+    saveSubmission: (id, value) => { if (value) persisted.set(id, value); else persisted.delete(id); },
   });
   t.after(async () => { runtime.close(); for (const client of wss.clients) client.terminate(); await new Promise<void>((resolve) => wss.close(() => resolve())); });
   await runtime.ensureThread();
-  return { runtime, thread, received, send, respond, persisted: () => persisted, socket: () => socket, handle: (fn: typeof handler) => { handler = fn; } };
+  return { runtime, thread, received, send, respond, persisted: () => persisted.get('thread'), socket: () => socket, handle: (fn: typeof handler) => { handler = fn; } };
 }
 const text = [{ type: 'text' as const, text: 'hello' }];
 
@@ -234,6 +241,134 @@ test('no correlation evidence keeps unknown submission and prevents fallback/ret
   await assert.rejects(f.runtime.submit('thread', text), /提交结果尚未确认/);
   assert.equal(f.received.filter((m) => m.method === 'turn/start').length, 1);
   assert(f.persisted());
+});
+
+test('lost steer acknowledgement is recovered beyond the first user message and item page', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  let clientId = '';
+  f.handle((m, socket) => {
+    if (m.method !== 'turn/steer') return false;
+    clientId = m.params.clientUserMessageId;
+    f.thread.turns![0]!.items!.push({ id: 'accepted-steer', type: 'userMessage', clientId, content: m.params.input },
+      ...Array.from({ length: 60 }, (_, i) => ({ id: `tool-${i}`, type: 'commandExecution', command: 'echo working' })));
+    socket.close(); return true;
+  });
+  await assert.rejects(f.runtime.submit('thread', [{ type: 'text', text: 'append once' }]));
+  f.handle(undefined);
+  await f.runtime.connect();
+  await until(() => !f.persisted());
+  assert.equal(f.runtime.snapshot('thread').turnId, turnId);
+  const reads = f.received.filter(m => m.method === 'thread/items/list');
+  assert(reads.length > 1, 'walk continuation pages, not just the display summary');
+  assert(reads.every(m => m.params.turnId === turnId && m.params.limit <= 25));
+  assert(!f.runtime.recordsAfter('thread').records.some(r => r.content.includes('echo working')), 'reconciliation must not replay historical tools');
+  assert.equal(await f.runtime.submit('thread', text), turnId, 'a new input must work on the same thread');
+  assert.equal(f.received.filter(m => m.method === 'turn/steer' && m.params.clientUserMessageId === clientId).length, 1);
+});
+
+test('ready connection reconciles a lost start in an older turn before accepting new input', async (t) => {
+  const f = await fixture(t);
+  let clientId = '';
+  f.handle((m, socket) => {
+    if (m.method !== 'turn/start') return false;
+    clientId = m.params.clientUserMessageId;
+    socket.close(); return true;
+  });
+  await assert.rejects(f.runtime.submit('thread', text));
+  f.handle(undefined);
+  await f.runtime.connect();
+  assert(f.persisted(), 'absence of evidence is not rejection');
+  f.thread.turns = [
+    { id: 'accepted-old', status: 'completed', items: [{ id: 'old-input', type: 'userMessage', clientId, content: text },
+      { id: 'old-answer', type: 'agentMessage', text: 'do not replay' }] },
+    { id: 'desktop-later', status: 'completed', items: [{ id: 'later-input', type: 'userMessage', clientId: 'someone-else' }] },
+  ];
+  assert.equal(await f.runtime.submit('thread', [{ type: 'text', text: 'next distinct input' }]), 'turn-2');
+  assert.equal(f.persisted(), undefined);
+  assert(!f.runtime.recordsAfter('thread').records.some(r => r.turnId === 'accepted-old'), 'old acceptance is not a new delivery');
+  assert.equal(f.received.filter(m => m.method === 'turn/start' && m.params.clientUserMessageId === clientId).length, 1);
+  assert(!f.received.some(m => m.method === 'thread/read'), 'never fetch unbounded history');
+});
+
+test('a slow reconciliation cannot block sibling attachment or clear a newer submission', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  let firstId = '';
+  let secondId = '';
+  let read: any;
+  f.handle((m, socket) => {
+    if (m.method === 'turn/steer') {
+      firstId = m.params.clientUserMessageId; socket.close(); return true;
+    }
+    return false;
+  });
+  await assert.rejects(f.runtime.submit('thread', text));
+  f.handle((m) => {
+    if (m.method === 'thread/items/list') { read = m; return true; }
+    if (m.method === 'thread/resume') {
+      f.respond(m, { thread: { id: m.params.threadId, status: { type: m.params.threadId === 'thread' ? 'active' : 'idle' }, turns: m.params.threadId === 'thread' ? f.thread.turns : [] } }); return true;
+    }
+    if (m.method === 'turn/steer') {
+      secondId = m.params.clientUserMessageId;
+      f.socket().send(JSON.stringify({ id: m.id, error: { code: -32603, message: 'unknown after enqueue' } })); return true;
+    }
+    return false;
+  });
+  await f.runtime.connect();
+  await until(() => !!read);
+  const oldRead = read;
+  await f.runtime.ensureThread({ threadId: 'sibling' });
+  assert.equal(f.runtime.snapshot('sibling').connection, 'ready');
+  f.send('item/completed', { turnId, item: { id: 'first-ack', type: 'userMessage', clientId: firstId } });
+  await until(() => !f.persisted());
+  await assert.rejects(f.runtime.submit('thread', text), /unknown after enqueue/);
+  assert.equal(f.persisted()?.id, secondId);
+  f.respond(oldRead, { data: [{ turnId, item: { id: 'first-ack', type: 'userMessage', clientId: firstId } }], nextCursor: null });
+  await delay(10);
+  assert.equal(f.persisted()?.id, secondId, 'stale lookup must not settle a later input');
+});
+
+test('unavailable history and non-advancing cursors retain evidence without disconnect or resend', async (t) => {
+  const f = await fixture(t);
+  f.handle((m, socket) => { if (m.method !== 'turn/start') return false; socket.close(); return true; });
+  await assert.rejects(f.runtime.submit('thread', text));
+  const receipt = f.persisted();
+  f.handle((m, socket) => {
+    if (m.method !== 'thread/items/list') return false;
+    socket.send(JSON.stringify({ id: m.id, error: { code: -32601, message: 'unknown method thread/items/list' } })); return true;
+  });
+  await f.runtime.connect();
+  await until(() => !!f.runtime.snapshot('thread').error);
+  assert.equal(f.runtime.snapshot('thread').connection, 'ready');
+  assert.deepEqual(f.persisted(), receipt);
+  f.handle((m) => {
+    if (m.method !== 'thread/items/list') return false;
+    f.respond(m, { data: [], nextCursor: 'does-not-advance' }); return true;
+  });
+  await assert.rejects(f.runtime.submit('thread', text), /游标未前进/);
+  assert.deepEqual(f.persisted(), receipt);
+  assert.equal(f.received.filter(m => m.method === 'turn/start').length, 1);
+});
+
+test('late user acceptance after a terminal settles the receipt without reviving output', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  let clientId = '';
+  f.handle((m, socket) => {
+    if (m.method !== 'turn/steer') return false;
+    clientId = m.params.clientUserMessageId;
+    socket.send(JSON.stringify({ id: m.id, error: { code: -32603, message: 'unknown after enqueue' } })); return true;
+  });
+  await assert.rejects(f.runtime.submit('thread', text));
+  f.thread.turns![0]!.status = 'completed';
+  f.send('turn/completed', { turn: { id: turnId, status: 'completed' } });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+  const cursor = f.runtime.recordsAfter('thread').cursor;
+  f.send('item/completed', { turnId, item: { id: 'late-user', type: 'userMessage', clientId } });
+  await until(() => !f.persisted());
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle');
+  assert.deepEqual(f.runtime.recordsAfter('thread', cursor).records, []);
 });
 
 test('internal RPC error preserves uncertain input', async (t) => {

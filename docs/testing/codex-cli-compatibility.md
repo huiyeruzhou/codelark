@@ -64,6 +64,8 @@ macOS arm64、Node.js 24 的隔离 CLI 验证：修复前 0.166.0 legacy TUI 为
 - **0.163.0 remote tmux 与 app-server 交叉验收通过。** `--tmux-view` 验证显示已有线程历史、打开窗口不发用户 turn、steer 进入同一 turn 且实际抵达模型、关闭窗口后任务仍 active、协议 stop 产生 interrupted 终态，以及随后新线程、拥有者关闭和崩溃恢复仍正常。原生 TUI 的隔离模型迁移由测试明确确认；测试线程提前命名，排除自动标题请求。
 - **0.153.4 app-server 对照通过。** 使用临时 global npm prefix 的 `bin/codex`，未回滚全局 CLI。最初误用 `node_modules/.bin` 被正确拒绝的尝试不计入版本兼容结论。
 
+追加输入确认丢失的回归也使用真实 0.163.0 app-server：先开始一轮，在其运行中 steer 第二条输入；故障注入仅丢弃客户端确认并断开连接，模型实际收到追加输入。原生 resume summary 保留首条 userMessage、遗漏第二条；`thread/items/list` 返回第二条的 clientId。恢复后收据解除，同一 thread 完成下一条输入，丢失确认的 steer 仅发送一次。未找到原生证据的场景由单元测试验证继续保留收据；不能把成功对账推广为“所有未知提交都可直接清除”。
+
 重跑协议与默认后端：
 
 ```bash

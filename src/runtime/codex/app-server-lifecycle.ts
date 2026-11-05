@@ -50,6 +50,12 @@ interface ThreadState {
   acceptedInputs: Map<string, string>;
   revision: number;
   serial: Promise<unknown>;
+  reconciliation?: { id: string; client: CodexAppServerClient; promise: Promise<void> };
+}
+
+interface AppServerItemsPage {
+  data: Array<{ turnId: string; item: AppServerItem }>;
+  nextCursor?: string | null;
 }
 
 interface AppServerResumeResult {
@@ -184,8 +190,8 @@ export class CodexAppServerLifecycle {
     const client = this.client!;
     // A thread can retain hundreds of MiB of tool output. Full-history resume
     // puts that history in one WebSocket response and can disconnect every
-    // thread sharing this backend. One summarized turn is sufficient to
-    // recover the current turn identity and an uncertain input's clientId.
+    // thread sharing this backend. A summary recovers the current turn, but
+    // omits later steers and cannot settle every uncertain submission.
     const result = await client.request<AppServerResumeResult>('thread/resume', {
       threadId,
       ...(resumeConfig ? { config: resumeConfig } : {}),
@@ -195,6 +201,12 @@ export class CodexAppServerLifecycle {
     this.assertAttached(state, client);
     const turns = result.initialTurnsPage?.data;
     this.applyThread(Array.isArray(turns) ? { ...result.thread, turns } : result.thread, true, state.revision !== before);
+    // History reconciliation must not hold up subscription of sibling threads.
+    const pendingId = state.snapshot.submission?.id;
+    void this.reconcileSubmission(state).catch((error) => {
+      if (this.threads.get(threadId) !== state || state.snapshot.submission?.id !== pendingId || this.client !== client) return;
+      state.snapshot.error = String(error); this.changed(threadId);
+    });
   }
 
   async refresh(threadId: string): Promise<void> {
@@ -210,6 +222,8 @@ export class CodexAppServerLifecycle {
       await this.connect();
       this.assertAttached(state);
       if (state.snapshot.connection !== 'ready') await this.resume(threadId);
+      this.assertAttached(state);
+      if (state.snapshot.submission) await this.reconcileSubmission(state);
       this.assertAttached(state);
       if (state.snapshot.submission) throw new Error('上一条输入的提交结果尚未确认；已保留记录，没有重复发送。请先检查此线程的当前状态。');
       if (state.snapshot.activity === 'unknown') await this.refresh(threadId);
@@ -265,6 +279,51 @@ export class CodexAppServerLifecycle {
     });
     state.serial = operation;
     return operation;
+  }
+
+  /** Read native evidence only; clientUserMessageId is correlation, not retry idempotency. */
+  private reconcileSubmission(state: ThreadState): Promise<void> {
+    const submission = state.snapshot.submission;
+    const client = this.client;
+    if (!submission || !client) return Promise.resolve();
+    if (state.reconciliation?.id === submission.id && state.reconciliation.client === client) return state.reconciliation.promise;
+    const threadId = state.snapshot.threadId;
+    const operation = (async () => {
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        this.assertAttached(state, client);
+        if (state.snapshot.submission?.id !== submission.id) return;
+        // Unlike a display summary, item pages contain every persisted user
+        // message, including steers. A known target turn avoids unrelated history.
+        const page = await client.request<AppServerItemsPage>('thread/items/list', {
+          threadId, ...(submission.turnId ? { turnId: submission.turnId } : {}),
+          limit: 25, sortDirection: 'desc', ...(cursor ? { cursor } : {}),
+        });
+        this.assertAttached(state, client);
+        if (state.snapshot.submission?.id !== submission.id) return;
+        if (!Array.isArray(page.data)) throw new Error('输入对账未返回原生 item 页；已保留未确认提交。');
+        const accepted = page.data.find(({ item }) => item.type === 'userMessage' && item.clientId === submission.id);
+        if (accepted) {
+          // Correlation is independent of UI/history replay and current activity.
+          // An old completed turn must not become the current turn or a new card.
+          state.acceptedInputs.set(submission.id, accepted.turnId);
+          state.snapshot.error = undefined;
+          this.saveSubmission(state, undefined);
+          return;
+        }
+        cursor = page.nextCursor || undefined;
+        if (cursor && seen.has(cursor)) throw new Error('输入对账分页游标未前进；已保留未确认提交。');
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+      // Missing history (including rollback/compaction) is not proof of rejection.
+      // Leave the receipt intact; a later refresh or submit can observe new evidence.
+    })();
+    const tracked = operation.finally(() => {
+      if (state.reconciliation?.promise === tracked) state.reconciliation = undefined;
+    });
+    state.reconciliation = { id: submission.id, client, promise: tracked };
+    return tracked;
   }
 
   async interrupt(threadId: string, expectedTurnId?: string): Promise<boolean> {
@@ -428,6 +487,11 @@ export class CodexAppServerLifecycle {
 
   private applyItem(threadId: string, turnId: string, item: AppServerItem, completed: boolean): void {
     const state = this.thread(threadId);
+    // Acceptance may arrive after turn/completed. Settle it without reviving output.
+    if (item.type === 'userMessage' && item.clientId) {
+      state.acceptedInputs.set(item.clientId, turnId);
+      if (state.snapshot.submission?.id === item.clientId) this.saveSubmission(state, undefined);
+    }
     // A terminal turn is immutable from the Bridge's point of view. Some
     // app-server versions can emit a delayed item completion after
     // turn/completed (for example when a yielded command process exits).
@@ -436,11 +500,6 @@ export class CodexAppServerLifecycle {
     const turn = state.turns.get(turnId);
     if (turn && turn.status !== 'inProgress') return;
     state.items.set(`${turnId}:${item.id}`, item);
-    // The correlation id identifies a user message; it is not an idempotency guarantee.
-    if (item.type === 'userMessage' && item.clientId) {
-      state.acceptedInputs.set(item.clientId, turnId);
-      if (state.snapshot.submission?.id === item.clientId) this.saveSubmission(state, undefined);
-    }
     let record = protocolItemRecord(threadId, turnId, item, completed);
     if (record?.type === 'message' && record.role === 'assistant') {
       const content = [...state.items.entries()].filter(([key, value]) => key.startsWith(`${turnId}:`) && value.type === 'agentMessage' && value.phase !== 'commentary')

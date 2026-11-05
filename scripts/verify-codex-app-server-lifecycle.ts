@@ -27,6 +27,7 @@ export async function verifyLifecycle(executable: string, evidence: string, expe
   let lifecycle: CodexAppServerLifecycle | undefined;
   const clients: CodexAppServerClient[] = [];
   let dropNextStartReply = false;
+  let dropNextSteerReply = false;
   let beforeNextStart: (() => Promise<void>) | undefined;
   let afterNextStartReply: (() => void) | undefined;
   const completed = (threadId: string, turnId: string, status = 'completed') => wire.find((entry) => {
@@ -64,8 +65,8 @@ export async function verifyLifecycle(executable: string, evidence: string, expe
             const before = beforeNextStart; beforeNextStart = undefined;
             await before();
           }
-          const lose = dropNextStartReply && method === 'turn/start';
-          if (lose) { dropNextStartReply = false; hidingLostReplyEvents = true; }
+          const lose = (dropNextStartReply && method === 'turn/start') || (dropNextSteerReply && method === 'turn/steer');
+          if (lose) { dropNextStartReply = false; dropNextSteerReply = false; hidingLostReplyEvents = true; }
           const response = await request<T>(method, params);
           wire.push({ direction: 'response', connection, message: { method, result: response } });
           if (method === 'turn/start' && afterNextStartReply) {
@@ -127,6 +128,36 @@ export async function verifyLifecycle(executable: string, evidence: string, expe
       await waitFor(() => completed(threadId, activeTurn), 'steer 后同轮完成');
       assert(model.requests.some((r) => JSON.stringify(r.body.input).includes('STEER_PROTOCOL_INPUT')));
       result.steerSameTurn = true;
+
+      const beforeLostSteer = model.requests.length;
+      const steering = model.enqueue({ text: 'BEFORE_LOST_STEER_RESPONSE' }, true);
+      model.enqueue({ text: 'AFTER_LOST_STEER_RESPONSE' });
+      const steerTurn = await lifecycle.submit(threadId, textInput('LOST_STEER_FIRST_INPUT'));
+      await waitFor(() => model.requests.length > beforeLostSteer || undefined, '丢失 steer 确认前模型已运行');
+      dropNextSteerReply = true;
+      await assert.rejects(lifecycle.submit(threadId, textInput('LOST_STEER_SECOND_INPUT')), /FIXTURE_LOST_REPLY/);
+      const uncertainSteer = submissions.get(threadId);
+      assert(uncertainSteer, '丢失回复必须先持久保留 steer 收据');
+      steering.release();
+      await waitFor(() => lifecycle!.snapshot(threadId).connection === 'ready'
+        && lifecycle!.snapshot(threadId).activity === 'idle' || undefined, '原 turn 在断线期间完成并恢复终态');
+      assert(model.requests.some(r => JSON.stringify(r.body.input).includes('LOST_STEER_SECOND_INPUT')));
+      await lifecycle.refresh(threadId);
+      await waitFor(() => !submissions.has(threadId) || undefined, '分页原生证据解除 steer 阻塞');
+      assert.equal(sent('turn/steer', 'LOST_STEER_SECOND_INPUT').length, 1, '已接受的追加输入绝不能重发');
+      assert(sent('thread/items/list').some(entry => (entry.message as any).params.turnId === steerTurn));
+      const resumedSummary = wire.filter(entry => entry.direction === 'response' && (entry.message as any).method === 'thread/resume')
+        .flatMap(entry => (entry.message as any).result.initialTurnsPage?.data || []).find(turn => turn.id === steerTurn);
+      assert(resumedSummary && !resumedSummary.items.some((item: any) => item.clientId === uncertainSteer.id),
+        '原生 summary 确实遗漏同轮第二条输入，不能用摘要当完整接收证据');
+      assert(wire.some(entry => entry.direction === 'response' && (entry.message as any).method === 'thread/items/list'
+        && (entry.message as any).result.data.some((entry: any) => entry.turnId === steerTurn && entry.item.clientId === uncertainSteer.id)),
+        '解除收据必须来自真实原生分页确认');
+      model.enqueue({ text: 'AFTER_STEER_RECOVERY_RESPONSE' });
+      const nextTurn = await lifecycle.submit(threadId, textInput('AFTER_STEER_RECOVERY_INPUT'));
+      await waitFor(() => completed(threadId, nextTurn), '同一 thread 可继续接受新输入');
+      assert.notEqual(nextTurn, steerTurn);
+      result.lostSteerRecovery = { clientId: uncertainSteer.id, turnId: steerTurn, nextTurnId: nextTurn, sentOnce: true };
 
       // 另一真实客户端在 idle 判断后抢先开始：0.145 的响应 ID 会是非原生 submission ID。
       const racingClient = await CodexAppServerClient.connect(endpoint);
