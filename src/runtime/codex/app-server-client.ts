@@ -111,10 +111,7 @@ export class CodexAppServerClient {
         socket.once('close', () => reject(new Error('Codex app-server closed before initialization')));
       });
       client.serverInfo = await client.request('initialize', {
-        // Codex propagates the first app-server client's name as the model-request
-        // originator. Use its headless CLI identity so compatible providers route
-        // protocol turns through the same supported path as ordinary Codex CLI.
-        clientInfo: { name: 'codex_cli', version: '0.5.1' },
+        clientInfo: { name: 'codelark', version: '0.5.1' },
         capabilities: { experimentalApi: true },
       }, connectTimeoutMs);
       client.send({ method: 'initialized' });

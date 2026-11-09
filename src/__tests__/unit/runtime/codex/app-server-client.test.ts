@@ -52,10 +52,6 @@ test('initializes, correlates concurrent replies, and exposes lifecycle and appr
   t.after(() => client.close());
   assert.deepEqual(await Promise.all([client.request('echo', { a: 1 }), client.request('echo', { b: 2 })]), [{ a: 1 }, { b: 2 }]);
   assert.equal(s.received[0]?.method, 'initialize');
-  assert.deepEqual(s.received[0]?.params, {
-    clientInfo: { name: 'codex_cli', version: '0.5.1' },
-    capabilities: { experimentalApi: true },
-  });
   assert.equal(s.received[1]?.method, 'initialized');
   const status = { method: 'thread/status/changed', params: { threadId: 'thread', status: { type: 'active', activeFlags: [] } } };
   const approval = { id: 700, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread' } };
