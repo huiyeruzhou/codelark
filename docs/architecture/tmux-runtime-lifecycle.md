@@ -126,7 +126,7 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 
 `app-server-local.ts` 使用当前安装的普通 `codex app-server --listen`，不调用要求 managed standalone 安装的 `app-server daemon start`，不替用户安装或复制二进制。各平台的 npm 入口解析到同一安装自带的原生 Codex（包括 Windows 的 `codex.exe`），避免只持有命令或 Node 包装层的句柄。私有启动保留 `CODELARK_CODEX_BASE_URL` 与 `CODELARK_CODEX_API_KEY > CODEX_API_KEY > OPENAI_API_KEY` 的既有优先级。原生 app-server 不自动读取环境中的登录 key；有显式 key 时，私有子进程使用官方 `cli_auth_credentials_store="ephemeral"`，核对有效配置后通过 `account/login/start` 注入内存认证。密钥不放进命令参数，不写入或替换用户的 `auth.json`；已有服务复用不修改其认证。没有显式 key 时沿用原有 Codex 登录配置。
 
-地址由规范化的 `CODELARK_HOME` 哈希确定；目录尚不存在时先解析最近存在父路径的 realpath，再拼接未创建的后缀，确保 macOS `/tmp` 与 symlink 父目录不会使创建前后的地址改变。Unix 使用 `/tmp/codelark-codex-<hash>/rpc.sock`，目录属于当前用户且权限为 `0700`；Windows 使用确定的 `127.0.0.1:40000–48999` 端口，避开默认动态端口及其系统保留范围（49152–65535）；自定义系统保留或地址冲突仍明确报错。准备时先以 `initialize` 核对 `CODEX_HOME`，再查询 `thread/loaded/list`；同地址已有兼容后端就连接它。地址已被其他程序或不同 `CODEX_HOME` 使用、握手/鉴权/协议失败均直接报错。已有但不可连接、且没有本进程创建证据的 Unix socket 不会被删除或替换；确定的端口冲突也不会改选另一个地址。
+地址由规范化的 `CODELARK_HOME` 哈希确定；目录尚不存在时先解析最近存在父路径的 realpath，再拼接未创建的后缀，确保 macOS `/tmp` 与 symlink 父目录不会使创建前后的地址改变。Unix 使用 `/tmp/codelark-codex-<hash>/rpc.sock`，目录属于当前用户且权限为 `0700`；Windows 使用确定的 `127.0.0.1:40000–48999` 端口，避开默认动态端口及其系统保留范围（49152–65535）；自定义系统保留或地址冲突仍明确报错。准备时先以 `codex_cli` 客户端身份完成 `initialize`，避免原生 app-server 把第三方连接名固化成模型请求的未知 originator；客户端版本仍记录 CodeLark 版本。随后核对 `CODEX_HOME`，再查询 `thread/loaded/list`；同地址已有兼容后端就连接它。地址已被其他程序或不同 `CODEX_HOME` 使用、握手/鉴权/协议失败均直接报错。已有但不可连接、且没有本进程创建证据的 Unix socket 不会被删除或替换；确定的端口冲突也不会改选另一个地址。
 
 本机版本升级的已验证范围与 legacy TUI 未通过项见 [Codex CLI 兼容性验收](../testing/codex-cli-compatibility.md)。
 
