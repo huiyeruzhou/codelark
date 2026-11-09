@@ -25,7 +25,9 @@ on:
 jobs:
   operator-status:
     name: Web app-server status · Chromium
-    runs-on: ubuntu-latest
+    # Playwright 1.56.1 does not ship Chromium dependencies for Ubuntu 26.04.
+    # Keep the browser acceptance image paired with its verified toolchain.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

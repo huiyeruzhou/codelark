@@ -193,6 +193,25 @@ test('large live command output stays bounded in lifecycle memory and mirror rec
   assert.equal(state.turns.get(turnId)?.items, undefined, 'turn status must not retain a second copy of tool outputs');
 });
 
+test('active file changes remain available to approval cards and are released at turn completion', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  const fileChange = {
+    id: 'approval-change',
+    type: 'fileChange',
+    status: 'inProgress',
+    changes: [{ path: 'src/app.ts', kind: { type: 'update' }, diff: '@@\n-old\n+new' }],
+  };
+
+  f.send('item/started', { turnId, item: fileChange });
+  await until(() => f.runtime.item('thread', turnId, fileChange.id)?.type === 'fileChange');
+  assert.deepEqual(f.runtime.item('thread', turnId, fileChange.id)?.changes, fileChange.changes);
+
+  f.send('turn/completed', { turn: { id: turnId, status: 'completed', items: [fileChange] } });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+  assert.equal(f.runtime.item('thread', turnId, fileChange.id), undefined);
+});
+
 test('bounded resume can stop an active turn and safely stop again when idle', async (t) => {
   const f = await fixture(t);
   const turnId = await f.runtime.submit('thread', text);
@@ -329,6 +348,53 @@ test('lost steer acknowledgement is recovered beyond the first user message and 
   assert(!f.runtime.recordsAfter('thread').records.some(r => r.content.includes('echo working')), 'reconciliation must not replay historical tools');
   assert.equal(await f.runtime.submit('thread', text), turnId, 'a new input must work on the same thread');
   assert.equal(f.received.filter(m => m.method === 'turn/steer' && m.params.clientUserMessageId === clientId).length, 1);
+});
+
+test('unrelated metadata before resume cannot hide a completed turn or replay a lost steer', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  let clientId = '';
+  f.handle((message, socket) => {
+    if (message.method === 'turn/steer') {
+      clientId = message.params.clientUserMessageId;
+      f.thread.status = { type: 'idle' };
+      f.thread.turns![0] = {
+        id: turnId,
+        status: 'completed',
+        items: [
+          ...(f.thread.turns![0]!.items || []),
+          { id: 'accepted-steer', type: 'userMessage', clientId, content: message.params.input },
+          { id: 'completed-answer', type: 'agentMessage', text: 'finished while disconnected' },
+        ],
+      };
+      socket.close();
+      return true;
+    }
+    if (message.method === 'thread/resume') {
+      // Codex 0.167 can emit optional metadata and an item update before the
+      // RPC response. Neither can make a later terminal snapshot regress.
+      f.send('thread/goal/cleared', {});
+      f.send('item/completed', {
+        turnId,
+        item: { id: 'late-progress', type: 'agentMessage', phase: 'commentary', text: 'finishing' },
+      });
+    }
+    return false;
+  });
+
+  await assert.rejects(f.runtime.submit('thread', [{ type: 'text', text: 'append exactly once' }]));
+  await f.runtime.connect();
+  await until(() => !f.persisted());
+
+  assert.equal(f.runtime.snapshot('thread').connection, 'ready');
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle');
+  assert.equal(f.runtime.snapshot('thread').turnId, undefined);
+  assert.equal(f.received.filter((message) => (
+    message.method === 'turn/steer' && message.params.clientUserMessageId === clientId
+  )).length, 1);
+  assert(f.runtime.recordsAfter('thread').records.some((record) => (
+    record.turnId === turnId && record.type === 'task_complete'
+  )));
 });
 
 test('ready connection reconciles a lost start in an older turn before accepting new input', async (t) => {

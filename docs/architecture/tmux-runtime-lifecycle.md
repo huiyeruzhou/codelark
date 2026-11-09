@@ -190,6 +190,8 @@ WebSocket 握手和 `initialize` 默认各有 5 秒期限；建立连接后的�
 
 恢复订阅使用 `excludeTurns=true` 和最近一轮的 `summary`，避免完整历史塞满共享 WebSocket。摘要仅供显示，可能省略同一轮后续的 steer；它也不包含更早轮次，不能作为“未接收”的依据。有未确认收据时，后台通过 `thread/items/list` 每页最多 25 个 item，按游标向前查找匹配的 `userMessage.clientId`；steer 只查原目标 turn，start 查该 thread。对账不阻塞其他 thread 的恢复，也不将查到的旧工具、正文或终态重放为新输出。即使终态已经到达，迟到的 user 接受事件仍能完成对账。
 
+恢复合并按 turn 生命周期单向收敛：监听期间收到的 item 或状态通知继续优先于 resume 返回的旧 `inProgress` 快照，但 resume 已确认的 completed、failed 或 interrupted 终态可以结束本地仍在进行的 turn。`thread/goal/cleared` 等不改变 turn 生命周期的可选元数据不会使同一轮恢复快照失效。活动 turn 的 `fileChange` item 会保留到终态，供随后到达的文件审批读取真实 diff；turn 结束后仍统一释放 item 快照。
+
 后续提交在检查旧收据前会先进行同样的只读对账，同一收据、同一连接的并发查询共用一个过程。找到原生接受证据后只解除对应收据，不重发原输入；旧连接或旧收据的回包不能清掉新收据。分页到末尾仍未找到、接口不可用或查询失败时保留未知状态及证据，后续 refresh/submit 可以重新查验；不按超时自动清锁，也不退回全历史读取。
 
 审批监听不自动批准。Desktop 与 Bridge 可以同时看到请求，任一端答复后，另一个端通过 resolved/终态作废旧操作。连接断开使本端旧请求失效；重新 resume 重放的新请求重新注册。问答保留原始问题和选项，不把问答当作允许/拒绝审批。运行时结果同时携带 completed/failed/aborted，SDK 消费、最终卡片与健康状态使用同一终态；原生 interrupted 表示已停止，不发送执行异常，也不依赖本地 AbortSignal 才识别停止。

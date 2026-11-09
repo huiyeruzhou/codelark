@@ -71,6 +71,21 @@ interface AppServerResumeResult {
   initialTurnsPage?: { data?: AppServerTurn[] };
 }
 
+// A resume response is stale only when a notification changed state that the
+// lifecycle itself owns. Optional metadata such as thread/goal/cleared must
+// not suppress a completed turn returned by the same resume.
+const STATEFUL_THREAD_NOTIFICATIONS = new Set([
+  'thread/closed',
+  'thread/status/changed',
+  'turn/started',
+  'turn/completed',
+  'turn/plan/updated',
+  'item/started',
+  'item/completed',
+  'item/agentMessage/delta',
+  'item/commandExecution/outputDelta',
+]);
+
 /** One backend owns execution. This object owns only a connection and thread subscriptions. */
 export class CodexAppServerLifecycle {
   private client?: CodexAppServerClient;
@@ -459,7 +474,11 @@ export class CodexAppServerLifecycle {
       if (history && !knownTurn && turn.id !== activeHistoryTurnId && !confirmsSubmission) continue;
       if (history && turn.status === 'inProgress' && turn.id !== activeHistoryTurnId && !confirmsSubmission) continue;
       const current = state.turns.get(turn.id);
-      if (newerEvents && current) continue;
+      // Turn completion is monotonic: a terminal resume snapshot can safely
+      // settle an observed in-progress turn even if item/status events arrived
+      // while the RPC was pending. Never let an older in-progress snapshot
+      // overwrite a newer local state.
+      if (newerEvents && current && turn.status === 'inProgress') continue;
       if (!current) this.applyTurn(thread.id, { ...turn, status: 'inProgress' });
       for (const item of turn.items || []) this.applyItem(thread.id, turn.id, item, true);
       this.applyTurn(thread.id, turn);
@@ -531,9 +550,9 @@ export class CodexAppServerLifecycle {
           ),
         }
       : item;
-    // Only item kinds with live deltas need a retained snapshot. Other tool
-    // records are projected immediately and must not extend the turn lifetime.
-    if (itemType === 'commandexecution' || itemType === 'agentmessage') {
+    // Retain items that receive live deltas or are referenced by a later
+    // server request. Everything is still released when the turn terminates.
+    if (itemType === 'commandexecution' || itemType === 'agentmessage' || itemType === 'filechange') {
       state.items.set(itemKey, retainedItem);
     }
     let record = protocolItemRecord(threadId, turnId, retainedItem, completed);
@@ -569,8 +588,8 @@ export class CodexAppServerLifecycle {
       }
       return;
     }
-    state.revision += 1;
     if (message.id !== undefined && message.method) {
+      state.revision += 1;
       const request: AppServerPendingRequest = { key: `${this.identity}:${this.generation}:${message.id}`, id: message.id, threadId, turnId: p.turnId, method: message.method, params: p };
       if (state.snapshot.requests.some((r) => r.key === request.key)) return;
       state.snapshot.requests.push(request); state.snapshot.activity = 'waiting';
@@ -578,6 +597,7 @@ export class CodexAppServerLifecycle {
       for (const listener of this.requestListeners) listener(request);
       return;
     }
+    if (message.method && STATEFUL_THREAD_NOTIFICATIONS.has(message.method)) state.revision += 1;
     switch (message.method) {
       case 'thread/closed':
         state.snapshot.connection = 'disconnected'; state.snapshot.activity = 'unknown';
