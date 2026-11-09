@@ -4,6 +4,35 @@ import { buildToolCallDetailFromInput } from '../../shared/progress/tool-call-de
 import { CONTEXT_COMPACTED_NOTICE } from './session-index/internal-control-events.js';
 import { parseMcpToolCallItem } from './mcp-tool-call.js';
 
+export const APP_SERVER_MIRROR_TOOL_TEXT_LIMIT = 32_000;
+const APP_SERVER_MIRROR_TOOL_TEXT_OMISSION = '\n\n…（CodeLark 已省略过长工具输出）';
+
+/**
+ * App-server command deltas contain the whole accumulated output on every
+ * lifecycle revision. Keep the same bounded prefix the card layer exposes so
+ * hashing and retained mirror state cannot grow with an unbounded shell log.
+ */
+export function boundAppServerMirrorToolText(value: string): string {
+  if (value.length <= APP_SERVER_MIRROR_TOOL_TEXT_LIMIT) return value;
+  const prefixLength = Math.max(0, APP_SERVER_MIRROR_TOOL_TEXT_LIMIT - APP_SERVER_MIRROR_TOOL_TEXT_OMISSION.length);
+  let prefix = value.slice(0, prefixLength);
+  if (/[\uD800-\uDBFF]/u.test(prefix.at(-1) || '')) prefix = prefix.slice(0, -1);
+  return `${prefix}${APP_SERVER_MIRROR_TOOL_TEXT_OMISSION}`;
+}
+
+function boundedToolValue(value: unknown): unknown {
+  if (typeof value === 'string') return boundAppServerMirrorToolText(value);
+  if (value == null || typeof value !== 'object') return value;
+  try {
+    const encoded = JSON.stringify(value);
+    return encoded.length <= APP_SERVER_MIRROR_TOOL_TEXT_LIMIT
+      ? value
+      : boundAppServerMirrorToolText(encoded);
+  } catch {
+    return boundAppServerMirrorToolText(String(value));
+  }
+}
+
 // Only the common v2 fields are required. New item kinds remain visible as tools.
 export interface AppServerItem {
   id: string;
@@ -134,23 +163,37 @@ export function protocolItemRecord(threadId: string, turnId: string, item: AppSe
   if (itemType === 'contextcompaction') return completed ? make({ type: 'message', role: 'commentary', content: CONTEXT_COMPACTED_NOTICE }) : undefined;
   const mcpCall = parseMcpToolCallItem(item);
   if (mcpCall) {
+    const boundedInput = boundedToolValue(mcpCall.input);
+    const boundedOutput = boundAppServerMirrorToolText(mcpCall.output);
+    const boundedError = boundAppServerMirrorToolText(mcpCall.errorText);
     return make({
       type: completed ? 'tool_finished' : 'tool_started',
       toolId: mcpCall.id || item.id,
       toolName: mcpCall.toolName,
-      toolInput: mcpCall.input,
-      toolDetail: mcpCall.detail,
-      content: completed ? mcpCall.errorText || mcpCall.output : '',
+      toolInput: boundedInput,
+      toolDetail: {
+        ...mcpCall.detail,
+        ...(typeof mcpCall.input !== 'undefined' ? { input: boundedInput } : {}),
+        ...(mcpCall.output ? { output: boundedOutput } : {}),
+        ...(mcpCall.errorText ? { errorText: boundedError } : {}),
+      },
+      content: completed ? boundedError || boundedOutput : '',
       isError: mcpCall.isError,
     });
   }
   const name = itemType === 'commandexecution' ? 'Bash' : itemType === 'filechange' ? 'apply_patch' : item.type;
-  const patchText = itemType === 'filechange' ? appServerFileChangePatchText(item) : '';
+  const patchText = itemType === 'filechange' ? boundAppServerMirrorToolText(appServerFileChangePatchText(item)) : '';
+  const output = boundAppServerMirrorToolText(
+    item.aggregatedOutput || (completed ? JSON.stringify(item.result ?? item.error ?? '') : ''),
+  );
+  const toolInput = patchText || (itemType === 'commandexecution'
+    ? { command: boundAppServerMirrorToolText(item.command || '') }
+    : boundedToolValue(item));
   return make({
     type: completed ? 'tool_finished' : 'tool_started', toolId: item.id, toolName: name,
-    toolInput: patchText || (item.command ? { command: item.command } : item),
-    content: item.aggregatedOutput || (completed ? JSON.stringify(item.result ?? item.error ?? '') : ''),
-    ...(itemType === 'commandexecution' ? { toolDetail: { kind: 'exec_command' as const, command: item.command, output: item.aggregatedOutput, exitCode: item.exitCode } } : {}),
+    toolInput,
+    content: output,
+    ...(itemType === 'commandexecution' ? { toolDetail: { kind: 'exec_command' as const, command: boundAppServerMirrorToolText(item.command || ''), output, exitCode: item.exitCode } } : {}),
     ...(patchText ? { toolDetail: buildToolCallDetailFromInput('apply_patch', patchText) || undefined } : {}),
     isError: item.status === 'failed' || (typeof item.exitCode === 'number' && item.exitCode !== 0),
   });

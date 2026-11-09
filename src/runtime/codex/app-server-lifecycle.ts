@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { BridgeMirrorRecord } from '../contracts.js';
 import { AppServerRpcError, CodexAppServerClient, isUnsupportedAppServerMethod, type AppServerMessage } from './app-server-client.js';
-import { protocolItemRecord, protocolRecord, protocolTurnRecord, type AppServerItem, type AppServerThread, type AppServerTurn } from './app-server-events.js';
+import {
+  boundAppServerMirrorToolText,
+  protocolItemRecord,
+  protocolRecord,
+  protocolTurnRecord,
+  type AppServerItem,
+  type AppServerThread,
+  type AppServerTurn,
+} from './app-server-events.js';
 
 export type AppServerInput = { type: 'text'; text: string; text_elements?: unknown[] } | { type: 'localImage'; path: string };
 export interface AppServerThreadOptions {
@@ -469,7 +477,14 @@ export class CodexAppServerLifecycle {
     if (turn.status !== 'inProgress') {
       for (const item of turn.items || []) this.applyItem(threadId, turn.id, item, true);
     }
-    state.turns.set(turn.id, turn);
+    // The lifecycle only needs terminal identity and status after emitting the
+    // item records. Retaining turn.items duplicates every command output.
+    const retainedTurn: AppServerTurn = {
+      id: turn.id,
+      status: turn.status,
+      ...(turn.error ? { error: turn.error } : {}),
+    };
+    state.turns.set(turn.id, retainedTurn);
     if (turn.status === 'inProgress') {
       if (state.snapshot.turnId !== turn.id) this.options.saveActiveTurn?.(threadId, turn.id);
       state.snapshot.turnId = turn.id;
@@ -482,6 +497,11 @@ export class CodexAppServerLifecycle {
       state.snapshot.requests = state.snapshot.requests.filter((r) => r.turnId && r.turnId !== turn.id);
     }
     this.append(threadId, protocolTurnRecord(threadId, turn));
+    if (turn.status !== 'inProgress') {
+      for (const key of state.items.keys()) {
+        if (key.startsWith(`${turn.id}:`)) state.items.delete(key);
+      }
+    }
     this.changed(threadId);
   }
 
@@ -499,8 +519,24 @@ export class CodexAppServerLifecycle {
     // turn it already finalized.
     const turn = state.turns.get(turnId);
     if (turn && turn.status !== 'inProgress') return;
-    state.items.set(`${turnId}:${item.id}`, item);
-    let record = protocolItemRecord(threadId, turnId, item, completed);
+    const itemKey = `${turnId}:${item.id}`;
+    const previousItem = state.items.get(itemKey);
+    const itemType = item.type.toLowerCase();
+    const retainedItem = itemType === 'commandexecution'
+      ? {
+          ...previousItem,
+          ...item,
+          aggregatedOutput: boundAppServerMirrorToolText(
+            item.aggregatedOutput ?? previousItem?.aggregatedOutput ?? '',
+          ),
+        }
+      : item;
+    // Only item kinds with live deltas need a retained snapshot. Other tool
+    // records are projected immediately and must not extend the turn lifetime.
+    if (itemType === 'commandexecution' || itemType === 'agentmessage') {
+      state.items.set(itemKey, retainedItem);
+    }
+    let record = protocolItemRecord(threadId, turnId, retainedItem, completed);
     if (record?.type === 'message' && record.role === 'assistant') {
       const content = [...state.items.entries()].filter(([key, value]) => key.startsWith(`${turnId}:`) && value.type === 'agentMessage' && value.phase !== 'commentary')
         .map(([, value]) => value.text || '').filter(Boolean).join('\n\n');
@@ -557,7 +593,10 @@ export class CodexAppServerLifecycle {
       case 'item/commandExecution/outputDelta': {
         const key = `${p.turnId}:${p.itemId}`;
         const item = state.items.get(key);
-        if (item) this.applyItem(threadId, p.turnId, { ...item, aggregatedOutput: (item.aggregatedOutput || '') + (p.delta || '') }, false);
+        if (item) this.applyItem(threadId, p.turnId, {
+          ...item,
+          aggregatedOutput: boundAppServerMirrorToolText((item.aggregatedOutput || '') + (p.delta || '')),
+        }, false);
         break;
       }
       case 'thread/status/changed':

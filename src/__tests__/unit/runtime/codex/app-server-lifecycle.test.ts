@@ -4,7 +4,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { CodexAppServerLifecycle, type AppServerSubmission } from '../../../../runtime/codex/app-server-lifecycle.js';
 import { AppServerRpcError, CodexAppServerClient, isCodexActiveWriterError, isUnsupportedAppServerMethod } from '../../../../runtime/codex/app-server-client.js';
-import type { AppServerThread, AppServerTurn } from '../../../../runtime/codex/app-server-events.js';
+import {
+  APP_SERVER_MIRROR_TOOL_TEXT_LIMIT,
+  type AppServerThread,
+  type AppServerTurn,
+} from '../../../../runtime/codex/app-server-events.js';
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 200; i++) { if (check()) return; await delay(5); }
@@ -127,6 +131,66 @@ test('completion before start response never resurrects an active turn or drops 
   assert.equal(await f.runtime.submit('thread', text), 'fast');
   assert.equal(f.runtime.snapshot('thread').activity, 'idle');
   assert(f.runtime.recordsAfter('thread').records.some((r) => r.content === 'finished'));
+});
+
+test('large live command output stays bounded in lifecycle memory and mirror records', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  const item = {
+    id: 'large-command',
+    type: 'commandExecution',
+    command: 'produce a large diagnostic stream',
+    status: 'inProgress',
+    aggregatedOutput: '',
+  };
+  f.send('item/started', { turnId, item });
+  const chunk = 'x'.repeat(APP_SERVER_MIRROR_TOOL_TEXT_LIMIT);
+  for (let index = 0; index < 2; index += 1) {
+    f.send('item/commandExecution/outputDelta', { turnId, itemId: item.id, delta: chunk });
+  }
+
+  await until(() => f.runtime.recordsAfter('thread').records.some((record) => (
+    record.type === 'tool_started' && record.toolId === item.id && record.content.includes('CodeLark')
+  )));
+  const running = f.runtime.recordsAfter('thread').records.find((record) => (
+    record.type === 'tool_started' && record.toolId === item.id
+  ));
+  assert(running);
+  assert(running.content.length <= APP_SERVER_MIRROR_TOOL_TEXT_LIMIT);
+  assert.match(running.content, /CodeLark.*省略/u);
+  const saturatedCursor = f.runtime.recordsAfter('thread').cursor;
+  for (let index = 0; index < 6; index += 1) {
+    f.send('item/commandExecution/outputDelta', { turnId, itemId: item.id, delta: chunk });
+  }
+  await delay(20);
+  assert.deepEqual(
+    f.runtime.recordsAfter('thread', saturatedCursor).records,
+    [],
+    'additional output after the retained prefix must not churn mirror revisions',
+  );
+
+  const completedItem = {
+    ...item,
+    status: 'completed',
+    exitCode: 0,
+    aggregatedOutput: 'y'.repeat(APP_SERVER_MIRROR_TOOL_TEXT_LIMIT * 8),
+  };
+  f.send('item/completed', { turnId, item: completedItem });
+  f.send('turn/completed', {
+    turn: { id: turnId, status: 'completed', items: [completedItem] },
+  });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+
+  const finished = f.runtime.recordsAfter('thread').records.find((record) => (
+    record.type === 'tool_finished' && record.toolId === item.id
+  ));
+  assert(finished);
+  assert(finished.content.length <= APP_SERVER_MIRROR_TOOL_TEXT_LIMIT);
+  assert.match(finished.content, /CodeLark.*省略/u);
+
+  const state = (f.runtime as any).threads.get('thread');
+  assert.equal(state.items.size, 0, 'terminal turns must release item snapshots');
+  assert.equal(state.turns.get(turnId)?.items, undefined, 'turn status must not retain a second copy of tool outputs');
 });
 
 test('bounded resume can stop an active turn and safely stop again when idle', async (t) => {

@@ -122,6 +122,8 @@ Codex 0.160 的启动菜单有两种紧凑 footer：目录信任为 `enter conti
 
 用户要求以 app-server 重新划分完整生命周期，而非把协议探活接到旧的抓屏流程上。新线程默认启用 app-server；明确指定的地址、已保存的后端绑定和 `CODELARK_CODEX_APP_SERVER_URL` 优先。macOS 原有独立 Desktop 服务继续使用原管理方式，无 Desktop 或非 macOS 时由 Bridge 懒启动私有后端。既有 legacy Codex thread 在下一条输入前自动释放 CodeLark 自有的旧 writer，并恢复到 app-server；其他 runtime 不受影响。生产实现分别位于 `app-server-client.ts`（连接和错误）、`app-server-lifecycle.ts`（线程、轮次和请求）、`app-server-events.ts`（事件转换）、`app-server-registry.ts`（后端选择与持久记录）。Bridge 的普通输入、direct provider、停止和镜像复用这套服务；验收记录单独注明已验证范围。
 
+app-server 的工具输出可能远大于飞书卡片实际能展示的内容，而且 `item/commandExecution/outputDelta` 每次只表示新增片段。Bridge 不得把这些片段反复拼成无限增长的字符串后再对完整累计输出做序列化和哈希：这会让总计算量随输出长度平方增长，并阻塞同一进程内的飞书 WebSocket。生命周期层只保留与卡片展示合同一致的前 32,000 字符，明确标记后续内容已省略；达到上限后，相同投影不再产生新的 mirror revision。轮次结束后立即释放 item 快照，`turns` 只保留身份、状态和错误元数据，避免工具输出同时滞留在 turn、item 和 mirror record 中。Codex 自己的 rollout 仍保存完整原始输出；这里限制的是 Bridge 的实时展示投影，不改写或截断 Codex 归档。
+
 #### 默认私有后端的归属与兼容
 
 `app-server-local.ts` 使用当前安装的普通 `codex app-server --listen`，不调用要求 managed standalone 安装的 `app-server daemon start`，不替用户安装或复制二进制。各平台的 npm 入口解析到同一安装自带的原生 Codex（包括 Windows 的 `codex.exe`），避免只持有命令或 Node 包装层的句柄。私有启动保留 `CODELARK_CODEX_BASE_URL` 与 `CODELARK_CODEX_API_KEY > CODEX_API_KEY > OPENAI_API_KEY` 的既有优先级。原生 app-server 不自动读取环境中的登录 key；有显式 key 时，私有子进程使用官方 `cli_auth_credentials_store="ephemeral"`，核对有效配置后通过 `account/login/start` 注入内存认证。密钥不放进命令参数，不写入或替换用户的 `auth.json`；已有服务复用不修改其认证。没有显式 key 时沿用原有 Codex 登录配置。
