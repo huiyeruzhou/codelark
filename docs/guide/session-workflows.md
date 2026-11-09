@@ -169,6 +169,8 @@ CodeLark 默认通过 tmux 运行本地 agent。只有当前 TUI 已退出或确
 
 `/tmux-screen` 只查看当前绑定的 tmux session，不会自动恢复已退出的 TUI，也不会等待正在排队的普通对话。带 `5s` 会启动定时刷新，最低 3 秒；`stop` 停止当前聊天的刷新。
 
+Codex 使用 app-server 时，名称以 `-view` 结尾的 tmux session 只是连接同一 thread 的查看客户端，不是消息执行通道。查看客户端可能停在 `Resume paused goal?` 等交互提示；这只影响该 view，不会阻塞通过 app-server 提交的消息。`/tmux-screen` 会明确标注这种情况。
+
 手动输入 tmux：
 
 ```text

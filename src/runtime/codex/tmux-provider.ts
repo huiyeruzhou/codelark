@@ -331,6 +331,13 @@ function inferSelectionPromptKind(
   if (hasChoice('replace_current_goal') && hasChoice('cancel')) {
     return 'goal';
   }
+  if (
+    /^\s*Resume paused goal\?\s*$/im.test(tail)
+    && hasChoice('option_1')
+    && hasChoice('option_2')
+  ) {
+    return 'goal';
+  }
   if (hasCodexModelMigrationPrompt(tail)) {
     return 'model_migration';
   }

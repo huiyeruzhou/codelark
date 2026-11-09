@@ -9982,6 +9982,76 @@ enabled = true
     }
   });
 
+  it('labels an app-server remote tmux as a view that cannot block protocol turns', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldCaptureText = process.env.TMUX_FAKE_CAPTURE_TEXT;
+    const oldExistingSessions = process.env.TMUX_FAKE_EXISTING_SESSIONS;
+
+    try {
+      const address = { channelType: 'feishu', chatId: 'chat-codex-app-server-view' } as const;
+      const binding = router.createBinding(address, '/tmp/codex-app-server-view');
+      const threadId = 'thread-view';
+      const viewName = `codex_${threadId}-view`;
+      process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+      process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+      process.env.TMUX_FAKE_EXISTING_SESSIONS = viewName;
+      process.env.TMUX_FAKE_CAPTURE_TEXT = [
+        'Resume paused goal?',
+        'Goal: continue the saved task',
+        '› 1. Resume goal   Mark it active and continue when idle',
+        '  2. Leave paused  Keep it paused; use /goal resume later',
+        'Press enter to confirm or esc to cancel',
+      ].join('\n');
+      store.updateSession(binding.bridgeSessionId, {
+        runtime: {
+          codex: { threadId, appServerEndpoint: 'unix:///tmp/codex-app-server-view.sock' },
+          general: { tmuxSessionName: viewName },
+        },
+      });
+      const sent: string[] = [];
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: { text: string }) => {
+          sent.push(message.text);
+          return { ok: true, messageId: `reply-app-server-view-${sent.length}` };
+        },
+      };
+
+      await handleBridgeCommand(
+        adapter,
+        { address, text: '/tmux-screen', messageId: 'incoming-app-server-view-screen' } as any,
+        '/tmux-screen',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      const response = sent.at(-1) || '';
+      assert.match(response, /Codex app-server 查看屏幕/);
+      assert.match(response, /用途.*只读查看入口（非执行通道）/s);
+      assert.match(response, /不是消息执行通道/);
+      assert.match(response, /不会阻塞 app-server 请求/);
+      assert.match(response, /当前查看客户端停在 Codex goal selection prompt/);
+      assert.match(response, /只影响这个 view/);
+      assert.match(response, /Resume paused goal\?/);
+      assert.doesNotMatch(response, /tmux 当前屏幕状态/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldCaptureText === undefined) delete process.env.TMUX_FAKE_CAPTURE_TEXT;
+      else process.env.TMUX_FAKE_CAPTURE_TEXT = oldCaptureText;
+      if (oldExistingSessions === undefined) delete process.env.TMUX_FAKE_EXISTING_SESSIONS;
+      else process.env.TMUX_FAKE_EXISTING_SESSIONS = oldExistingSessions;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('binds a tmux session, sends literal text and tmux-key special keys, and returns a capture', { timeout: 30_000 }, async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();

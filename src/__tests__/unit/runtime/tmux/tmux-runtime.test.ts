@@ -589,6 +589,7 @@ describe('codex tmux runtime', () => {
     ].join('\n');
     const prompt = parseCodexTuiSelectionPrompt(screen);
     assert.ok(prompt);
+    assert.equal(prompt.kind, 'goal');
 
     let ready = false;
     let startupWaiters = 0;

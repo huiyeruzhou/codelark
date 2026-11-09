@@ -97,6 +97,12 @@ export interface MirrorFeedbackController {
 
 const MIRROR_TERMINAL_ERROR_STATUS_MAX_CHARS = 600;
 
+interface StructuredRuntimeError {
+  type: string;
+  message: string;
+  code: string;
+}
+
 function compactTerminalErrorStatus(value: string): string {
   const normalized = value.replace(/\s+/gu, ' ').trim();
   const chars = Array.from(normalized);
@@ -104,10 +110,52 @@ function compactTerminalErrorStatus(value: string): string {
   return `${chars.slice(0, MIRROR_TERMINAL_ERROR_STATUS_MAX_CHARS - 1).join('')}…`;
 }
 
+function parseStructuredRuntimeError(errorText: string | undefined): StructuredRuntimeError | null {
+  const raw = (errorText || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const root = parsed && typeof parsed === 'object'
+      ? ((parsed as { error?: unknown }).error && typeof (parsed as { error?: unknown }).error === 'object'
+          ? (parsed as { error: Record<string, unknown> }).error
+          : parsed as Record<string, unknown>)
+      : null;
+    if (!root) return null;
+    return {
+      type: typeof root.type === 'string' ? root.type.trim() : '',
+      message: typeof root.message === 'string' ? root.message.trim() : '',
+      code: typeof root.code === 'string' || typeof root.code === 'number' ? String(root.code).trim() : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function formatMirrorTerminalErrorDetail(errorText: string | undefined): string {
+  const raw = (errorText || '').trim();
+  if (!raw) return 'Codex 任务异常结束，但没有返回具体原因。';
+  const structured = parseStructuredRuntimeError(raw);
+  if (structured?.type === 'no_db_connection') {
+    const identity = [structured.code, structured.type].filter(Boolean).join(' · ');
+    return [
+      `Codex 的模型请求被上游服务拒绝：服务端没有可用的数据库连接${identity ? `（${identity}）` : ''}。`,
+      '这不是 CodeLark 本地会话数据库断开；本次模型请求没有完成。',
+    ].join(' ');
+  }
+  if (structured) {
+    const parts = [structured.type, structured.message, structured.code ? `code ${structured.code}` : '']
+      .filter((part, index, values) => part && values.indexOf(part) === index);
+    if (parts.length > 0) return parts.join(' · ');
+  }
+  return raw;
+}
+
 function appendTerminalErrorText(text: string, errorText: string | undefined): string {
-  const error = (errorText || '').trim();
-  if (!error || text.includes(error)) return text;
-  return [text.trim(), `❌ 错误原因：${error}`].filter(Boolean).join('\n\n');
+  const raw = (errorText || '').trim();
+  if (!raw) return text;
+  const detail = formatMirrorTerminalErrorDetail(raw);
+  if (text.includes(raw) || text.includes(detail)) return text;
+  return [text.trim(), `❌ 错误原因：${detail}`].filter(Boolean).join('\n\n');
 }
 
 function appendRuntimeNoticeText(
@@ -125,19 +173,15 @@ function appendRuntimeNoticeText(
 export function formatMirrorTerminalErrorStatus(errorText: string | undefined): string {
   const raw = (errorText || '').trim();
   if (!raw) return '❌ 异常';
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    const root = parsed && typeof parsed === 'object'
-      ? ((parsed as { error?: unknown }).error && typeof (parsed as { error?: unknown }).error === 'object'
-          ? (parsed as { error: Record<string, unknown> }).error
-          : parsed as Record<string, unknown>)
-      : null;
-    const type = typeof root?.type === 'string' ? root.type.trim() : '';
-    const message = typeof root?.message === 'string' ? root.message.trim() : '';
-    const parts = [type, message].filter((part, index, values) => part && values.indexOf(part) === index);
+  const structured = parseStructuredRuntimeError(raw);
+  if (structured?.type === 'no_db_connection') {
+    const identity = [structured.code, structured.type].filter(Boolean).join(' · ');
+    return compactTerminalErrorStatus(`❌ 模型服务连接异常${identity ? ` · ${identity}` : ''}`);
+  }
+  if (structured) {
+    const parts = [structured.type, structured.message]
+      .filter((part, index, values) => part && values.indexOf(part) === index);
     if (parts.length > 0) return compactTerminalErrorStatus(`❌ ${parts.join(' · ')}`);
-  } catch {
-    // Preserve non-JSON runtime errors below.
   }
   return compactTerminalErrorStatus(`❌ ${raw}`);
 }

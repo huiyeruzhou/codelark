@@ -7,6 +7,7 @@ import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/del
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import {
   createMirrorFeedbackController,
+  formatMirrorTerminalErrorDetail,
   formatMirrorTerminalErrorStatus,
 } from '../../../../bridge/mirror/feedback-controller.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
@@ -285,6 +286,27 @@ describe('mirror-feedback-controller', () => {
     assert.equal(formatted.includes('\n'), false);
     assert.equal(Array.from(formatted).length, 600);
     assert.ok(formatted.endsWith('…'));
+  });
+
+  it('explains no_db_connection as an upstream model error instead of a local CodeLark database failure', () => {
+    const error = JSON.stringify({
+      error: {
+        message: 'No connected db.',
+        type: 'no_db_connection',
+        param: null,
+        code: '400',
+      },
+    });
+
+    assert.equal(
+      formatMirrorTerminalErrorStatus(error),
+      '❌ 模型服务连接异常 · 400 · no_db_connection',
+    );
+    const detail = formatMirrorTerminalErrorDetail(error);
+    assert.match(detail, /Codex 的模型请求被上游服务拒绝/);
+    assert.match(detail, /不是 CodeLark 本地会话数据库断开/);
+    assert.match(detail, /400 · no_db_connection/);
+    assert.doesNotMatch(detail, /^\{/);
   });
 
   it('builds mirror stream card title and tags from subscription metadata', () => {

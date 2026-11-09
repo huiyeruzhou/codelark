@@ -47,6 +47,7 @@ import {
   resolveSessionRuntimeConfig,
 } from '../session/support.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
+import { projectCodexBackendStatus } from '../session/display/codex-backend-status.js';
 import { getClaudeSessionJsonlById } from '../../runtime/claude/session-jsonl.js';
 import { hasClaudePtyInputPrompt } from '../../runtime/claude/pty-provider.js';
 import { compactTerminalScreenText } from '../../runtime/tui-screen.js';
@@ -336,6 +337,7 @@ interface TmuxScreenMonitor {
   target: string;
   lines: number;
   runtime?: RuntimeTmuxKind;
+  appServerView?: boolean;
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
@@ -667,25 +669,34 @@ function buildTmuxScreenResponse(
     monitorStarted?: boolean;
     commands?: string[];
     selectionPrompt?: RuntimeTmuxSelectionPrompt;
+    appServerView?: boolean;
   },
 ): string {
   const { text, truncated } = sanitizeInput(screen || '(empty)', 24_000);
   const screenBlock = markdown ? buildFencedCodeBlock(text, 'sh') : text;
   const suffix = truncated ? '\n\n（屏幕内容过长已截断）' : '';
-  const notes = ['只查看当前屏幕，不发送任何按键。'];
+  const notes = [
+    '只查看当前屏幕，不发送任何按键。',
+    ...(options?.appServerView
+      ? ['这是连接同一 Codex thread 的查看客户端，不是消息执行通道；它停在交互提示不会阻塞 app-server 请求。']
+      : []),
+  ];
   if (options?.intervalSeconds) {
     notes.push(options.monitorStarted
       ? `已开启定时刷新：每 ${options.intervalSeconds} 秒刷新一次；发送 \`/tmux-screen stop\` 停止。`
       : `定时刷新：每 ${options.intervalSeconds} 秒。`);
   }
   if (options?.selectionPrompt) {
-    notes.push(`检测到 ${formatRuntimeTmuxSelectionPrompt(options.selectionPrompt)}。`);
+    notes.push(options.appServerView
+      ? `当前查看客户端停在 ${formatRuntimeTmuxSelectionPrompt(options.selectionPrompt)}；只影响这个 view。`
+      : `检测到 ${formatRuntimeTmuxSelectionPrompt(options.selectionPrompt)}。`);
   }
   const response = [
     buildCommandFields(
-      'tmux 当前屏幕状态',
+      options?.appServerView ? 'Codex app-server 查看屏幕' : 'tmux 当前屏幕状态',
       [
         ['tmux session', target],
+        ...(options?.appServerView ? [['用途', '只读查看入口（非执行通道）'] as [string, string]] : []),
         ['展示行数', `${lines}`],
         ...(options?.intervalSeconds ? [['定时刷新', `${options.intervalSeconds}s`] as [string, string]] : []),
       ],
@@ -1398,6 +1409,7 @@ function startTmuxScreenMonitor(params: {
   target: string;
   lines: number;
   runtime?: RuntimeTmuxKind;
+  appServerView?: boolean;
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
@@ -1414,6 +1426,8 @@ function startTmuxScreenMonitor(params: {
     timer: setTimeout(() => {}, params.intervalSeconds * 1000),
     target: params.target,
     lines: params.lines,
+    runtime: params.runtime,
+    appServerView: params.appServerView,
     intervalSeconds: params.intervalSeconds,
     markdown: params.markdown,
     deliver: params.deliver,
@@ -1462,6 +1476,7 @@ function startTmuxScreenMonitor(params: {
             intervalSeconds: monitor.intervalSeconds,
             commands: monitor.card ? [] : inspectCommands,
             selectionPrompt: inspected.selectionPrompt,
+            appServerView: monitor.appServerView,
           },
         );
         if (monitor.card) {
@@ -1582,6 +1597,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return 'tmux 未绑定。先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。';
       }
       const lines = parsed.lines ?? getCaptureLines(session);
+      const backendStatus = projectCodexBackendStatus(store.getSession(session.id) || session);
+      const appServerView = backendStatus.terminal === 'view'
+        && backendStatus.terminalName === captureTarget;
       const inspected = await inspectRuntimeTmuxSession({
         runtime: runtimeProvider.provider === 'tmux'
           ? runtimeProvider.runtime
@@ -1605,6 +1623,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           monitorStarted: true,
           commands: card ? [] : [...ensured.commands, ...inspectCommands],
           selectionPrompt: inspected.selectionPrompt,
+          appServerView,
         });
         if (card) {
           if (params.screenMonitor.stopCallbackData) {
@@ -1619,6 +1638,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           runtime: runtimeProvider.provider === 'tmux'
             ? runtimeProvider.runtime
             : undefined,
+          appServerView,
           intervalSeconds: parsed.intervalSeconds,
           markdown,
           deliver: params.screenMonitor.deliver,
@@ -1632,6 +1652,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         monitorStarted: Boolean(parsed.intervalSeconds),
         commands: [...ensured.commands, inspected.existsCommand, inspected.captureCommand || ''].filter(Boolean),
         selectionPrompt: inspected.selectionPrompt,
+        appServerView,
       });
     }
 
