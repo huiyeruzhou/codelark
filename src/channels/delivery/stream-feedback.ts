@@ -4,6 +4,19 @@ import type { RuntimeNoticeInfo, StreamingHistoryItem, TaskProgressInfo, ToolCal
 import { renderFeedbackTextForChannel } from '../adapter-runtime/channel-runtime.js';
 import { StructuredStreamDeliveryError } from './stream-feedback-error.js';
 
+export function buildStopActions(
+  callbackData: string,
+  terminal?: 'completed' | 'interrupted' | 'error',
+): StructuredStreamingUiActionButton[][] {
+  if (terminal === 'completed') return [];
+  return [[{
+    text: terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
+    callbackData,
+    type: terminal ? 'default' : 'danger',
+    disabled: Boolean(terminal),
+  }]];
+}
+
 export interface StreamFeedbackTarget {
   adapter: BaseChannelAdapter;
   channelType: string;

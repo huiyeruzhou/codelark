@@ -12,12 +12,16 @@ import { _testOnly as manager, registerAdapter } from '../../../../bridge/host/m
 import { createAdapterRuntime } from '../../../../channels/adapter-runtime/runtime.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
 import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
+import { parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
+import type { StructuredStreamingUiActionButton } from '../../../../channels/contracts.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 
 const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 class RecoveryAdapter extends RecordingAdapter {
   live = true;
   events: Array<{ type: string; text: string; status?: string; streamKey?: string }> = [];
+  actions: Array<{ streamKey?: string; actions: StructuredStreamingUiActionButton[][] }> = [];
+  onStreamActions(_chat: string, actions: StructuredStreamingUiActionButton[][], streamKey?: string) { this.actions.push({ streamKey, actions }); }
   reactions: string[] = [];
   onReaction?: (id: string) => void;
   isRunning() { return this.live; }
@@ -112,6 +116,9 @@ for (const scenario of ['dead-pane', 'manual-mirror'] as const) it(`real Cursor 
       await originalInject(pane, followup); // Manual local input, bypassing the IM input path.
       await until(() => backend.prompts.length === 2, 'native model must receive manual input');
       await until(() => adapter.events.some(e => e.streamKey?.startsWith('mirror:') && e.text.includes(followup)), 'manual input must create a live mirror before the model completes, without waiting for the failed IM suppression to expire', 5_000);
+      const stop = adapter.actions.find(event => event.streamKey?.startsWith('mirror:'))?.actions[0]?.[0];
+      assert.ok(stop, 'a live native mirror must expose the existing stop action');
+      assert.deepEqual(parseCommandCallbackData(stop.callbackData), { commandText: '/stop', scopeSessionId: session.id });
       releaseFinal();
       await until(() => adapter.events.some(e => e.streamKey?.startsWith('mirror:') && e.type === 'end' && e.status === 'completed' && e.text.includes('RECOVERED_DONE')), 'manual mirror must deliver the final reply');
     }

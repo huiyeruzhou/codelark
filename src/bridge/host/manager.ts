@@ -2126,6 +2126,7 @@ const CODEX_TUI_DIAGNOSTICS = createCodexTuiDiagnostics({
 });
 
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
+  buildStopCallbackData: (sessionId) => buildCommandCallbackData('/stop', sessionId),
   getPendingUserInput: (sessionId) => getBridgeContext().store.getSession(sessionId)?.pending_user_input,
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
   getThreadTitle: getMirrorThreadTitle,

@@ -1,6 +1,8 @@
+import { buildCommandCallbackData } from './callbacks.js';
+import { buildStopActions } from '../../channels/delivery/stream-feedback.js';
 import { buildCommandFields } from './presentation.js';
 import type { RuntimeSettingsCommandDeps } from './runtime-bootstrap.js';
-import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
+import type { BridgeSession, BridgeStore, ChannelChat, OutboundRichCard } from '../../domain/index.js';
 import type { RuntimeAgent } from '../../domain/session.js';
 import {
   getSessionActiveRuntime,
@@ -163,6 +165,8 @@ export function sessionHasActiveRuntimeTurn(
 }
 
 export function buildRuntimeSwitchWhileRunningResponse(params: {
+  sessionId: string;
+  richCard?: (card: OutboundRichCard) => void;
   commandLabel: string;
   runtime: SupportedRuntimeName;
   provider?: string;
@@ -170,21 +174,21 @@ export function buildRuntimeSwitchWhileRunningResponse(params: {
 }): string {
   const notes = [
     '当前会话仍在运行或排队，不能在对话进行中切换 runtime/provider。',
-    '请先发送 `/stop` 停止当前对话，再重新执行切换命令；已保存的常规 runtime 设置只会从下一轮请求开始生效。',
+    '点击“停止”按钮或发送 `/stop`，等待当前对话结束后重试切换。',
   ];
   if (params.provider === 'tmux') {
     notes.push('tmux Provider 需要发送 `/p tmux` 重启 Codex TUI，才能确保和底层 JSONL 会话一致。');
   }
-  return buildCommandFields(
-    '请先停止当前对话',
-    [
-      ['命令', params.commandLabel],
-      ['Runtime', params.runtime],
-      ...(params.provider ? [['Provider', params.provider] as [string, string]] : []),
-    ],
-    notes,
-    params.markdown,
-  );
+  const fields: Array<[string, string]> = [
+    ['命令', params.commandLabel], ['当前 Runtime', params.runtime],
+    ...(params.provider ? [['Provider', params.provider] as [string, string]] : []),
+  ];
+  params.richCard?.({
+    title: '请先停止当前对话', template: 'orange',
+    sections: [{ fields }, { markdown: notes.join('\n\n') }],
+    actions: buildStopActions(buildCommandCallbackData('/stop', params.sessionId)),
+  });
+  return buildCommandFields('请先停止当前对话', fields, notes, params.markdown);
 }
 
 export async function reconcileMirrorSubscriptionsBestEffort(

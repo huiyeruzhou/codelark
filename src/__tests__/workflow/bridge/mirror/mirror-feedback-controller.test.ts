@@ -2,7 +2,7 @@ import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BaseChannelAdapter, type StructuredStreamingUiMetadata } from '../../../../channels/contracts.js';
+import { BaseChannelAdapter, type StructuredStreamingUiActionButton, type StructuredStreamingUiMetadata } from '../../../../channels/contracts.js';
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 import { initBridgeContext } from '../../../../bridge/host/context.js';
 import {
@@ -10,6 +10,7 @@ import {
   formatMirrorTerminalErrorDetail,
   formatMirrorTerminalErrorStatus,
 } from '../../../../bridge/mirror/feedback-controller.js';
+import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
 import type { InboundMessage, OutboundManualInput, OutboundMessage, RuntimeNoticeInfo, SendResult, StreamingHistoryItem, TaskProgressInfo, ToolCallInfo } from '../../../../domain/index.js';
@@ -27,6 +28,8 @@ function createDeferred<T = void>() {
 class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly channelType = 'feishu-default';
   readonly provider = 'feishu';
+  readonly actions: StructuredStreamingUiActionButton[][][] = [];
+  onStreamActions(_chatId: string, actions: StructuredStreamingUiActionButton[][]): void { this.actions.push(actions); }
   readonly texts: string[] = [];
   readonly statuses: string[] = [];
   readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
@@ -127,6 +130,35 @@ class DelayedMirrorCardAdapter extends FakeMirrorFeishuAdapter {
 }
 
 describe('mirror-feedback-controller', () => {
+  for (const status of ['completed', 'interrupted', 'error'] as const) it(`exposes a scoped stop action during mirror output and settles it on ${status}`, async () => {
+    const adapter = new FakeMirrorFeishuAdapter();
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter, getThreadTitle: () => 'tb-science',
+      buildStopCallbackData: sessionId => buildCommandCallbackData('/stop', sessionId),
+      nowIso: () => '2026-11-14T00:00:00Z', eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-stop', sessionId: 'session-stop', channelType: 'feishu-default',
+      chatId: 'chat-stop', threadId: 'thread-stop', filePath: 'rollout.jsonl', lastDeliveredAt: null,
+    });
+    consumeMirrorRecords(subscription, [{
+      signature: 'output-stop', type: 'message', role: 'assistant', content: '正在执行工具',
+      timestamp: '2026-11-14T00:00:00Z', turnId: 'turn-stop',
+    }], controller.hooks);
+    const action = adapter.actions.at(-1)?.[0]?.[0];
+    assert.ok(action, 'mirrored output must offer the same stop action as a direct turn');
+    assert.equal(action.text, '停止');
+    assert.equal(action.disabled, false);
+    assert.deepEqual(parseCommandCallbackData(action.callbackData), { commandText: '/stop', scopeSessionId: subscription.sessionId });
+    await controller.deliverMirrorTurns(subscription, [{
+      streamKey: subscription.pendingTurn!.streamKey, signature: 'end-stop', userText: '', text: '结果',
+      startedAt: '2026-11-14T00:00:00Z', timestamp: '2026-11-14T00:00:01Z', status,
+    }]);
+    if (status === 'completed') assert.deepEqual(adapter.actions.at(-1), []);
+    else assert.equal(adapter.actions.at(-1)?.[0]?.[0]?.disabled, true);
+  });
+
   it('resolves the completed lifecycle before rendering one terminal card state', async () => {
     const adapter = new FakeMirrorFeishuAdapter();
     const controller = createMirrorFeedbackController({

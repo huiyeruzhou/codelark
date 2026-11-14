@@ -42,10 +42,26 @@ it('previewing another runtime keeps the active task, and saving uses the runtim
   const card = (await f.command('/current-runtime claude')).richCard!;
   assert.equal(parseCommandCallbackData(card.form!.submitCallbackData)?.scopeSessionId, f.session.id);
   const before = f.service.snapshot(f.scope).config;
-  const warning = (await f.command('/runtime claude')).text;
+  const blocked = await f.command('/runtime claude');
+  const warning = blocked.text;
+  const stop = blocked.richCard?.actions?.flat().find(action => action.text === '停止');
+  assert.ok(stop, 'runtime switch warning must expose the existing stop action');
+  assert.deepEqual(parseCommandCallbackData(stop.callbackData), { commandText: '/stop', scopeSessionId: f.session.id });
   assert.match(warning, /请先停止当前对话/);
-  assert.equal((await f.command('/current-config claude', { claudeDefaultModel: 'after', cld_idle_min: '15' })).text, warning);
+  const formWarning = await f.command('/current-config claude', { claudeDefaultModel: 'after', cld_idle_min: '15' });
+  assert.equal(formWarning.text, warning);
+  assert.deepEqual(formWarning.richCard?.actions, blocked.richCard?.actions);
   assert.deepEqual(f.service.snapshot(f.scope).config, before, 'a rejected switch must not save any part of the form');
+});
+
+it('blocked provider changes offer the same scoped stop button without stopping implicitly', async () => {
+  const f = fixture();
+  f.store.updateSession(f.session.id, { runtime: { activeRuntime: 'claude' } });
+  const blocked = await f.command('/provider pty');
+  const action = blocked.richCard?.actions?.flat().find(button => button.text === '停止');
+  assert.ok(action);
+  assert.deepEqual(parseCommandCallbackData(action.callbackData), { commandText: '/stop', scopeSessionId: f.session.id });
+  assert.equal(f.service.get('runtime.claude.provider', f.scope), 'sdk');
 });
 
 it('a missing directory asks for confirmation before saving any form values', async () => {

@@ -746,6 +746,7 @@ export function handleChangeDirectoryCommand(options: {
 }
 
 export function handleRuntimeCommand(options: {
+  richCard?: (card: OutboundRichCard) => void;
   msg: InboundMessage;
   args: string;
   currentBinding: ChannelChat | null;
@@ -788,7 +789,8 @@ export function handleRuntimeCommand(options: {
   }
   if (sessionHasActiveRuntimeTurn(options.deps, session)) {
     return buildRuntimeSwitchWhileRunningResponse({
-      commandLabel: '`/runtime`',
+      sessionId: session.id, richCard: options.richCard,
+      commandLabel: `\`/runtime ${requested}\``,
       runtime: currentRuntime,
       markdown: options.markdown,
     });

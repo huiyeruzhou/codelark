@@ -5,6 +5,7 @@ import type {
   StructuredStreamingUiSnapshot,
 } from '../../../channels/contracts.js';
 import {
+  buildStopActions,
   finalizeStreamFeedback,
   pushStreamFeedbackActions,
   pushStreamFeedbackHistory,
@@ -87,19 +88,6 @@ export interface InteractiveStreamUiController {
   recordInactiveOnce(): void;
   finalizeOnce(status: InteractiveStreamUiTerminalStatus, responseText: string): Promise<boolean>;
   shouldSkipTextDelivery(): boolean;
-}
-
-function buildStopActions(
-  callbackData: string,
-  terminal?: InteractiveStreamUiTerminalStatus,
-): StructuredStreamingUiActionButton[][] {
-  if (terminal === 'completed') return [];
-  return [[{
-    text: terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
-    callbackData,
-    type: terminal ? 'default' : 'danger',
-    disabled: Boolean(terminal),
-  }]];
 }
 
 function createInteractiveStreamFeedback(

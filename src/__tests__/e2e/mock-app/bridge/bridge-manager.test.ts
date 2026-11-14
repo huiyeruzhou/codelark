@@ -3462,12 +3462,12 @@ describe('bridge-manager stop handling', () => {
     _testOnly.resetStateForTests();
   });
 
-  it('aborts the active IM task only when /stop is received', async () => {
-    const sent: string[] = [];
+  for (const entry of ['text', 'runtime warning button']) it(`stops the active IM task through ${entry} and permits a runtime switch`, async () => {
+    const sent: OutboundMessage[] = [];
     const adapter: any = {
       channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
+      send: async (message: OutboundMessage) => {
+        sent.push(message);
         return { ok: true, messageId: 'msg-stop' };
       },
     };
@@ -3490,16 +3490,40 @@ describe('bridge-manager stop handling', () => {
       mirrorSuppressionId: null,
     });
 
+    let callbackData: string | undefined;
+    if (entry === 'runtime warning button') {
+      await _testOnly.handleMessage(adapter, { address, text: '/runtime claude', messageId: 'blocked-runtime', timestamp: Date.now() });
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+      callbackData = sent.at(-1)?.richCard?.actions?.flat().find(action => action.text === '停止')?.callbackData;
+      assert.ok(callbackData, 'the blocked runtime card must provide a working stop callback');
+      assert.equal(abortController.signal.aborted, false);
+      assert.equal(_testOnly.adapterImmediateLane({ address, text: '', callbackData } as any, 'callback')?.laneKind, 'control');
+    }
     await _testOnly.handleMessage(adapter, {
       messageId: 'incoming-stop',
       address,
-      text: '/stop',
+      text: callbackData ? '' : '/stop',
+      callbackData,
       timestamp: Date.now(),
     });
 
     assert.equal(abortController.signal.aborted, true);
     assert.equal(state.activeTasks.has(binding.bridgeSessionId), false);
-    assert.match(sent[0] || '', /已请求停止当前任务/);
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    assert.match(sent.at(-1)?.text || '', /已请求停止当前任务/);
+    await _testOnly.handleMessage(adapter, { address, text: '/runtime claude', messageId: 'retry-runtime', timestamp: Date.now() });
+    await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    const nextBinding = getBridgeContext().store.getChannelChat(address.channelType, address.chatId)!;
+    assert.notEqual(nextBinding.bridgeSessionId, binding.bridgeSessionId, 'stopping allows the requested switch');
+    if (callbackData) {
+      const nextAbort = new AbortController();
+      state.activeTasks.set(nextBinding.bridgeSessionId, { abortController: nextAbort });
+      await _testOnly.handleMessage(adapter, { address, text: '', callbackData, messageId: 'stale-stop', timestamp: Date.now() });
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+      assert.equal(nextAbort.signal.aborted, false, 'an old stop button cannot stop the newly bound session');
+      assert.match(sent.at(-1)?.text || '', /已不再绑定/);
+      state.activeTasks.delete(nextBinding.bridgeSessionId);
+    }
   });
 
 });

@@ -65,6 +65,12 @@
 | `/provider`、`/p` | 查看或设置当前 runtime 的 provider；Codex 固定 `tmux`，Claude 支持 `sdk|pty|tmux`，Kimi 当前只支持 `tmux` | 写 Session TOML 的 `runtime.codex.provider` / `runtime.claude.provider` / `runtime.kimi.provider`；Codex app-server 是自动执行后端，不属于 provider 选项；tmux 时只把自动生成 tmux session name 和必要的 runtime identity 作为运行身份写 BridgeSession JSON |
 | `/stop` | 停止当前运行任务 | 触发 bridge 任务控制；tmux provider 下映射为 tmux interrupt |
 
+### 运行中的停止入口
+
+普通对话和本地记录 mirror 卡片共用 `buildStopActions`：活动时显示“停止”，正常完成时移除，异常或中断后禁用。按钮通过 `buildCommandCallbackData('/stop', sessionId)` 进入现有命令回调与 `stopRunningSession`，不另建停止流程；Codex app-server 使用协议中断，独立 tmux 使用对应终端控制。
+
+`/runtime`、配置表单保存以及需要先停止的 `/provider` 切换被阻止时，也返回同一停止按钮，并保留 `/stop` 文字入口。按钮只请求停止，任务结束前不提前切换或保存配置；确认结束后用户重试原命令。回调绑定原 BridgeSession，聊天已经切换时拒绝旧按钮，避免停止新会话。
+
 ### 会话运行时配置
 
 这些命令写当前会话的运行覆盖值。当前通过 `ConfigService` 写 Session TOML，旧 BridgeSession JSON 中的同名 runtime 配置字段只作为 v1 启动迁移输入，不再作为运行时 fallback。

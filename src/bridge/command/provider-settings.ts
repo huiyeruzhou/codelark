@@ -1,3 +1,4 @@
+import type { OutboundRichCard } from '../../domain/index.js';
 import type {
   CodexReasoningEffort,
   CodexSandboxMode,
@@ -283,6 +284,7 @@ function formatClaudeTmuxLaunchFailure(
 }
 
 interface ProviderCommandOptions {
+  richCard?: (card: OutboundRichCard) => void;
   msg: InboundMessage;
   args: string;
   currentBinding: ChannelChat | null;
@@ -294,7 +296,11 @@ interface ProviderCommandOptions {
 export async function handleProviderCommand(options: ProviderCommandOptions): Promise<SessionCommandResult> {
   const confirmation = /^tmux --(restart|cancel-restart)=([a-f0-9-]+)$/i.exec(options.args.trim());
   const isTmux = options.args.trim().toLowerCase() === 'tmux' || !!confirmation;
-  if (!isTmux) return { response: await applyProviderCommand(options) };
+  if (!isTmux) {
+    let richCard: OutboundRichCard | undefined;
+    const response = await applyProviderCommand({ ...options, richCard: card => { richCard = card; } });
+    return { response, richCard };
+  }
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在。' };
@@ -362,7 +368,8 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
     if (requestedProvider !== 'tmux' && requestedProvider !== resolveEffectiveClaudeProvider(session, binding)
       && sessionHasActiveRuntimeTurn(options.deps, session)) {
       return buildRuntimeSwitchWhileRunningResponse({
-        commandLabel: '`/provider`',
+        sessionId: session.id, richCard: options.richCard,
+        commandLabel: `\`/provider ${requestedProvider}\``,
         runtime: 'claude',
         provider: requestedProvider,
         markdown: options.markdown,

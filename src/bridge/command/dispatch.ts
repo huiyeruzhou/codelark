@@ -399,8 +399,10 @@ async function handleCurrentConfigFormCommand(options: {
   const submittedSection = parseCurrentConfigSectionArg(options.args) || activeRuntime;
   const switching = submittedSection !== 'common' && submittedSection !== activeRuntime;
   if (switching && sessionHasActiveRuntimeTurn(options.deps, session)) {
-    return { response: handleRuntimeCommand({ msg: options.msg, args: submittedSection, currentBinding: binding,
-      store: options.store, deps: options.deps, markdown: options.markdown }) };
+    let richCard: OutboundRichCard | undefined;
+    const response = handleRuntimeCommand({ msg: options.msg, args: submittedSection, currentBinding: binding,
+      store: options.store, deps: options.deps, markdown: options.markdown, richCard: card => { richCard = card; } });
+    return { response, richCard };
   }
   const targetSessionId = submittedSection === 'common' ? session.id : mappedRuntimeSessionId(options.store, binding, submittedSection) || session.id;
   const cursorModelConfiguration = submittedSection === 'cursor'
@@ -845,6 +847,7 @@ export async function handleBridgeCommand(
 
     case '/runtime': {
       response = handleRuntimeCommand({
+        richCard: card => { responseRichCard = card; },
         msg,
         args,
         currentBinding,

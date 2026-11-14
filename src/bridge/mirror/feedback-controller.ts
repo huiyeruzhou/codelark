@@ -23,6 +23,8 @@ import {
   stripOutboundArtifactBlocksForStreaming,
 } from '../../channels/delivery/artifacts.js';
 import {
+  buildStopActions,
+  pushStreamFeedbackActions,
   finalizeStreamFeedback,
   pushStreamFeedbackHistory,
   pushStreamFeedbackNotice,
@@ -60,6 +62,7 @@ export interface MirrorStructuredStreamStatusConfig {
 }
 
 export interface MirrorFeedbackControllerDeps {
+  buildStopCallbackData?(sessionId: string): string;
   getPendingUserInput?(sessionId: string): string | undefined;
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
   getThreadTitle(threadId: string, sessionId?: string, bindingId?: string): string | null | undefined;
@@ -319,6 +322,15 @@ export function createMirrorFeedbackController(
     return tags.length > 0 ? `${baseTitle}  ${tags.map(formatStreamTagLabel).join(' ')}` : baseTitle;
   }
 
+  function pushMirrorStopActions(
+    subscription: BridgeMirrorSubscription, streamKey: string, adapter: BaseChannelAdapter,
+    status?: 'completed' | 'interrupted' | 'error',
+  ): void {
+    const callback = deps.buildStopCallbackData?.(subscription.sessionId);
+    if (!callback) return;
+    pushStreamFeedbackActions({ adapter, channelType: subscription.channelType, chatId: subscription.chatId, streamKey }, buildStopActions(callback, status));
+  }
+
   function startMirrorStreaming(
     subscription: BridgeMirrorSubscription,
     turnState: BridgeMirrorTurnState,
@@ -336,6 +348,7 @@ export function createMirrorFeedbackController(
       }
       turnState.streamStarted = true;
       streamOwnerAdapters.set(turnState, adapter);
+      pushMirrorStopActions(subscription, turnState.streamKey, adapter);
     } catch {
       // Non-critical best effort only.
     }
@@ -499,6 +512,7 @@ export function createMirrorFeedbackController(
       streamingArtifacts.delete(pendingTurn.streamKey);
       void streamedArtifactDelivery.close();
     }
+    pushMirrorStopActions(subscription, pendingTurn.streamKey, adapter, status);
     void finalizeStreamFeedback(
       createStreamTarget(subscription, pendingTurn, adapter),
       status,
@@ -622,6 +636,7 @@ export function createMirrorFeedbackController(
           chatId: subscription.chatId,
           streamKey: turn.streamKey,
         }) || undefined;
+        if (streamMessageId) pushMirrorStopActions(subscription, turn.streamKey, adapter, terminalStatus);
         const streamFinalizeText = streamMessageId && !turn.timedOut ? '' : streamText;
         const finalized = await finalizeStreamFeedback(
           {
