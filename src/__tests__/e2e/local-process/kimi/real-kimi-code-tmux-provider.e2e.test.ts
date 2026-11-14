@@ -190,10 +190,16 @@ describe('real Kimi Code tmux provider e2e', () => {
       assert.equal(
         await waitForCondition(() => {
           const wire = fs.readFileSync(sessionFile.filePath, 'utf-8');
-          return wire.includes('"type":"turn.steer"') && wire.includes(steerText);
+          return wire.split(/\r?\n/).some(line => {
+            try {
+              const event = JSON.parse(line);
+              return ['turn.steer', 'prompt.steered'].includes(event.type)
+                && line.includes(JSON.stringify(steerText));
+            } catch { return false; }
+          });
         }, 5_000, 50),
         true,
-        'the second input must become turn.steer while the first model request is still running',
+        'the second input must have a native steer receipt while the first model request is still running',
       );
       const steeredScreen = (await execFileAsync(
         'tmux',

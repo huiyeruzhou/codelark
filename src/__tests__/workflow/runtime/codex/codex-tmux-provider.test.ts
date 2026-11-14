@@ -564,11 +564,11 @@ describe('codex-tmux-provider', () => {
     assert.equal(parseCodexTuiSelectionPrompt(screen.replace(`enter/esc continue · ${quitKey} quit`, 'quoted documentation')), null);
   });
 
-  it('reads the goal overlay above its still-visible composer and excludes moving background text', () => {
+  for (const background of ['      ', '    Wo']) it(`reads the goal overlay over background ${JSON.stringify(background)} and excludes the composer`, () => {
     const screen = [
       '• completed background response', '    Worked for <1s',
-      '        Replace goal?', '  • cl  New objective: b', '    Wo',
-      '      › 1. Replace current goal  Set the new objective and start it now',
+      `${background}  Replace goal?`, '  • cl  New objective: b', '    Wo',
+      `${background}› 1. Replace current goal  Set the new objective and start it now`,
       '  • cl  2. Cancel                Keep the current goal', '',
       '    Wo  enter select · esc back', '• Working (0s • esc to interrupt)',
       '› Ask Codex to do anything', 'GPT-6.1-Sol medium · Pursuing goal',

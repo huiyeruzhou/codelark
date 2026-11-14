@@ -291,7 +291,13 @@ describe('real Kimi Code bridge e2e', () => {
       assert.equal(
         await waitForCondition(() => {
           const wire = fs.readFileSync(sessionFile.filePath, 'utf-8');
-          return wire.includes('"type":"turn.steer"') && wire.includes(steerText);
+          return wire.split(/\r?\n/).some(line => {
+            try {
+              const event = JSON.parse(line);
+              return ['turn.steer', 'prompt.steered'].includes(event.type)
+                && line.includes(JSON.stringify(steerText));
+            } catch { return false; }
+          });
         }, 5_000, 50),
         true,
       );

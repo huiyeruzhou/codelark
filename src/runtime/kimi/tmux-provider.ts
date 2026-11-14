@@ -648,7 +648,7 @@ function inspectKimiTurnActive(sessionFilePath: string, endOffset?: number): boo
     try {
       const entry = JSON.parse(line) as { type?: string; event?: { type?: string } };
       if (entry.event?.type === 'step.begin') turnActive = true;
-      if (entry.event?.type === 'step.end' || entry.type === 'turn.cancel') turnActive = false;
+      if (entry.event?.type === 'step.end' || entry.type === 'turn.cancel' || entry.type === 'turn.ended') turnActive = false;
     } catch {
       // Ignore non-JSON and a partial final wire line.
     }
@@ -710,11 +710,14 @@ function inspectKimiSubmissionState(
         type?: string;
         event?: { type?: string };
       };
-      if (entry.type === 'turn.steer' && promptAccepted && turnActive) return 'started';
+      if ((entry.type === 'turn.steer' || entry.type === 'prompt.steered') && promptAccepted && turnActive) return 'started';
       if (entry.event?.type === 'step.begin') {
+        // Kimi 2.6 no longer writes llm.request. A step after this input
+        // is native execution evidence for both fresh and resumed turns.
+        if (promptAccepted) return 'started';
         turnActive = true;
       }
-      if (entry.event?.type === 'step.end' || entry.type === 'turn.cancel') turnActive = false;
+      if (entry.event?.type === 'step.end' || entry.type === 'turn.cancel' || entry.type === 'turn.ended') turnActive = false;
       if (entry.type === 'llm.request' && promptAccepted) {
         return 'started';
       }

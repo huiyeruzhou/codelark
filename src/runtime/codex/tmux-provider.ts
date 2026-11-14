@@ -461,12 +461,16 @@ function codexSelectionSurface(tail: string): string {
   // still has a chevron; crop the observed modal instead of choosing that row.
   const footer = lines.findLastIndex((line) => /\benter select\s*·\s*esc back\s*$/i.test(line));
   if (footer < 0) return tail;
-  const header = lines.findLastIndex((line, index) => index < footer && /^\s+Replace goal\?\s*$/.test(line));
+  const header = lines.findLastIndex((line, index) => index < footer && /(?:^|\s)Replace goal\?\s*$/.test(line));
   if (header < 0 || footer - header > 15) return tail;
-  const selected = lines.slice(header, footer).find((line) => /^\s+›\s*\d+[.)]\s+(?:Replace current goal|Cancel)\b/.test(line));
+  const selected = lines.slice(header, footer).find((line) => /›\s*\d+[.)]\s+(?:Replace current goal|Cancel)\b/.test(line));
   if (!selected) return tail;
   const column = selected.indexOf('›');
-  return lines.slice(header, footer + 1).map((line) => line.slice(column)).join('\n');
+  // The overlay only clears its own columns; background text may remain to
+  // the left of the title and selected row. Validate the cropped modal edges.
+  const modal = lines.slice(header, footer + 1).map((line) => line.slice(column));
+  if (modal[0]?.trim() !== 'Replace goal?' || !/^\s*enter select\s*·\s*esc back\s*$/i.test(modal.at(-1) || '')) return tail;
+  return modal.join('\n');
 }
 
 function codexRetiredModelNotice(tail: string): CodexTuiSelectionPrompt | null {

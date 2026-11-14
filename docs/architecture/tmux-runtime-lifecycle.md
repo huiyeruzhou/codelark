@@ -449,6 +449,8 @@ Claude tmux 使用同一个 `waitForRuntimeTmuxReady` 启动门控。启动前�
 
 Kimi 入口补充：
 
+Kimi 2.6 的接收记录使用 `prompt.steered` 替代旧 `turn.steer`，且不再保证有 `llm.request`。接收检查同时支持新旧 steer 事件；普通输入后出现的 `step.begin` 也证明执行已开始，不再因缺少诊断用请求日志而重复按键。`turn.ended` 清除活动状态，避免结束后误用 Ctrl-S。兼容性 CI 必须运行真实 CLI，并同时验证原生 steer 记录、同一会话的后续回复、恢复和真实错误交付。
+
 | 入口 | 作用 |
 | --- | --- |
 | `/runtime kimi` | 切换当前聊天到 Kimi Code runtime。 |
@@ -510,3 +512,7 @@ Bridge 启动器以及 Claude tmux、PTY、SDK 的环境边界清除 `CLAUDECODE
 ### Claude 选项导航确认
 
 Claude trust 和 bypass 菜单每次只发送一个导航键，随后重新捕获屏幕并计算目标选项；仅当新屏幕确认目标已被选中时发送 Enter。这样启动吞键不会把后续 Enter 应用到旧的退出选项。bypass 仍要求明确的用户选择，不能自动同意。
+
+### Codex 目标切换弹窗
+
+Codex 0.169 的目标切换弹窗会保留左侧未被弹窗覆盖的终端文字，标题和选中项前面可能出现上一轮输出。选择解析按选中箭头所在列裁出弹窗，核对标题、选项和操作页脚；不能把背景输入框当成当前输入入口。回归同时覆盖干净界面、残留文字和取消选项移动。

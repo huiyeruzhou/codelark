@@ -23,6 +23,7 @@ import {
   isKimiInputReadyScreen,
   parseKimiSessionIdFromScreen,
   syncKimiTmuxTurnStateFromSession,
+  retryKimiSubmitIfNoActivity,
 } from '../../../../runtime/kimi/tmux-provider.js';
 import { parseKimiTerminalErrorsFromLog } from '../../../../runtime/kimi/runtime-log.js';
 import {
@@ -82,6 +83,24 @@ describe('Kimi tmux provider helpers', () => {
 
     assert.equal(state.turnActive, false);
   });
+
+  for (const type of ['turn.steer', 'prompt.steered', 'context.append_loop_event']) {
+    it(`confirms input from native ${type} without an llm.request or another Enter`, async () => {
+      const wirePath = path.join(kimiHome, 'receipt-wire.jsonl');
+      const prompt = '同一条消息继续';
+      fs.writeFileSync(wirePath, JSON.stringify({ type: 'context.append_loop_event', event: { type: 'step.begin' } }) + '\n');
+      const startOffset = fs.statSync(wirePath).size;
+      const event = type === 'context.append_loop_event'
+        ? [{ type: 'turn.prompt', input: [{ type: 'text', text: prompt }] }, { type, event: { type: 'step.begin' } }]
+        : [{ type, content: [{ type: 'text', text: prompt }], activePromptId: 'original' }];
+      fs.appendFileSync(wirePath, event.map(e => JSON.stringify(e)).join('\n') + '\n');
+      assert.equal(await retryKimiSubmitIfNoActivity({
+        sessionName: 'receipt-only-no-tmux', targetPane: 'receipt-only-no-tmux:0.0',
+        sessionFilePath: wirePath, startOffset, expectedPrompt: prompt,
+        retrySubmit: async () => { assert.fail('native receipt must not cause input to be sent again'); },
+      }), true);
+    });
+  }
 
   it('waits for Kimi turn failed details instead of treating a retryable request warning as terminal', () => {
     const warning = parseKimiTerminalErrorsFromLog([
