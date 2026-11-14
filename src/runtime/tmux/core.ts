@@ -42,6 +42,8 @@ export interface TmuxSendActionsResult {
 export interface TmuxSendActionsOptions {
   delayMs?: number;
   forcePasteLiterals?: boolean;
+  /** Deliver each literal as one paste, preserving newlines without editor keys. */
+  bracketedPaste?: boolean;
   /** Windows TUI editor key for newlines that ConPTY would otherwise turn into Enter. */
   pasteNewlineKey?: string;
 }
@@ -67,9 +69,11 @@ export interface TmuxCore {
   capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult>;
   sendActions(target: string, actions: TmuxSendAction[], options?: TmuxSendActionsOptions): Promise<TmuxSendActionsResult>;
   sendInterrupt(target: string): Promise<string>;
-  injectPromptIntoPane(targetPane: string, prompt: string, options?: Pick<TmuxSendActionsOptions, 'pasteNewlineKey'>): Promise<TmuxSendActionsResult>;
+  injectPromptIntoPane(targetPane: string, prompt: string, options?: Pick<TmuxSendActionsOptions, 'pasteNewlineKey' | 'bracketedPaste'>): Promise<TmuxSendActionsResult>;
   /** The command actually used to create this pane, not the proposed reuse command. */
   readPaneStartCommand?(target: string): Promise<string>;
+  /** Process liveness from tmux metadata, independent of retained screen text. */
+  readPaneDead?(target: string): Promise<boolean>;
   /** Enable tmux's extended key protocol for TUIs that distinguish Enter from newline. */
   ensureExtendedKeys?(): Promise<string>;
   commandPreview(args: readonly string[]): string;
@@ -356,6 +360,11 @@ class TmuxCliCore implements TmuxCore {
       : tmuxCommandPreview(args, this.executable, this.prefixArgs);
   }
 
+  async readPaneDead(target: string): Promise<boolean> {
+    const result = await this.runTmux(['display-message', '-p', '-t', target, '#{pane_dead}']);
+    return result.stdout.trim() === '1';
+  }
+
   async readPaneStartCommand(target: string): Promise<string> {
     const result = await this.runTmux(['display-message', '-p', '-t', target, '#{pane_start_command}']);
     return result.stdout.trim();
@@ -468,7 +477,16 @@ class TmuxCliCore implements TmuxCore {
     const commands: string[] = [];
     let pastedText: string | undefined;
     for (const [index, action] of actions.entries()) {
-      if (
+      if (action.type === 'literal' && options.bracketedPaste && !this.psmuxServerSidePaste) {
+        const name = `clk-block-${process.pid}-${Date.now()}`;
+        const loadArgs: TmuxArgv = ['load-buffer', '-b', name, '-'];
+        const pasteArgs: TmuxArgv = ['paste-buffer', '-d', '-p', '-r', '-b', name, '-t', target];
+        await this.runTmux(loadArgs, action.text);
+        commands.push(this.command(loadArgs));
+        await this.runTmux(pasteArgs);
+        commands.push(this.command(pasteArgs));
+        await sleep(PASTE_CHUNK_DELAY_MS);
+      } else if (
         action.type === 'literal'
         && (options.forcePasteLiterals === true || Array.from(action.text).length > PASTE_LITERAL_THRESHOLD)
       ) {
@@ -656,7 +674,10 @@ class TmuxCliCore implements TmuxCore {
     return result.commands[0] || this.command(['send-keys', '-t', target, 'C-c']);
   }
 
-  async injectPromptIntoPane(targetPane: string, prompt: string, options: Pick<TmuxSendActionsOptions, 'pasteNewlineKey'> = {}): Promise<TmuxSendActionsResult> {
+  async injectPromptIntoPane(targetPane: string, prompt: string, options: Pick<TmuxSendActionsOptions, 'pasteNewlineKey' | 'bracketedPaste'> = {}): Promise<TmuxSendActionsResult> {
+    if (options.bracketedPaste && !this.psmuxServerSidePaste) {
+      return this.sendActions(targetPane, [{ type: 'literal', text: prompt }, { type: 'key', key: 'Enter' }], options);
+    }
     const commands: string[] = [];
     if (this.psmuxServerSidePaste) {
       commands.push(...(await this.sendPsmuxEditorInput(targetPane, prompt, options.pasteNewlineKey)));
@@ -717,6 +738,7 @@ let activeTmuxCore: TmuxCore = createTmuxCliCore();
 
 export const tmuxCore: TmuxCore = {
   commandPreview: (args) => activeTmuxCore.commandPreview(args),
+  readPaneDead: (target) => activeTmuxCore.readPaneDead?.(target) || Promise.resolve(false),
   readPaneStartCommand: (target) => activeTmuxCore.readPaneStartCommand?.(target) || Promise.resolve(''),
   ensureExtendedKeys: () => activeTmuxCore.ensureExtendedKeys?.() || Promise.resolve(''),
   hasSession: (name) => activeTmuxCore.hasSession(name),

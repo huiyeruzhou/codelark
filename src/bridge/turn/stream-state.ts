@@ -77,21 +77,22 @@ export function formatStreamRuntimeStatus(
   contextUsage?: ContextUsageInfo | null,
   thinkingNote?: string | null,
   currentTimeMs?: number,
+  pendingUserInput?: string | null,
 ): string {
   const parts: string[] = [];
   if (typeof currentTimeMs === 'number' && Number.isFinite(currentTimeMs)) {
     parts.push(formatFooterClockTime(currentTimeMs));
   }
   parts.push(`已运行 ${formatRuntimeDuration(elapsedMs)}`);
-  if (typeof lastActivityAgeMs === 'number' && lastActivityAgeMs >= 0) {
+  if (!pendingUserInput && typeof lastActivityAgeMs === 'number' && lastActivityAgeMs >= 0) {
     parts.push(`上次响应 ${formatRuntimeDuration(lastActivityAgeMs)}`);
   }
   const context = formatContextUsageCompactParts(contextUsage);
   if (context.context) parts.push(context.context);
   if (context.lastIo) parts.push(context.lastIo);
   const runtimeText = joinFooterParts(parts);
-  const note = (statusNote || '').trim();
-  const thinking = (thinkingNote || '').trim();
+  const note = (pendingUserInput ? `等待你的回答：${pendingUserInput}` : statusNote || '').trim();
+  const thinking = pendingUserInput ? '' : (thinkingNote || '').trim();
   const lines: string[] = [];
   if (note) lines.push(`当前步骤：${note}`);
   if (thinking) lines.push(`当前思考：${truncateStatusNote(thinking, MAX_STREAM_THINKING_NOTE_CHARS)}`);

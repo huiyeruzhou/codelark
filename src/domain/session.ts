@@ -23,6 +23,7 @@ export type BridgeSessionHealthStatus =
   | 'idle'
   | 'running_active'
   | 'waiting_tool'
+  | 'waiting_input'
   | 'slow_observed'
   | 'suspected_stall'
   | 'suspected_stream_ui_stall'
@@ -82,6 +83,8 @@ export interface BridgeSession {
   queued_count?: number;
   last_runtime_update_at?: string;
   health_status?: BridgeSessionHealthStatus;
+  /** 原生问卷仍在等待用户回答；由交互观察器清除。 */
+  pending_user_input?: string;
   health_reason?: string;
   last_progress_at?: string;
   last_progress_type?: string;

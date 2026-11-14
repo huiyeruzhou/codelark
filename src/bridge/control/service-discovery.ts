@@ -63,28 +63,6 @@ function descriptorPath(codelarkHome: string, directory: string): string {
   return path.join(directory, `${key}.json`);
 }
 
-function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-function removeDescriptorIfStale(
-  descriptor: BridgeServiceDescriptor,
-  directory: string,
-): void {
-  if (isProcessAlive(descriptor.pid)) return;
-  const filePath = descriptorPath(descriptor.codelarkHome, directory);
-  try {
-    const current = JSON.parse(fs.readFileSync(filePath, 'utf8')) as BridgeServiceDescriptor;
-    if (current.runId === descriptor.runId) fs.rmSync(filePath, { force: true });
-  } catch { /* already removed or replaced */ }
-}
-
 function writeDescriptor(filePath: string, descriptor: BridgeServiceDescriptor): void {
   const directory = path.dirname(filePath);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -423,8 +401,11 @@ async function discoverBridgeSessionsDetailed(options: {
       const payload = await requestDescriptor<{ sessions: DiscoveredBridgeSession[] }>(descriptor, `/v1/sessions${query}`, undefined, 500);
       return { sessions: payload.sessions, failure: null };
     } catch (error) {
-      const directory = options.discoveryDirectory || getBridgeDiscoveryDirectory();
-      removeDescriptorIfStale(descriptor, directory);
+      // A caller can run in a PID and network namespace that cannot observe
+      // the host Bridge. Neither an endpoint failure nor kill(pid, 0) ESRCH
+      // proves that the owner is dead there. Keep the descriptor: a restart
+      // for the same Home atomically replaces it, while callers already omit
+      // unreachable instances from discovery results.
       return {
         sessions: [],
         failure: {

@@ -208,6 +208,7 @@ import {
   observeAppServerRequests, handleAppServerRequestCallback, answerAppServerQuestion,
   closeAppServerRequestObservers, releaseAppServerRequestObserver, hasAppServerQuestion,
 } from '../permission/app-server.js';
+import { reconcileCursorQuestion, handleCursorQuestionCallback, answerCursorQuestionText, hasCursorQuestion, clearCursorQuestions } from '../permission/cursor-questions.js';
 import {
   coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
@@ -2094,8 +2095,7 @@ function getMirrorStructuredStreamStatusConfig(): {
 function getMirrorThreadTitle(threadId: string, sessionId?: string): string | null {
   const { store } = getBridgeContext();
   const session = sessionId ? store.getSession(sessionId) : null;
-  const codexSession = getCodexSessionByThreadIdSafe(threadId, 'mirror title');
-  if (!session && !codexSession) return null;
+  if (!session && !getCodexSessionByThreadIdSafe(threadId, 'mirror title')) return null;
   return new ThreadDisplayService(store).thread(threadId, sessionId, { stripInternalPrefix: true }).title;
 }
 
@@ -2126,6 +2126,7 @@ const CODEX_TUI_DIAGNOSTICS = createCodexTuiDiagnostics({
 });
 
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
+  getPendingUserInput: (sessionId) => getBridgeContext().store.getSession(sessionId)?.pending_user_input,
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
   getThreadTitle: getMirrorThreadTitle,
   getRuntimeTags: getMirrorRuntimeTags,
@@ -2187,7 +2188,8 @@ function flushTimedOutMirrorTurn(
   subscription: BridgeMirrorSubscription,
   nowMs = Date.now(),
 ): FinalizedBridgeMirrorTurn | null {
-  if (subscription.pendingTurn?.streamStarted) {
+  if (subscription.pendingTurn?.streamStarted
+    || getSessionActiveRuntime(getBridgeContext().store.getSession(subscription.sessionId)) === 'cursor') {
     return null;
   }
   return flushTimedOutMirrorTurnBase(subscription, MIRROR_TURN_BUFFER_TIMEOUT_MS, nowMs);
@@ -2201,7 +2203,10 @@ function consumeBufferedMirrorTurns(
   subscription: BridgeMirrorSubscription,
   nowMs = Date.now(),
 ): FinalizedBridgeMirrorTurn[] {
+  // Cursor timestamps identify the user turn, not each tool's completion.
+  // Wait for its native terminal even before asynchronous card creation ends.
   const timeoutMs = subscription.pendingTurn?.streamStarted
+    || getSessionActiveRuntime(getBridgeContext().store.getSession(subscription.sessionId)) === 'cursor'
     ? Number.POSITIVE_INFINITY
     : MIRROR_TURN_BUFFER_TIMEOUT_MS;
   return consumeBufferedMirrorTurnsBase(subscription, timeoutMs, nowMs, MIRROR_TURN_HOOKS);
@@ -2472,21 +2477,57 @@ function resetMirrorSessionForInteractiveRun(sessionId: string): void {
   ZCODE_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
 }
 
+const restoringAppServerBindings = new Set<string>();
+
 async function reconcileMirrorSubscriptions(): Promise<void> {
   const store = getBridgeContext().store;
   let protocolBindings: ChannelChat[] = [];
   try { protocolBindings = store.listChannelChats(); }
   catch (error) { console.warn('[bridge-manager] app-server binding scan:', describeUnknownError(error)); }
+  // Native Cursor questions/output must not await another runtime's thread resume.
+  const cursorWork = Promise.allSettled([
+    ...protocolBindings.map(async (binding) => {
+      const session = store.getSession(binding.bridgeSessionId);
+      const adapter = getState().adapters.get(binding.channelType);
+      if (session && getSessionActiveRuntime(session) === 'cursor' && adapter) {
+        await reconcileCursorQuestion(session, binding, adapter, store);
+      }
+    }),
+    CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions(),
+  ]).then((results) => {
+    for (const result of results) if (result.status === 'rejected') {
+      console.warn('[bridge-manager] Cursor 订阅尚未恢复:', describeUnknownError(result.reason));
+    }
+  });
   for (const binding of protocolBindings) {
     try {
       const session = store.getSession(binding.bridgeSessionId);
+      if (session && getSessionActiveRuntime(session) === 'cursor') continue;
+      if (session?.pending_user_input) store.updateSession(session.id, { pending_user_input: undefined });
       if (!session || (!session.runtime?.codex?.appServerEndpoint && !getCodexAppServerSession(session.id))) continue;
       const adapter = getState().adapters.get(binding.channelType);
       if (!adapter) continue;
-      const protocol = getCodexAppServerSession(session.id) || await prepareCodexAppServerForBinding(store, binding, session, { createIfMissing: false });
+      const protocol = getCodexAppServerSession(session.id);
       if (protocol) {
         observeAppServerRequests(session.id, protocol, adapter, { channelType: binding.channelType, chatId: binding.chatId }, store);
         INTERACTIVE_RUNTIME.syncSessionRuntimeState(session.id);
+      } else if (!restoringAppServerBindings.has(binding.id)) {
+        // Restoring one external thread must never hold every runtime's mirror
+        // poll (including completion delivery). The interactive input path still
+        // awaits readiness; this background observer attaches once it is ready.
+        restoringAppServerBindings.add(binding.id);
+        void prepareCodexAppServerForBinding(store, binding, session, { createIfMissing: false }).then((restored) => {
+          const current = store.getChannelChat(binding.channelType, binding.chatId);
+          const latest = store.getSession(session.id);
+          if (!restored || !getState().running || current?.id !== binding.id
+            || current.bridgeSessionId !== session.id || !latest
+            || getCodexAppServerSession(session.id) !== restored
+            || getState().adapters.get(binding.channelType) !== adapter) return;
+          observeAppServerRequests(session.id, restored, adapter, { channelType: binding.channelType, chatId: binding.chatId }, store);
+          INTERACTIVE_RUNTIME.syncSessionRuntimeState(session.id);
+        }).catch((error) => {
+          console.warn('[bridge-manager] app-server 订阅尚未恢复:', describeUnknownError(error));
+        }).finally(() => restoringAppServerBindings.delete(binding.id));
       }
     } catch (error) {
       console.warn('[bridge-manager] app-server 订阅尚未恢复:', describeUnknownError(error));
@@ -2495,7 +2536,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
   await MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CLAUDE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await KIMI_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
-  await CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  await cursorWork;
   await ZCODE_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
   await CODEX_TUI_DIAGNOSTICS.ensureIdleScreenCheckpoints();
   const nowMs = Date.now();
@@ -2525,7 +2566,7 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if ((!rawText && !hasAttachments) || msg.channelEvent || msg.callbackData || isBridgeCommandText(rawText)) return false;
   if (isPendingAttachmentConfirmationReply(msg.address, rawText)) return true;
   const currentBinding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
-  if (currentBinding && hasAppServerQuestion(currentBinding.bridgeSessionId)) return true;
+  if (currentBinding && (hasAppServerQuestion(currentBinding.bridgeSessionId) || hasCursorQuestion(currentBinding.bridgeSessionId))) return true;
   const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
   if (!binding || !INTERACTIVE_RUNTIME.getActiveTask(binding.bridgeSessionId)) return false;
   const session = getBridgeContext().store.getSession(binding.bridgeSessionId);
@@ -2556,6 +2597,7 @@ function isHighPriorityControlCommandText(rawText: string): boolean {
 function isHighPriorityControlCallback(callbackData: string): boolean {
   if (
     callbackData.startsWith('app-server-request:')
+    || callbackData.startsWith('cursor-question:')
     ||
     callbackData.startsWith('perm:')
     || callbackData.startsWith('tui-selection-choice:')
@@ -2666,11 +2708,26 @@ function codexThreadControlForMessage(msg: InboundMessage): 'interrupt' | 'unsup
 }
 
 function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): AdapterImmediateLane | null {
+  if (category === 'callback' && msg.callbackData?.startsWith('cursor-question:')) {
+    return { laneKey: `control:append:${msg.address.channelType}:${msg.address.chatId}`, laneKind: 'control', jobKind: 'control:cursor-answer', serialize: true };
+  }
   if (codexThreadControlForMessage(msg)) {
     return {
       laneKey: `control:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId || 'thread-control'}`,
       laneKind: 'control',
       jobKind: 'control:thread-key',
+    };
+  }
+  const appendBinding = category === 'bypass'
+    ? getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId)
+    : null;
+  const appendSession = appendBinding && getBridgeContext().store.getSession(appendBinding.bridgeSessionId);
+  if (getSessionActiveRuntime(appendSession) === 'cursor' && shouldRouteTerminalAppendInline(msg)) {
+    return {
+      laneKey: `control:append:${msg.address.channelType}:${msg.address.chatId}`,
+      laneKind: 'control',
+      jobKind: 'control:terminal-append',
+      serialize: true,
     };
   }
   if (category === 'channel-event') {
@@ -2970,6 +3027,7 @@ export async function stop(): Promise<void> {
   // Stop all adapters
   await closeCodexAppServerSessions();
   closeAppServerRequestObservers();
+  clearCursorQuestions();
   for (const type of Array.from(state.adapters.keys())) {
     await ADAPTER_RUNTIME.stopAdapterInstance(type);
   }
@@ -3574,6 +3632,7 @@ function stopAllThenTasks(): void {
 function isThenSessionReadyForPrompt(sessionId: string): boolean {
   const session = getBridgeContext().store.getSession(sessionId);
   if (!session) return true;
+  if (session.pending_user_input) return false;
   if (session.runtime?.codex?.appServerEndpoint) {
     const handle = getCodexAppServerSession(sessionId);
     const snapshot = handle?.lifecycle.snapshot(handle.threadId);
@@ -4539,6 +4598,13 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    if (msg.callbackData.startsWith('cursor-question:')) {
+      const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+      const session = binding && store.getSession(binding.bridgeSessionId);
+      if (binding && session) await reconcileCursorQuestion(session, binding, adapter, store);
+    }
+    const cursorReply = await handleCursorQuestionCallback(msg, store);
+    if (cursorReply !== undefined) { enqueueBridgeNotice(adapter, msg.address, cursorReply); ack(); return; }
     const protocolReply = handleAppServerRequestCallback(msg, store);
     if (protocolReply !== undefined) {
       enqueueBridgeNotice(adapter, msg.address, protocolReply);
@@ -4928,9 +4994,15 @@ async function handleMessage(
     const binding = router.resolve(msg.address);
     const session = store.getSession(binding.bridgeSessionId);
     if (session) {
-      const questionReply = threadControl ? undefined : answerAppServerQuestion(msg, session.id, store);
+      if (!threadControl && getSessionActiveRuntime(session) === 'cursor') await reconcileCursorQuestion(session, binding, adapter, store);
+      const questionReply = threadControl ? undefined : (await answerCursorQuestionText(msg, session.id, store)) ?? answerAppServerQuestion(msg, session.id, store);
       if (questionReply !== undefined) {
         enqueueBridgeNotice(adapter, msg.address, questionReply);
+        ack();
+        return;
+      }
+      if (!threadControl && store.getSession(session.id)?.pending_user_input) {
+        enqueueBridgeNotice(adapter, msg.address, 'Cursor 正在等待问卷回答，请用当前问题卡片或 /tmux-screen 查看；此消息尚未作为新任务发送。');
         ack();
         return;
       }
@@ -5011,7 +5083,8 @@ async function handleMessage(
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
     && (tmuxProviderRuntime.runtime !== 'codex' || codexHasLegacyTmuxState)
-    && tmuxProviderRuntime.runtime !== 'cursor'
+    && (tmuxProviderRuntime.runtime !== 'cursor'
+      || (tmuxProviderActiveTask && resolveCursorTransport(tmuxProviderSession) === 'cli'))
     && tmuxProviderRuntime.runtime !== 'zcode'
     && !tmuxProviderSession.runtime?.codex?.appServerEndpoint
   ) {
@@ -5024,7 +5097,9 @@ async function handleMessage(
       const activeTmuxSessionName = getSessionRuntimeTmuxSessionName(tmuxProviderSession)
         || (tmuxProviderRuntime.runtime === 'kimi'
           ? kimiTmuxSessionName(tmuxProviderSession.id)
-          : undefined);
+          : tmuxProviderRuntime.runtime === 'cursor'
+            ? cursorTmuxSessionName(tmuxProviderSession.id)
+            : undefined);
       if (activeTmuxSessionName) {
         transitionRuntimeTmuxInputState(
           tmuxProviderRuntime.runtime,
@@ -5072,6 +5147,10 @@ async function handleMessage(
     if (text) {
       const tmuxProviderBridgeSessionId = tmuxProviderChat.bridgeSessionId;
       const tmuxProviderForwardStartedAtMs = Date.now();
+      // An IM steer is also owned by the direct stream. Register its actual
+      // prompt before the native mirror can observe the injected user row.
+      const cursorSuppressionId = tmuxProviderRuntime.runtime === 'cursor'
+        ? beginMirrorSuppression(tmuxProviderBridgeSessionId, text) : undefined;
       try {
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
@@ -5137,6 +5216,8 @@ async function handleMessage(
         enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
         });
+      } finally {
+        if (cursorSuppressionId) abortMirrorSuppression(tmuxProviderBridgeSessionId, cursorSuppressionId);
       }
     }
     ack();
@@ -5273,6 +5354,7 @@ async function handleMessage(
   try {
     const displayService = new ThreadDisplayService(store);
     await runInteractiveMessage(adapter, msg, text, hasAttachments ? msg.attachments : undefined, {
+      onInputAccepted: () => addInboundGetReaction(adapter, msg, 'tmux_input_actions_completed'),
       registerInteractiveTask: (task) => INTERACTIVE_RUNTIME.registerInteractiveTask(task),
       registerBridgeTurn: (turn) => TURN_COORDINATOR.registerInteractiveTurn(turn),
       resetMirrorSessionForInteractiveRun,

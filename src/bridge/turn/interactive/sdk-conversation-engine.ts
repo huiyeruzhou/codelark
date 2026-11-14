@@ -170,6 +170,7 @@ export async function processMessage(
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
+    onInputAccepted?: () => void;
   },
   runtime?: SdkConversationRuntime,
 ): Promise<ConversationResult> {
@@ -310,6 +311,9 @@ export async function processMessage(
       provider: resolvedProvider,
       conversationHistory: historyMsgs,
       files: llmFiles,
+      onInputAccepted: () => {
+        if (isCurrentTask()) options?.onInputAccepted?.();
+      },
       onRuntimeStatusChange: (status: string) => {
         if (!isCurrentTask()) return;
         try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }

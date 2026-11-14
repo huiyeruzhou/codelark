@@ -96,6 +96,8 @@ export interface StreamChatParams {
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
   files?: FileAttachment[];
   onRuntimeStatusChange?: (status: string) => void;
+  /** Called after the runtime confirms that the submitted input left its editor. */
+  onInputAccepted?: () => void;
 }
 
 export interface LLMProvider {

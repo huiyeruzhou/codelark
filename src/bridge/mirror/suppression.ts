@@ -224,7 +224,7 @@ export function filterSuppressedMirrorRecords(
 
   for (const record of records) {
     const normalizedContent = record.type === 'message'
-      ? normalizeMirrorPromptText(record.content || '')
+      ? normalizeMirrorPromptText(record.userPrompt ?? record.content ?? '')
       : '';
     let handled = false;
 
@@ -261,10 +261,12 @@ export function filterSuppressedMirrorRecords(
             handled = true;
             break;
           }
-          // If user message doesn't match prompt but has the same turnId as candidateTurnId,
-          // it's likely a synthetic message (permission error, tool error, etc.) - suppress it
+          // Legacy sources can emit synthetic error messages as user rows. A
+          // source with an explicit userPrompt identifies real input: a different
+          // prompt belongs to a local turn, even after a failed IM submission.
           if (
-            record.turnId
+            record.userPrompt === undefined
+            && record.turnId
             && suppression.candidateTurnId
             && record.turnId === suppression.candidateTurnId
           ) {

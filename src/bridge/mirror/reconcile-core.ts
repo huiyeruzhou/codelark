@@ -92,11 +92,16 @@ export function readMirrorDeliverableRecords(
       [],
       subscription.threadId,
     );
-    const delta = reconcileBridgeMirrorCursor(
-      subscription.cursor,
-      fullDelta.records,
-      source.runtime === 'cursor',
-    );
+    // A Cursor writer can expose an empty file between truncate and rewrite.
+    // Preserve the last observed identity instead of turning the next snapshot
+    // into a fresh history stream.
+    const delta = source.runtime === 'cursor' && previousCursor.initialized && fullDelta.records.length === 0
+      ? { nextCursor: previousCursor, deliverableRecords: [], reset: false }
+      : reconcileBridgeMirrorCursor(
+        subscription.cursor,
+        fullDelta.records,
+        source.runtime === 'cursor',
+      );
     subscription.cursor = delta.nextCursor;
     reset = delta.reset || !previousCursor.initialized;
     // Cursor rewrites its snapshot transcript in place.  Signatures for an

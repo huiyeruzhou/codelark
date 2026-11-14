@@ -3377,6 +3377,35 @@ agent = "claude"
     assert.deepEqual(filtered, []);
   });
 
+  it('waits for the Cursor native terminal even when recovered tool timestamps predate card creation', () => {
+    const store = getBridgeContext().store;
+    const session = store.createSession('Cursor recovery', 'test-model', undefined, '/tmp/cursor-recovery');
+    store.updateSession(session.id, setSessionActiveRuntimeUpdate('cursor'));
+    const timestamp = '2026-03-25T08:00:00.000Z';
+    const now = Date.parse('2026-03-25T09:00:00.000Z');
+    const subscription = createMirrorSubscription({
+      bindingId: 'cursor-recovery-binding', sessionId: session.id,
+      channelType: 'missing-test-adapter', chatId: 'cursor-recovery-chat',
+      threadId: 'cursor-recovery-thread', filePath: null, lastDeliveredAt: null,
+    });
+    subscription.pendingTurn = createMirrorTurnState(session.id, timestamp, 'cursor:turn');
+    subscription.bufferedRecords = [
+      { type: 'tool_started', signature: 'cursor:tool-start', content: '', timestamp, turnId: 'cursor:turn', toolId: 'read-1', toolName: 'Read', toolInput: { path: '/work/config.py' } },
+      { type: 'tool_finished', signature: 'cursor:tool-finish', content: 'configuration', timestamp, turnId: 'cursor:turn', toolId: 'read-1', toolName: 'Read' },
+    ];
+    assert.deepEqual(_testOnly.consumeBufferedMirrorTurns(subscription, now), []);
+    assert.equal(subscription.pendingTurn?.toolCalls.get('read-1')?.status, 'complete');
+    assert.equal(subscription.pendingTurn?.streamStarted, false);
+    assert.equal(_testOnly.flushTimedOutMirrorTurn(subscription, now), null);
+    assert.deepEqual(_testOnly.consumeBufferedMirrorTurns(subscription, now + 60_000), []);
+    subscription.bufferedRecords = [{ type: 'task_complete', signature: 'cursor:terminal', content: 'finished', timestamp, turnId: 'cursor:turn' }];
+    const final = _testOnly.consumeBufferedMirrorTurns(subscription, now + 120_000);
+    assert.equal(final.length, 1);
+    assert.equal(final[0]?.status, 'completed');
+    assert.equal(final[0]?.timedOut, undefined);
+    assert.equal(subscription.pendingTurn, null);
+  });
+
   it('flushes a buffered mirror turn after the idle timeout', () => {
     const subscription = {
       sessionId: 'session-1',

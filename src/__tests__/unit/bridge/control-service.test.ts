@@ -366,7 +366,7 @@ describe('bridge control service', () => {
     assert.deepEqual(received, [path.join(root, 'home-1'), path.join(root, 'home-0')]);
   });
 
-  it('keeps a live descriptor after a transient endpoint failure and prunes a dead one', async (t) => {
+  it('keeps descriptors after endpoint failure because callers may be namespace-isolated', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-stale-test-'));
     roots.push(root);
     const directory = path.join(root, 'discovery');
@@ -390,15 +390,6 @@ describe('bridge control service', () => {
     const livePath = descriptorFile(liveHome);
     const deadPath = descriptorFile(deadHome);
     const deadPid = process.pid === 424_242 ? 424_243 : 424_242;
-    t.mock.method(process, 'kill', (pid: number, signal?: NodeJS.Signals | number) => {
-      assert.equal(signal, 0);
-      if (pid === deadPid) {
-        const error = new Error('process not found') as NodeJS.ErrnoException;
-        error.code = 'ESRCH';
-        throw error;
-      }
-      return true;
-    });
     fs.writeFileSync(livePath, JSON.stringify({
       ...base,
       codelarkHome: liveHome,
@@ -414,7 +405,7 @@ describe('bridge control service', () => {
 
     assert.deepEqual(await discoverBridgeSessions({ discoveryDirectory: directory }), []);
     assert.equal(fs.existsSync(livePath), true);
-    assert.equal(fs.existsSync(deadPath), false);
+    assert.equal(fs.existsSync(deadPath), true);
     await assert.rejects(
       deliverManualInput({
         target: 'unknown-target',

@@ -222,8 +222,9 @@ export function invalidateRuntimeTmuxInputReadiness(
 }
 
 /**
- * Codex, Claude, Cursor and ZCode accept a new prompt as their natural steering
- * operation. Kimi needs an additional Ctrl-S only when a turn was already
+ * Codex, Claude and ZCode accept a new prompt as their natural steering
+ * operation. Cursor handles its native queued-input confirmation in its provider.
+ * Kimi needs an additional Ctrl-S only when a turn was already
  * active before this input was submitted.
  */
 export function resolveRuntimeTmuxSteerOperation(

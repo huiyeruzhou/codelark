@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { readCursorNativeMessages, cursorNativeToolKey, cursorVisibleThinkingSummary, type CursorNativeMessage } from './cli-store.js';
 import { CODELARK_HOME } from '../../configuration/paths.js';
 import { CursorDesktopSessionSource, statCursorDesktopStore } from './desktop-session-source.js';
 
@@ -613,6 +614,7 @@ function cursorAssistantReplacementKey(turnId: string): string {
 
 const CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX = 'cursor-assistant-snapshot:';
 const CURSOR_OCCURRENCE_STATE_PREFIX = 'cursor-occurrence:';
+const CURSOR_NATIVE_TOOL_STATE_PREFIX = 'cursor-native-tools:';
 
 interface CursorAssistantSnapshotState {
   lastContent: string;
@@ -722,6 +724,72 @@ function parseCursorBoldThinkingSummary(content: string): string {
 
 function normalizeCursorSnapshotText(content: string): string {
   return content.replace(/\r\n?/gu, '\n').trim();
+}
+
+interface CursorNativeIndex {
+  snapshots: Map<string, CursorStructuredAssistantSnapshot>;
+  tools: Map<string, string[]>;
+  results: Map<string, { name: string; content: string; isError: boolean }>;
+}
+
+const nativeIndexes = new WeakMap<CursorNativeMessage[], CursorNativeIndex>();
+
+function readCursorNativeIndex(storePath: string): CursorNativeIndex | null {
+  const messages = readCursorNativeMessages(storePath);
+  if (!messages) return null;
+  const cached = nativeIndexes.get(messages);
+  if (cached) return cached;
+  const index: CursorNativeIndex = { snapshots: new Map(), tools: new Map(), results: new Map() };
+  const occurrences = new Map<string, number>();
+  let turnId = '';
+  for (const message of messages) {
+    const blocks = Array.isArray(message.content) ? message.content : [{ type: 'text', text: message.content || '' }];
+    if (message.role === 'user') {
+      const text = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
+      const content = [{ type: 'text', text }];
+      if (isCursorMetadataOnlyUserRow(content)) continue;
+      const line = JSON.stringify({ role: 'user', message: { content } });
+      const occurrence = nextCursorOccurrence(occurrences, line);
+      turnId = cursorTurnId(line, occurrence, parseCursorUserTimestamp(content));
+    }
+    if (message.role === 'assistant') {
+      const text = normalizeCursorSnapshotText(blocks.filter((b) => b.type === 'text' && b.text?.trim() !== '<|eos|>').map((b) => b.text || '').join('\n'));
+      const reasoning = normalizeCursorSnapshotText(blocks.filter((b) => b.type === 'reasoning').map((b) => b.text || '').join('\n'));
+      if (reasoning) {
+        const snapshot = { canonicalContent: text, thinkingSummary: normalizeCursorThinkingSummary(cursorVisibleThinkingSummary(reasoning)) };
+        for (const separator of ['\n', '\n\n']) index.snapshots.set([text, reasoning].filter(Boolean).join(separator), snapshot);
+      }
+      for (const block of blocks) {
+        if (block.type !== 'tool-call' || !block.toolCallId || !block.toolName || !turnId) continue;
+        const key = `${turnId}\0${cursorNativeToolKey(block.toolName, block.args)}`;
+        index.tools.set(key, [...(index.tools.get(key) || []), block.toolCallId]);
+      }
+    }
+    if (message.role === 'tool') for (const block of blocks) {
+      if (block.type !== 'tool-result' || !block.toolCallId) continue;
+      const content = typeof block.result === 'string' ? block.result : JSON.stringify(block.result ?? '');
+      const result = block.result && typeof block.result === 'object' ? block.result as Record<string, unknown> : null;
+      const exitCode = block.toolName === 'Shell' ? content.match(/^Exit code:\s*(-?\d+)\s*$/m)?.[1] : undefined;
+      index.results.set(block.toolCallId, {
+        name: block.toolName || 'tool', content,
+        isError: block.isError === true || result?.isError === true || result?.is_error === true
+          || (exitCode !== undefined && Number(exitCode) !== 0),
+      });
+    }
+  }
+  nativeIndexes.set(messages, index);
+  return index;
+}
+
+function cursorStoreParserOptions(storePath?: string) {
+  if (!storePath) return {};
+  const native = readCursorNativeIndex(storePath);
+  return {
+    native,
+    resolveAssistantSnapshot: (content: string) => native
+      ? native.snapshots.get(normalizeCursorSnapshotText(content)) || null
+      : resolveCursorAssistantSnapshotFromStore(storePath, content),
+  };
 }
 
 function resolveCursorAssistantSnapshotFromStore(
@@ -881,15 +949,43 @@ function parseCursorTranscriptRecordState(
     currentTurnId?: string | null;
     currentSpecialCallIds?: Iterable<string>;
     resolveAssistantSnapshot?: (content: string) => CursorStructuredAssistantSnapshot | null;
+    native?: CursorNativeIndex | null;
   } = {},
 ): ParsedCursorTranscriptRecords {
   const records: BridgeMirrorRecord[] = [];
   const encodedState = Array.from(options.currentSpecialCallIds || []);
   const pendingToolIdsByName = decodePendingCursorTools(encodedState);
+  const nativeToolBindings = new Map<string, [string, number]>();
+  const bindingState = encodedState.find((value) => value.startsWith(CURSOR_NATIVE_TOOL_STATE_PREFIX));
+  if (bindingState) try {
+    for (const [id, binding] of JSON.parse(Buffer.from(bindingState.slice(CURSOR_NATIVE_TOOL_STATE_PREFIX.length), 'base64url').toString('utf8'))) {
+      if (typeof id === 'string' && Array.isArray(binding) && typeof binding[0] === 'string' && Number.isSafeInteger(binding[1])) nativeToolBindings.set(id, [binding[0], binding[1]]);
+    }
+  } catch { /* Ignore malformed state from an interrupted write. */ }
+
   const assistantSnapshots = decodeCursorAssistantSnapshots(encodedState);
   const occurrences = decodeCursorOccurrences(encodedState);
   let activeTurnId = options.currentTurnId || null;
   let activeTurnTimestamp = cursorTurnTimestamp(activeTurnId);
+  const flushNativeResults = () => {
+    for (const [name, ids] of pendingToolIdsByName) {
+      const pending = ids.filter((id) => {
+        const binding = nativeToolBindings.get(id);
+        const nativeId = binding ? options.native?.tools.get(binding[0])?.[binding[1] - 1] : undefined;
+        const result = nativeId ? options.native?.results.get(nativeId) : undefined;
+        if (!result) return true;
+        nativeToolBindings.delete(id);
+        records.push({
+          signature: `cursor:native-tool-result:${id}`, type: 'tool_finished',
+          toolId: id, toolName: result.name, content: result.content, isError: result.isError,
+          timestamp: activeTurnTimestamp, ...(activeTurnId ? { turnId: activeTurnId } : {}),
+        });
+        return false;
+      });
+      if (pending.length) pendingToolIdsByName.set(name, pending);
+      else pendingToolIdsByName.delete(name);
+    }
+  };
   for (const entry of cursorTranscriptLines(rawText, options.baseOffset || 0)) {
     const line = entry.line.trim();
     if (!line) continue;
@@ -907,6 +1003,7 @@ function parseCursorTranscriptRecordState(
       : 1;
     let timestamp = activeTurnTimestamp;
     if (parsed.type === 'turn_ended') {
+      flushNativeResults();
       if (activeTurnId) {
         const finalSnapshot = assistantSnapshots.get(activeTurnId);
         const structuredSnapshot = finalSnapshot?.canonicalContent && finalSnapshot.thinkingSummary
@@ -969,6 +1066,9 @@ function parseCursorTranscriptRecordState(
     // turn_ended record. A new user row is therefore the reliable turn
     // boundary; do not let the missing intermediate terminal merge turns.
     if (role === 'user') {
+      flushNativeResults();
+      pendingToolIdsByName.clear();
+      nativeToolBindings.clear();
       assistantSnapshots.clear();
       clearCursorTurnOccurrences(occurrences, activeTurnId);
       activeTurnTimestamp = parseCursorUserTimestamp(blocks);
@@ -1019,6 +1119,7 @@ function parseCursorTranscriptRecordState(
               lineOccurrence,
             );
             pendingToolIdsByName.set(toolName, pendingIds);
+            nativeToolBindings.delete(toolId);
             const result = tool.tool_result;
             records.push({
               signature: stableLineSignature(
@@ -1052,18 +1153,18 @@ function parseCursorTranscriptRecordState(
           type: 'message',
           role: role === 'user' ? 'user' : 'commentary',
           content: block.text,
+          ...(role === 'user' ? { userPrompt: /<user_query>\s*([\s\S]*)<\/user_query>\s*$/u.exec(block.text)?.[1]?.trim() || block.text } : {}),
           timestamp,
           ...(activeTurnId ? { turnId: activeTurnId } : {}),
         });
       } else if (block.type === 'tool_use') {
         const toolName = block.name || 'tool';
+        const nativeKey = `${activeTurnId}\0${cursorNativeToolKey(toolName, block.input)}`;
+        const occurrence = nextCursorOccurrence(occurrences, `event:${activeTurnId}:native-tool:${nativeKey}`);
         const toolId = stableLineSignature(
-          line,
-          entry.offset,
-          `tool-id:${blockIndex}`,
-          activeTurnId || '',
-          lineOccurrence,
+          line, entry.offset, `tool-id:${blockIndex}`, activeTurnId || '', lineOccurrence,
         );
+        nativeToolBindings.set(toolId, [nativeKey, occurrence]);
         const pendingIds = pendingToolIdsByName.get(toolName) || [];
         pendingIds.push(toolId);
         pendingToolIdsByName.set(toolName, pendingIds);
@@ -1096,12 +1197,16 @@ function parseCursorTranscriptRecordState(
       // flattened revisions have no stable textual prefix, so revision
       // comparison alone cannot recover the summary. Preserve it as soon as
       // the structured store proves the current flattened snapshot.
-      const structuredSnapshot = revision || (
-        splitCursorThinkingSummarySuffix(content)
-          ? options.resolveAssistantSnapshot?.(content) || null
-          : null
-      );
-      const visibleContent = structuredSnapshot?.canonicalContent || content;
+      const structuredSnapshot = options.resolveAssistantSnapshot?.(content) || revision;
+      if (structuredSnapshot && !structuredSnapshot.canonicalContent) {
+        if (structuredSnapshot.thinkingSummary) records.push({
+          signature: stableAssistantTextSignature(activeTurnId, `thinking-summary\0${structuredSnapshot.thinkingSummary}`),
+          type: 'reasoning', reasoningKind: 'summary', reasoningLabel: '思考摘要',
+          content: structuredSnapshot.thinkingSummary, timestamp, turnId: activeTurnId,
+        });
+        continue;
+      }
+      const visibleContent = structuredSnapshot?.canonicalContent ?? content;
       assistantSnapshots.set(activeTurnId, {
         lastContent: content,
         ...(structuredSnapshot || (
@@ -1127,11 +1232,13 @@ function parseCursorTranscriptRecordState(
       }
     }
   }
+  flushNativeResults();
   return {
     records,
     nextTurnId: activeTurnId,
     nextSpecialCallIds: [
       ...encodePendingCursorTools(pendingToolIdsByName),
+      ...(nativeToolBindings.size ? [CURSOR_NATIVE_TOOL_STATE_PREFIX + Buffer.from(JSON.stringify([...nativeToolBindings])).toString('base64url')] : []),
       ...encodeCursorAssistantSnapshots(assistantSnapshots),
       encodeCursorOccurrences(occurrences),
     ],
@@ -1140,9 +1247,7 @@ function parseCursorTranscriptRecordState(
 
 export function parseCursorTranscriptRecords(rawText: string, storePath?: string): BridgeMirrorRecord[] {
   return parseCursorTranscriptRecordState(rawText, {
-    ...(storePath ? {
-      resolveAssistantSnapshot: (content) => resolveCursorAssistantSnapshotFromStore(storePath, content),
-    } : {}),
+    ...cursorStoreParserOptions(storePath),
   }).records;
 }
 
@@ -1209,9 +1314,7 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
       baseOffset: Math.max(0, startOffset - Buffer.byteLength(trailingText, 'utf8')),
       currentTurnId,
       currentSpecialCallIds,
-      ...(storePath ? {
-        resolveAssistantSnapshot: (content) => resolveCursorAssistantSnapshotFromStore(storePath, content),
-      } : {}),
+      ...cursorStoreParserOptions(storePath),
     });
     return {
       records: parsed.records,
@@ -1253,12 +1356,20 @@ export function createCursorMirrorJsonlSource(): CursorMirrorJsonlSource {
         return desktop.read(threadId) ? { threadId, filePath: desktopPath, cwd: binding.cwd } : null;
       } catch { return null; }
     },
-    readModeForPath: (filePath) => filePath === desktopPath ? 'snapshot' : 'append',
+    // CLI also truncates and rewrites larger snapshots without changing inode.
+    // File growth does not prove append-only history.
+    readMode: 'snapshot',
     statSnapshot(filePath) {
       if (filePath === desktopPath) return statCursorDesktopStore(filePath);
       try {
         const stat = fs.statSync(filePath);
-        return { size: stat.size, mtimeMs: stat.mtimeMs, identity: `${stat.dev}:${stat.ino}` };
+        const storePath = storePathsByTranscript.get(filePath);
+        let mtimeMs = stat.mtimeMs;
+        // A completed tool can reach SQLite before the next transcript write.
+        for (const candidate of storePath ? [storePath, `${storePath}-wal`] : []) {
+          try { mtimeMs = Math.max(mtimeMs, fs.statSync(candidate).mtimeMs); } catch { /* WAL may be checkpointed. */ }
+        }
+        return { size: stat.size, mtimeMs, identity: `${stat.dev}:${stat.ino}` };
       } catch { return null; }
     },
     // Cursor rewrites transcript snapshots with atomic file replacement. A
@@ -1271,8 +1382,8 @@ export function createCursorMirrorJsonlSource(): CursorMirrorJsonlSource {
       const summary = findCursorSessionFileById(threadId, cwd);
       if ((transport || summary?.transport) === 'desktop') {
         desktopBindings.set(threadId, { cwd: cwd || summary?.cwd, nextProbeAt: Date.now() + 30_000 });
-        // A native store is authoritative for Desktop tools. CLI transcripts
-        // remain append logs and retain their existing parser and identity.
+        // A native store is authoritative for Desktop tools. CLI snapshots
+        // retain their own parser and semantic event identities.
         try {
           if (desktop.read(threadId)) return {
             threadId, filePath: desktopPath, cwd: cwd || summary?.cwd, updatedAt: summary?.updatedAt,

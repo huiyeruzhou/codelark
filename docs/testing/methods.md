@@ -261,3 +261,21 @@ npm run real:feishu:e2e -- --list-scenarios
 - 命令密集型真实 E2E 按 runtime 压缩，不默认扩张完整 provider 矩阵；provider 差异只在 SDK/tmux 输出路径和真实风险足够高时增加。
 - `src/__tests__` 下的本地测试要尽量保持隔离 home；任何读取真实 `~/.codelark`、`~/.codex`、`~/.claude` 的测试都应被视为风险。
 - 真实飞书成功证据必须来自自动 gate 和 report，不来自“群里看起来回了消息”的人工观察。
+
+### Cursor 原生 AskQuestion 回归
+
+使用 Node.js 24 运行：
+
+```bash
+node --import tsx --test src/__tests__/e2e/local-process/cursor/cursor-ask-question.e2e.test.ts
+```
+
+需要本机安装 Cursor CLI 和 tmux，不需要 Cursor 登录或真实模型调用。可用 `CODELARK_REAL_CURSOR_E2E_EXECUTABLE` 指定 CLI；`CODELARK_REAL_CURSOR_E2E_KEEP_ARTIFACTS=1` 保留原生数据库、转录、屏幕和收发证据。隔离 fake 后端通过 CLI 官方 endpoint 参数提供模型和 AgentService 协议，原生 CLI 自己处理工具和持久化。
+
+验收覆盖单选、多选、中文自由文本、已有答案覆盖、回调重复、观察器恢复、等待状态以及回答后原任务继续。断言 fake 模型收到精确的原生工具结果、原请求只调用一次，不能仅凭卡片发送成功或 tmux 按键成功报告端到端通过。飞书平台的真实发送、权限和用户回读需另行验证。
+
+Cursor 原生问卷回归还需保持另一个 Codex 的 `thread/resume` 始终不返回，验证当前问卷、答案、原任务完成和结束卡全部正常。问卷卡的长选项只在正文完整出现，下方按钮仅显示编号，回调仍对应原生选项。
+
+`cursor-steer.e2e.test.ts` 通过真实 Cursor CLI 与本地 fake backend 验证运行中追加。模型保持首轮打开，只有收到包含同一 `expected_run_id` 和正确补充文字的 `InjectContextAction` 才输出结果；覆盖正常画面与 1.2 秒旧画面延迟，检查仅一个模型 run、原轮次结束和输入回执。另有回归确保 steer 长时间待确认时不重复 Enter、不将其变成中断。
+
+`cursor-idle-submit.e2e.test.ts` 用真实 CLI 完成首轮后，再经 Bridge 发送第二轮消息，模拟首次 Enter 未被消费及 1.2 秒旧空输入框画面。断言 fake 模型准确收到第二轮、确认前没有 Get、不会重复请求，且结束卡包含第二轮结果；隔离 socket 与 fake 后端均由测试持有，不使用真实聊天做验收。

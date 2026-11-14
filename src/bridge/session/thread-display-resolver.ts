@@ -270,7 +270,12 @@ export class ThreadDisplayService {
     const session = sessionId
       ? this.store.getSession(sessionId)
       : findVisibleBridgeSessionByCodexThread(this.store, threadId) || null;
-    const codexSession = getCodexSessionByThreadIdSafe(threadId, 'thread display thread') || null;
+    const activeRuntime = getSessionActiveRuntime(session);
+    const isLocalRuntime = activeRuntime === 'claude' || activeRuntime === 'kimi'
+      || activeRuntime === 'cursor' || activeRuntime === 'zcode';
+    const codexSession = isLocalRuntime
+      ? null
+      : getCodexSessionByThreadIdSafe(threadId, 'thread display thread') || null;
     const sessionCodexTitle = getSessionCodexTitle(session);
     const sessionWorkingDirectory = getSessionWorkingDirectory(session);
     const title = this.resolveTitle({
@@ -281,15 +286,20 @@ export class ThreadDisplayService {
       fallback: codexSession?.cwd || threadId.slice(0, 8),
     });
     const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
-    const runtimeMetadata = this.runtimeMetadata(session);
+    const runtimeMetadata = this.runtimeMetadata(session, activeRuntime || 'codex');
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,
       cwd: sessionWorkingDirectory || codexSession?.cwd || '',
       lastActiveAt: codexSession?.lastEventAt || session?.last_progress_at || session?.updated_at,
-      originator: codexSession?.originator || 'Codex Native',
+      originator: activeRuntime === 'claude' ? 'Claude Code'
+        : activeRuntime === 'kimi' ? 'Kimi Code'
+          : activeRuntime === 'cursor' ? 'Cursor Agent'
+            : activeRuntime === 'zcode' ? 'ZCode'
+              : codexSession?.originator || 'Codex Native',
       bridgeSessionId: session?.id,
-      creatorKind: codexSession ? resolveCreatorKind(codexSource || {}) : (session ? 'bridge' : 'native'),
+      creatorKind: isLocalRuntime ? 'tui_cli'
+        : codexSession ? resolveCreatorKind(codexSource || {}) : (session ? 'bridge' : 'native'),
       codexSource,
       executionProvider: bridgeSessionExecutionProvider(session),
       ...runtimeMetadata,

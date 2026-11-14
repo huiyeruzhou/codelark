@@ -70,6 +70,7 @@ export interface CreateInteractiveStreamUiControllerParams {
   isAborted(): boolean;
   endPreview(): void;
   normalizeFinalText(text: string): string;
+  getPendingUserInput?(): string | undefined;
   recordSnapshot?(sessionId: string, snapshot: StructuredStreamingUiSnapshot): void;
 }
 
@@ -211,7 +212,7 @@ export function createInteractiveStreamUiController(
       ? getVisibleLastActivityAgeMs(nowMs)
       : lastActivityAgeMs;
     feedback.pushStatus(
-      effectiveLastActivityAgeMs == null
+      effectiveLastActivityAgeMs == null && !params.getPendingUserInput?.()
         ? buildStreamRuntimeStatus(params.streamState, nowMs)
         : formatStreamRuntimeStatus(
             Math.max(0, nowMs - params.streamState.startedAtMs),
@@ -220,6 +221,7 @@ export function createInteractiveStreamUiController(
             params.streamState.contextUsage,
             params.streamState.thinkingNote,
             nowMs,
+            params.getPendingUserInput?.(),
           ),
     );
     syncSnapshot();

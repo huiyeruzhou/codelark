@@ -30,6 +30,7 @@ const TMUX_COMMANDS = new Set([
 ]);
 
 export interface TerminalDispatchDeps {
+  getActiveTask?(sessionId: string): { abortController: AbortController } | undefined;
   reconcileMirrorSubscriptions?(): Promise<void>;
   shellRunner?: ShellCommandRunner;
   tmuxProviderAutoForward?: boolean;
@@ -104,6 +105,7 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
     autoRecoverProviderSession: deps.tmuxProviderAutoForward === true
       || (command === '/tmux' && args.trim().length > 0),
     suppressSuccessfulResponse: deps.tmuxProviderAutoForward === true && command === '/tmux',
+    inputAbortSignal: deps.getActiveTask?.(binding.bridgeSessionId)?.abortController.signal,
     tmuxProviderAutoForward: deps.tmuxProviderAutoForward,
     onTmuxProviderAutoForwarded: deps.onTmuxProviderAutoForwarded,
     onAppServerPrepared: (handle) => observeAppServerRequests(session.id, handle, adapter, msg.address, store),

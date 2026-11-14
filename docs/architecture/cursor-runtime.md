@@ -2,9 +2,29 @@
 
 ## 目标
 
-Cursor Agent CLI 会话由 CodeLark 在 provider-owned tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入 chat metadata 与 transcript JSONL，CodeLark 从 transcript 读取结构化输出，不解析终端屏幕的 ANSI/局部重绘。
+Cursor Agent CLI 会话由 CodeLark 在 provider-owned tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入原生会话库与 transcript JSONL，CodeLark 用原生记录恢复思考摘要和工具结果，并与 transcript 的消息、正式终态对齐，回答正文、思考摘要和工具结果不依赖终端屏幕的 ANSI/局部重绘。原生问卷的题号和输入确认使用当前终端界面。
 
 Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，从同一对话的原生 SQLite bubbles 读取输出，并通过 Desktop Bridge 实时状态确认终态；旧版本原生库不可读时才使用 transcript。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 transport；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
+
+## 进程恢复与手动同步
+
+普通群消息提交前检查 tmux 的 `pane_dead`。窗口存在但 Cursor 已退出时，使用原 `--resume <chatId>` 自动拉起；存活进程继续复用，原生接收确认前不报告输入成功。输入进入 follow-ups 后，即使旧编辑框文字仍可见，也不能重试提交；仅在原生界面明确提供 `enter steer` 时推进一次。未进入队列的草稿最多补一次 Enter；停止请求立即取消输入确认循环。
+
+Cursor 的首次输入、空闲续聊、运行中追加和 `/tmux` 文本均整块粘贴，原样保留换行，然后只发送提交键。不能复用逐行粘贴加 `Alt+Enter` 的通用输入方式：恢复会话期间换行键可能作为 ESC/回车混入粘贴正文，原生实际收到的内容与待确认请求不一致，延长等待或继续按 Enter 都无法修复已损坏的文本。真实 CLI 回归包含完整来源标记、中文、多行正文及换行键落入粘贴文本的故障回放；假模型校验实际接收到的完整请求。
+
+本地新输入通过独立 mirror 同步。Cursor user 记录显式提取 `user_query`，用于与群输入做准确去重；上一条失败群消息不能把随后不同的本地输入当作自身回声。CLI transcript 按 snapshot 读取，即使 inode 不变、文件变大，也按事件身份接续；短暂空文件不能清掉已读位置，避免下一次写入重放历史。
+
+真实 CLI 回归 `cursor-recovery.e2e.test.ts` 覆盖死进程自动拉起、原会话身份不变、失败群输入后本地手动对话在模型完成前出卡，并收尾为成功。`cursor-steer.e2e.test.ts` 覆盖 follow-ups 与旧草稿同时显示的边界，fake 后端确认仅收到一次同轮追加；取消和同 inode 历史重写由定向状态回归覆盖。
+
+## 原生问卷与等待回答
+
+CLI 的 `AskQuestion` 在用户回答前保存在 `ConversationStateStructure.pending_tool_calls`（protobuf field 4）。此时 transcript 和 field 1 的已提交消息可能都没有问题；仅轮询 transcript 会让飞书一直显示“上次响应很久之前”，而原生 CLI 实际在等人回答。
+
+Bridge 从当前原生 root 读取问卷，通过现有会话巡检逐题发送卡片。卡片正文纵向保留完整问题和选项，下方用短编号按钮选择，不能把长选项按钮放在整段题目旁边。单选可以点击按钮，文字回答直接发在当前群，多选回复用逗号分隔的编号。等待期间显示“等待你的回答”，不把无模型输出误报成模型卡死。问卷和工具结果来自原生存储；终端只用来确认当前题号并输入答案，不用于生成回答正文。
+
+回答通过即时串行控制入口绕过当前轮的消息等待；提交前校验聊天绑定、原生会话、工具调用和题号，提交后必须看到下一题或同一工具的原生结果才报告成功。重复、过期及跨聊天回调不能回答其他问题。Bridge 恢复时读取尚未完成的原生问卷，并复用已发送的问题卡片。其他 Codex 会话的 thread/resume 在后台独立恢复，不能阻塞 Cursor 的问卷、输出订阅或结束卡。若终端已填入 Other 文字，多选编号不会静默清除或带上旧文字；需要回复新文字覆盖，或在终端调整后再回答。覆盖时先确认 Other 已获焦点，将光标移到行尾后清空，并确认空输入框，再写入并确认新文字；不能假定 Ctrl-U 总会删除整行。普通追加消息不得向问卷输入框注入新任务或重试 Enter；未知问卷界面保留等待提示，要求查看 `/tmux-screen`，不自动选择默认答案。
+
+本地回归 `src/__tests__/e2e/local-process/cursor/cursor-ask-question.e2e.test.ts` 启动已安装的官方 CLI，将两个官方 endpoint 指向隔离的 HTTP/HTTP2 fake 后端。fake 模型实际发出 `AskQuestion` 并接收原生工具结果；测试经过聊天调度、卡片/文字回答、SQLite 和 transcript，直到同一轮输出完成标记。测试不直接写原生数据库，不使用真实模型账号；未安装 CLI 的环境明确跳过此用例。
 
 ## 官方证据
 
@@ -36,7 +56,7 @@ CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 ```
 
-消息主体是 Cursor 私有序列化 blob，CodeLark 不解析。`meta.json` schema v1 提供 `title`、`createdAtMs`、`updatedAtMs`、`hasConversation`、`isSubagent` 与 `cwd`，用于会话发现和列表。
+CLI 原生根状态使用 protobuf，`meta[0].latestRootBlobId` 指向当前状态，`rootPromptMessagesJson`（bytes 字段 1）给出有序消息 blob 引用。CodeLark 只按这些引用读取原生 JSON 消息；不扫描孤立旧 blob 来推断工具成功。原生消息保留 `text` / `reasoning`、`tool-call.toolCallId` 与 `tool-result`，导出的 transcript 则可能合并正文和思考、丢掉工具结果。当前实现因此用原生记录恢复展示语义，仍用 transcript 的正式终态结束回合。未知或不可读的原生格式保留 transcript 路径，不伪造工具完成。`meta.json` schema v1 提供 `title`、`createdAtMs`、`updatedAtMs`、`hasConversation`、`isSubagent` 与 `cwd`，用于会话发现和列表。
 
 Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 的可见会话索引位于用户数据目录：macOS 默认为 `~/Library/Application Support/Cursor/User`，Linux 默认为 `${XDG_CONFIG_HOME:-~/.config}/Cursor/User`，Windows 默认为 `%APPDATA%/Cursor/User`。CodeLark 的 `/t cursor` 会额外读取：
 
@@ -87,6 +107,12 @@ Cursor mirror（Desktop 原生库与 transcript 共用）在生成或投递历�
 选择后的时间水位仅用于游标丢失或源重建时抑制旧记录；正常增量中的同一 turn 新回复/迟到工具结果即使保留旧时间戳也继续交付。
 
 此策略只控制 Cursor mirror 到聊天群的输出，不停止 Cursor 任务，不改变 provider/transport，不拦截已由 direct turn 接管的记录。其他 runtime 的同步策略保持原状。
+
+## CLI 思考摘要和工具展示
+
+CLI 原生 `reasoning.text` 是进度摘要来源。某些模型在摘要字段中先输出 `Thinking Process:` 起草过程，末尾才给出要求的粗体标题与单段摘要。CodeLark 只展示最后这份摘要；起草过程不进入回复正文。识别限定在原生 `reasoning` 字段，普通回答即使讨论 `Thinking Process:` 也原样保留；缺少完整摘要时不把草稿当回答。
+
+工具按当前用户回合、完整参数和同参数调用次数匹配原生 `toolCallId`，再读取该 ID 的实际结果。保留已有 transcript 工具 ID，因此 SQLite 稍晚写入、snapshot 重写、mirror 恢复都不会重复创建工具。结果晚到且 JSONL 未变化时仍能更新状态；明确失败结果展示错误，未知结果继续等待。`Glob` 的 `glob_pattern` 和 `target_directory` 进入公共文件搜索展示，不再展示一块未解释的参数 JSON。
 
 ## 模型配置与实际生效边界
 
@@ -150,13 +176,28 @@ Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能
 1. provider 为 Bridge session 使用固定 tmux 名 `clk-cursor-<bridgeSessionId>`。
 2. 冷启动运行 `agent [--model ...] [--force] --trust`；配置 effort 时使用 Cursor 官方参数化模型语法 `model[effort=...]`，并保留已有 `context`、`fast` 等模型参数。已有 chat ID 时附加 `--resume <chatId>`。显式 `/p tmux` 完成前重新校验聊天 binding；如果启动期间 `/clear` 或 `/t` 已改绑，只清理旧 tmux，不写回旧 session。
 3. provider 检查 pane 未退出、未停在登录页且已出现输入编辑器。Cursor 首次进入较大工作区时会先做 workspace indexing，这一阶段进程仍存活但 pane 可能完全空白；它属于合法冷启动，而不是 CLI 退出或 prompt parser 失败。显式 `/p tmux` 会在等待 TUI 前立即回复“首次打开工作区时可能需要先建立索引”；普通消息触发冷启动时，当前流式卡片会立即显示同类说明，并从第 10 秒起持续更新已等待时间。readiness 默认最多等待 180 秒；若窗口用尽但 pane 仍活着，只结束当前 IM turn，并说明索引可能仍在进行，同时保留 tmux，下一条消息会重新执行 readiness 后复用它。登录页、pane 退出等确定失败仍立即报错并清理；未登录时提示先运行 `agent login`。
-4. 普通用户消息原样注入 TUI。tmux 的 `paste-buffer + Enter` 只证明按键已发送，不证明 Cursor 已接受本轮；workspace indexing 尚未收口时，Cursor 可能把文字留在带 `→` 的输入编辑器里并吞掉第一次 Enter。provider 会在短暂渲染宽限后抓屏确认：输入框已经清空才算投递成功；若原文仍在输入框，则按固定间隔重发 Enter，并在同一流里说明“正在确认提交”。运行期输入栏会显示 `Add a follow-up`，并在同一行右对齐显示 `ctrl+c to stop`；后者是操作提示，不属于草稿值，解析时必须先剥离。这条确认不解析回答，只验证输入所有权边界。输入框清空后立即向用户转移为“Cursor Agent 已接收消息，正在运行”；不得因 transcript 尚未 flush 而继续显示启动确认。首次消息真正提交后，再从当前 cwd 新增的 chat sidecar/transcript 发现 UUID，并写入 Bridge session。
-5. provider 从当前 transcript offset 开始轮询增量，直到 `turn_ended`，同时把文本、工具调用与终态转换成公共事件；bridge 输入状态被清空但 tmux 仍存活时，依靠已持久化 UUID/transcript 和真实输入框完成冷接管，不重启 TUI。
-6. 当前 IM turn 由 Cursor provider 从本轮 transcript offset 读取并形成 direct stream；独立 Cursor mirror runtime 观察同一 transcript，使本地 TUI 后续输出也能同步到 IM。identity 出现后建立 suppression 边界；direct turn 完成时保留一段 mirror grace suppression，但不等待 mirror terminal，因为当前 terminal owner 明确是 direct transcript stream。这样既不重复结束同一回合，也不会产生“等待一个不归 mirror 所有的 terminal”超时误报。
-7. tmux 丢失时按同一 UUID 执行 `agent --resume`，从旧 transcript 末尾继续读取；不得重放上一轮回答。
+4. 普通用户消息以整块 bracketed paste 保留换行，再提交一次 Enter；冷启动、空闲续聊、运行中追加和显式 `/tmux` 文本共用这条发送方式。已知原生会话时，接收确认读取当前根 `ConversationState.turns` 所引用的 `UserMessage`，包括 `text_blob_id` 外置文本。`turns` 也依赖 Cursor 的 checkpoint 写入，并不保证接收瞬间落盘；`rootPromptMessagesJson` 是可能更晚才更新的模型上下文，不能作为唯一接收来源；工具结果仍从后者读取。只跟随当前根中的有序引用，不扫描孤立 blob，不把两份记录相加；相同文字再次提交必须出现新的记录。旧格式没有 turns 时兼容读取模型上下文。首次还没有原生 store 的冷启动才使用屏幕接收证据，随后发现 UUID 并写入 Bridge session。
+
+接收确认不设固定截止时间：已发送的输入在首次 checkpoint 迟到时仍保持原卡等待，定期显示待确认状态；晚到记录确认后点 Get，继续读取同一任务的工具和结果。`CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS` 只控制发送前的冷启动 readiness，不再把发送后的慢回执变成任务失败。进程退出、认证失败或用户取消仍结束等待，不能依靠延长超时或重复发送掩盖问题。
+
+草稿确实还在编辑框时最多补一次 Enter；出现 follow-ups 就不能再把残留文字视作未提交草稿。等待确认接受当前任务的 AbortSignal，停止后不继续发键。输入接收与模型完成分别确认，不能要求模型先输出或完成才添加 Get。
+运行中追加通过独立、按聊天串行的即时输入队列发送，不等待上一轮的 session lock 或 conversation barrier；Cursor CLI 复用已有 TUI 和输出流，Desktop 复用原 observer。首条消息与追加消息都在确认输入提交后添加 Get 表情，未提交或失败时不提前确认。当前 Cursor CLI 的第一次 Enter 会先将运行中输入放入 follow-ups；运行中追加会先记录原生消息基线，输入框清空只是中间状态；等待界面明确出现 `enter steer` 后，只再按一次 Enter 请求加入当前轮，并等待原生会话新增这条用户消息才确认接收。终端重绘延迟时继续观察，不能用一次空输入框快照报告成功。已显示 steering 时等待确认，不重复按键；仅提供 interrupt and send 时明确说明消息还在队列，不主动中断任务。
+
+
+空闲的已知会话同样必须比较提交前后的原生用户消息，不能因为屏幕仍显示空的 `Add a follow-up` 就确认成功：输入框重绘可能落后于粘贴和 Enter。等待原生确认期间，空输入框不触发重复 Enter；确切草稿重新出现时才按既有规则补交。历史中已有相同文字也不能当作这次接收，必须看到新增记录。
+
+配置入口为 Cursor TUI 的 `/config` → General → Steering，对应 `~/.cursor/cli-config.json` 的 `steering: true`；若设置 `CURSOR_CONFIG_DIR`，则读取该目录，其他情况下也尊重 `XDG_CONFIG_HOME/cursor`。配置开启后，还需 Cursor 原生 `agent_context_injection` feature gate、活动 run 和远端 agent 同时可用，界面才会显示 `enter steer`。这时额外 Enter 提交的是带当前 run ID 的 `injectContextAction`，不会主动终止正在执行的回合；仅输入框清空或出现 Get 表情只能证明 Cursor 接收了输入，不能证明模型已经消费。
+
+5. provider 轮询当前 transcript 快照中的新增事件，直到 `turn_ended`，同时把文本、工具调用与终态转换成公共事件。与 Codex/Claude 的输出等待逻辑一致，只要进程仍存活且用户未取消，就继续等待正式终态；没有新 JSONL 或没有固定英文运行提示都不构成失败。Cursor 可能在模型 checkpoint 后才首次写入 transcript，因此首次文件发现也不设固定截止时间；旧的 `CODELARK_CURSOR_TMUX_SESSION_FILE_TIMEOUT_MS` 和 `CODELARK_CURSOR_TMUX_OUTPUT_IDLE_TIMEOUT_MS` 不再控制本路径。抓屏仅检查明确的认证错误或 pane 退出，回答与成功终态仍必须来自 JSONL。用户取消或进程退出会结束等待，不会自动重发用户消息。bridge 输入状态被清空但 tmux 仍存活时，依靠已持久化 UUID/transcript 和真实输入框完成冷接管，不重启 TUI。
+6. 当前 IM turn 由 Cursor provider 读取 transcript 快照并形成 direct stream；独立 Cursor mirror runtime 观察同一 transcript，使本地 TUI 后续输出也能同步到 IM。两条路径均从完整用户行恢复回合身份：Cursor 续聊会删掉旧 `turn_ended` 行并重写文件，文件变大也不代表只追加了内容。direct 在提交前记录已有回合和事件，之后仅投递新回合中未发送的事件；SQLite 迟到结果仍可补发，旧回合的迟到结果与终态不进入新卡片。identity 出现后建立 suppression 边界；direct turn 完成时保留一段 mirror grace suppression，但不等待 mirror terminal，因为当前 terminal owner 明确是 direct transcript stream。
+7. tmux 丢失时按同一 UUID 执行 `agent --resume`，以提交前快照作为历史边界继续读取；不得重放上一轮回答。
+
+Cursor 后台 mirror 同样等待正式原生终态，不使用通用的 10 分钟缓冲空闲截止，即使卡片仍在异步创建中。CLI transcript 的时间戳来自用户回合，后续工具可能一直沿用该时间；它不代表最近一次工具输出时间，不能据此把新收到的结果判为超时。
 8. stop、clear、unbind、archive 和群生命周期清理使用同一个 provider-owned tmux session 名，并进入共享 stop/cleanup owner。
 
 ## 验收用户故事
+
+- **连续追加与延迟上下文**：真实 CLI + fake 模型在同一 native run 接收两条快速不同补充、三条快速相同补充；逐条核对输入、唯一 injection ID 和 Get，不重开 run、不按 Enter 复制队列。空闲续聊用 gate 阻止模型终态与上下文更新，仍须在输入已保存到 turns 时确认接收。
 
 - **本地 workflow**：Cursor direct transcript turn 与后台 mirror 之间只有一个 terminal owner，不出现空 completed、重复 final 或历史重放。
 - **真实进程**：已登录官方 `agent` 首次启动前注入一次超过旧 30 秒门限的确定性延迟，证明等待期间有可见进度且不会误杀；若首次 Enter 被冷索引阶段吞掉，抓屏确认会在原文仍留在输入框时补发提交。输入被真实 TUI 接收后、第一个 transcript 输出或终态前，必须出现用户可见的“正在运行”状态。随后冷启动一个 UUID，第二轮在清空 bridge 输入状态后复用同一 tmux/UUID，杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。延迟 wrapper 只控制启动时序，实际 TUI、tmux、backend 和 transcript 仍全部来自官方 Cursor Agent。
@@ -173,7 +214,7 @@ CodeLark 自己也使用 `/...` 命令，因此原生 Cursor 命令通过 `/tmux
 - Cursor 是独立 `RuntimeAgent`，provider identity 统一为 `cursor:tmux`；`desktop` / `cli` 仅是内部 transport，不是可切换的 provider。
 - Cursor chat UUID、cwd、transcript 和 tmux 生命周期不复用 Codex/Kimi 的身份字段。
 - Cursor CLI 不存在、未登录、pane 提前退出、Desktop Bridge 不可用、transcript 未出现或长时间无活动时返回明确错误，不回退到其他 runtime/provider。
-- readiness 超时与 pane 退出不是同一种错误：前者保留仍存活的 provider-owned tmux 供观察和下一轮接管，后者按失败进程清理。
+- 输入准备/提交超时保留仍存活的 provider-owned tmux 供观察；运行阶段不设 transcript 空闲截止，明确退出/认证错误则报告失败并清理。需要终止仍在等待上游的会话时，使用已有停止操作。
 - Codex、Claude Code 与 Kimi Code 既有 routing、session 和 mirror 行为保持不变。
 
 共享 hook tailer 按实际读取字节推进游标，单次异步读取最多 256 KiB，剩余增量继续异步调度。每个文件保留未完成的 hook 标题、JSON 和 UTF-8 解码状态，避免跨次写入丢失中文或思考内容；文件轮转时重置解析状态。

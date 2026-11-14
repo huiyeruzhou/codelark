@@ -60,6 +60,7 @@ export interface MirrorStructuredStreamStatusConfig {
 }
 
 export interface MirrorFeedbackControllerDeps {
+  getPendingUserInput?(sessionId: string): string | undefined;
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
   getThreadTitle(threadId: string, sessionId?: string, bindingId?: string): string | null | undefined;
   getRuntimeTags?(threadId: string, sessionId?: string, bindingId?: string): string[];
@@ -388,6 +389,7 @@ export function createMirrorFeedbackController(
       turnState.contextUsage,
       turnState.thinkingNote,
       nowMs,
+      deps.getPendingUserInput?.(subscription.sessionId),
     );
     if (turnState.lastStatusText === statusText) return;
 

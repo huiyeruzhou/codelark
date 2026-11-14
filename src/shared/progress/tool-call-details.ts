@@ -84,7 +84,7 @@ function isReadTool(name: string | undefined): boolean {
 }
 
 function isSearchTool(name: string | undefined): boolean {
-  return /^(grep|search|search_files)$/.test(normalizeToolName(name));
+  return /^(glob|grep|search|search_files)$/.test(normalizeToolName(name));
 }
 
 function isEditTool(name: string | undefined): boolean {
@@ -371,8 +371,8 @@ export function buildToolCallDetailFromInput(toolName: string | undefined, input
     };
   }
   if (isSearchTool(toolName)) {
-    const query = record ? extractTextRecordValue(record, ['pattern', 'query', 'q']) : '';
-    const searchPath = record ? extractTextRecordValue(record, ['path', 'directory', 'cwd']) : '';
+    const query = record ? extractTextRecordValue(record, ['glob_pattern', 'pattern', 'query', 'q']) : '';
+    const searchPath = record ? extractTextRecordValue(record, ['target_directory', 'path', 'directory', 'cwd']) : '';
     const outputMode = record ? extractTextRecordValue(record, ['output_mode', 'outputMode']) : '';
     const headLimit = numberFromRecord(record, ['head_limit', 'headLimit', 'limit']);
     return {

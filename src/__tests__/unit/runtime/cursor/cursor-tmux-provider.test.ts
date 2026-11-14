@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
@@ -26,10 +27,12 @@ import {
   ensureCursorTmuxInputSession,
   isCursorInputDraftScreen,
   isCursorInputReadyScreen,
+  prepareCursorInputConfirmation,
   streamCursorTmuxTui,
+  waitForCursorInputSubmitted,
   withCursorReasoningEffort,
 } from '../../../../runtime/cursor/tmux-provider.js';
-import { tmuxCore } from '../../../../runtime/tmux/core.js';
+import { tmuxCore, type TmuxSendAction } from '../../../../runtime/tmux/core.js';
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { readMirrorDeliverableRecords } from '../../../../bridge/mirror/reconcile-core.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
@@ -39,11 +42,13 @@ describe('Cursor tmux provider helpers', () => {
   let configRoot: string;
   let dataRoot: string;
   let desktopUserRoot: string;
+  const originalReadPaneDead = tmuxCore.readPaneDead;
   let previousConfigRoot: string | undefined;
   let previousDataRoot: string | undefined;
   let previousDesktopUserRoot: string | undefined;
 
   beforeEach(() => {
+    tmuxCore.readPaneDead = async () => false;
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-cursor-'));
     configRoot = path.join(root, 'config');
     dataRoot = path.join(root, 'data');
@@ -57,6 +62,7 @@ describe('Cursor tmux provider helpers', () => {
   });
 
   afterEach(() => {
+    tmuxCore.readPaneDead = originalReadPaneDead;
     if (previousConfigRoot === undefined) delete process.env.CURSOR_CONFIG_DIR;
     else process.env.CURSOR_CONFIG_DIR = previousConfigRoot;
     if (previousDataRoot === undefined) delete process.env.CURSOR_DATA_DIR;
@@ -138,7 +144,32 @@ describe('Cursor tmux provider helpers', () => {
       'Auto Balance',
       '/tmp/cursor-workspace',
     ].join('\n')), true);
+    assert.equal(isCursorInputReadyScreen([
+      'Cursor Agent',
+      'Loading conversation',
+      '→ Plan, search, build anything',
+      'Gemini 4 Carbon High',
+      '/tmp/cursor-workspace',
+    ].join('\n')), false);
     assert.equal(isCursorInputReadyScreen('loading Cursor Agent'), false);
+  });
+
+  it('recognizes terminal authentication failures while the Cursor process remains alive', () => {
+    const liveFailure = [
+      '  → Add a follow-up                           ctrl+c to stop',
+      '',
+      '  Error: Authentication error',
+      '  If you are logged in, try logging out and back in.',
+    ].join('\n');
+    assert.match(cursorAuthenticationScreenError(liveFailure) || '', /credentials are invalid or expired/i);
+    assert.match(
+      cursorAuthenticationScreenError([
+        'Authentication failed: your Cursor credentials or API key are invalid or expired.',
+        'If you set CURSOR_API_KEY, check that it is correct, or run `cursor-agent login` to re-authenticate.',
+      ].join('\n')) || '',
+      /agent login/i,
+    );
+    assert.equal(isCursorInputReadyScreen(liveFailure), false);
   });
 
   it('distinguishes a real running Cursor pane from an unsubmitted draft', () => {
@@ -160,6 +191,37 @@ describe('Cursor tmux provider helpers', () => {
     assert.equal(
       isCursorInputDraftScreen('→ inspect src/runtime/cursor/tmux-provider.ts\n\nCodex 5.3 Medium'),
       true,
+    );
+    assert.equal(
+      isCursorInputDraftScreen([
+        '  Previous assistant answer',
+        '',
+        '<codelark_source>',
+        '',
+        '  Gemini 4 Carbon High · 44.9%                         Run Everything',
+        '  /opt/tiger/sft-datacook',
+      ].join('\n')),
+      true,
+      'Cursor 2026.11 collapses a multiline draft to its source tag without an input arrow',
+    );
+    assert.equal(
+      isCursorInputDraftScreen([
+        '  kasumi]sandbox"',
+        '  ID："target"</codelark_source>这是横向滚动后仍未提交的输入',
+        '  Gemini 4 Carbon High · 44.9%                         Run Everything',
+        '  /opt/tiger/sft-datacook',
+      ].join('\n')),
+      true,
+      'a horizontally scrolled draft still exposes its closing source tag',
+    );
+    assert.equal(
+      isCursorInputDraftScreen([
+        '  来源群聊："[kasumi]sandbox"',
+        '  Gemini 4 Carbon High · 44.9%                         Run Everything',
+        '  /opt/tiger/sft-datacook',
+      ].join('\n')),
+      true,
+      'a collapsed draft may expose only one CodeLark source field',
     );
   });
 
@@ -574,6 +636,29 @@ describe('Cursor tmux provider helpers', () => {
     assert.equal(next.records.filter((record) => record.type === 'task_complete').length, 1);
   });
 
+  it('does not replay history when Cursor rewrites a larger snapshot in place or briefly truncates it', () => {
+    const transcript = path.join(root, 'rewrite.jsonl');
+    const user = (time: string, text: string) => ({ role: 'user', message: { content: [{ type: 'text', text: `<timestamp>${time} (UTC)</timestamp>\n<user_query>${text}</user_query>` }] } });
+    const assistant = (text: string) => ({ role: 'assistant', message: { content: [{ type: 'text', text }] } });
+    const old = [user('2026-11-12T08:00:00Z', 'old'), assistant('old answer'), user('2026-11-13T09:00:00Z', 'current'), assistant('current answer')];
+    const source = createCursorMirrorJsonlSource();
+    const subscription = createMirrorSubscription({ bindingId: 'binding', sessionId: 'session', channelType: 'feishu', chatId: 'chat', threadId: 'thread', filePath: transcript, lastDeliveredAt: null });
+    let revision = 0;
+    const read = (rows: unknown[]) => {
+      fs.writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
+      return readMirrorDeliverableRecords(subscription, { size: fs.statSync(transcript).size, mtimeMs: ++revision, identity: 'same-inode' }, source).records;
+    };
+    assert.deepEqual(read(old), []);
+    const signature = subscription.cursor.lastEventSignature;
+    assert.deepEqual(read([]), []);
+    assert.equal(subscription.cursor.lastEventSignature, signature, 'a transient empty snapshot must not erase the checkpoint');
+    const rewritten = [old[0], assistant('old answer expanded '.repeat(100)), ...old.slice(2)];
+    assert.deepEqual(read(rewritten), [], 'larger history revisions must not replay old messages');
+    const next = read([...rewritten, user('2026-11-13T09:10:00Z', 'new local input'), assistant('new answer')]);
+    assert.deepEqual(next.filter(r => r.type === 'message').map(r => r.userPrompt || r.content), ['new local input', 'new answer']);
+    assert.equal(next.filter(r => r.type === 'task_started').length, 1);
+  });
+
   it('supersedes an earlier same-turn assistant snapshot with the captured Cursor final revision', () => {
     const fixture = fs.readFileSync(path.join(
       process.cwd(),
@@ -925,6 +1010,353 @@ describe('Cursor tmux provider helpers', () => {
     }
   });
 
+  for (const resume of [false, true]) {
+    it(`waits for delayed ${resume ? 'resumed' : 'first'} transcript output without relying on a running footer`, { timeout: 5_000 }, async () => {
+      const cwd = path.join(root, 'slow-output');
+      fs.mkdirSync(cwd, { recursive: true });
+      const sessionId = '66666666-6666-4666-8666-666666666666';
+      const transcript = resume ? writeCursorSession({ sessionId, cwd }) : undefined;
+      const originals = { ...tmuxCore };
+      const envNames = ['CODELARK_CURSOR_TMUX_SESSION_FILE_TIMEOUT_MS', 'CODELARK_CURSOR_TMUX_OUTPUT_IDLE_TIMEOUT_MS', 'CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS'];
+      const oldEnv = envNames.map((key) => process.env[key]);
+      let killCalls = 0;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      tmuxCore.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
+      tmuxCore.capturePane = async () => ({
+        screen: '→ Plan, search, build anything',
+        command: 'tmux capture-pane',
+      });
+      tmuxCore.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
+      tmuxCore.killSession = async () => { killCalls += 1; return 'tmux kill-session'; };
+      tmuxCore.injectPromptIntoPane = async (_target, prompt) => {
+        timer = setTimeout(() => {
+          const lines = [
+            { role: 'user', message: { content: [{ type: 'text', text: prompt }] } },
+            { role: 'assistant', message: { content: [{ type: 'text', text: 'late answer' }] } },
+            { type: 'turn_ended', status: 'success' },
+          ];
+          if (transcript) fs.appendFileSync(transcript, lines.map((line) => JSON.stringify(line)).join('\n') + '\n');
+          else writeCursorSession({ sessionId, cwd, lines });
+        }, 1_600);
+        return { commands: ['tmux paste-buffer', 'tmux send-keys Enter'] };
+      };
+      process.env.CODELARK_CURSOR_TMUX_SESSION_FILE_TIMEOUT_MS = '1000';
+      process.env.CODELARK_CURSOR_TMUX_OUTPUT_IDLE_TIMEOUT_MS = '1000';
+      process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+      try {
+        const reader = streamCursorTmuxTui({
+          prompt: 'slow response', sessionId: `bridge-slow-output-${resume}`, runtime: 'cursor',
+          workingDirectory: cwd, ...(resume ? { cursorSessionId: sessionId } : {}),
+        }).getReader();
+        let wire = '';
+        while (true) {
+          const item = await reader.read();
+          if (item.done) break;
+          wire += item.value;
+        }
+        const events = wire.trim().split('\n').map((line) => JSON.parse(line.slice(6)));
+        assert.deepEqual(events.filter((event) => event.type === 'text_snapshot').map((event) => event.data), ['late answer']);
+        assert.equal(events.filter((event) => event.type === 'result').length, 1);
+        assert.equal(events.some((event) => event.type === 'error'), false);
+        assert.equal(killCalls, 0);
+      } finally {
+        clearTimeout(timer);
+        Object.assign(tmuxCore, originals);
+        envNames.forEach((key, index) => {
+          if (oldEnv[index] === undefined) delete process.env[key];
+          else process.env[key] = oldEnv[index];
+        });
+      }
+    });
+  }
+
+  for (const resume of [false, true]) {
+    for (const cancel of [false, true]) {
+      it(`${cancel ? 'cancels an active turn' : 'reports a dead pane'} while waiting for ${resume ? 'resumed output' : 'the first transcript'}`, { timeout: 5_000 }, async () => {
+        const cwd = path.join(root, 'missing-output');
+        fs.mkdirSync(cwd, { recursive: true });
+        const sessionId = '77777777-7777-4777-8777-777777777777';
+        if (resume) writeCursorSession({ sessionId, cwd });
+        const originals = { ...tmuxCore };
+        const envNames = ['CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS', 'CODELARK_DEBUG'];
+        const oldEnv = envNames.map((key) => process.env[key]);
+        const abortController = new AbortController();
+        let killCalls = 0;
+        let dead = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        tmuxCore.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
+        tmuxCore.capturePane = async () => ({
+          screen: dead ? 'Pane is dead (status 1)' : '→ Plan, search, build anything',
+          command: 'tmux capture-pane',
+        });
+        tmuxCore.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
+        tmuxCore.killSession = async () => { killCalls += 1; return 'tmux kill-session'; };
+        tmuxCore.injectPromptIntoPane = async () => {
+          timer = setTimeout(() => {
+            if (cancel) abortController.abort();
+            else dead = true;
+          }, 600);
+          return { commands: ['tmux paste-buffer', 'tmux send-keys Enter'] };
+        };
+        process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+        delete process.env.CODELARK_DEBUG;
+        try {
+          const reader = streamCursorTmuxTui({
+            prompt: 'no transcript yet', sessionId: `bridge-missing-output-${resume}-${cancel}`, runtime: 'cursor',
+            workingDirectory: cwd, abortController, ...(resume ? { cursorSessionId: sessionId } : {}),
+          }).getReader();
+          let wire = '';
+          while (true) {
+            const item = await reader.read();
+            if (item.done) break;
+            wire += item.value;
+          }
+          const events = wire.trim().split('\n').map((line) => JSON.parse(line.slice(6)));
+          assert.equal(events.at(-1)?.type, 'error');
+          assert.match(events.at(-1)?.data, cancel ? /aborted/ : /Cursor Agent exited.*exit 1/);
+          assert.equal(events.some((event) => event.type === 'result'), false);
+          // The stream closes before asynchronous cleanup finishes.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          assert.equal(killCalls, 1);
+        } finally {
+          clearTimeout(timer);
+          Object.assign(tmuxCore, originals);
+          envNames.forEach((key, index) => {
+            if (oldEnv[index] === undefined) delete process.env[key];
+            else process.env[key] = oldEnv[index];
+          });
+        }
+      });
+    }
+  }
+
+  it('fails an accepted Cursor turn when its live pane reports expired credentials', { timeout: 5_000 }, async () => {
+    const cwd = path.join(root, 'expired-auth-output');
+    fs.mkdirSync(cwd, { recursive: true });
+    const sessionId = '88888888-8888-4888-8888-888888888888';
+    writeCursorSession({ sessionId, cwd });
+    const originals = { ...tmuxCore };
+    const previousPoll = process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+    const previousDebug = process.env.CODELARK_DEBUG;
+    let killCalls = 0;
+    let authFailed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    tmuxCore.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
+    tmuxCore.capturePane = async () => ({
+      screen: authFailed
+        ? 'Error: Authentication error\nIf you are logged in, try logging out and back in.'
+        : '→ Plan, search, build anything',
+      command: 'tmux capture-pane',
+    });
+    tmuxCore.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
+    tmuxCore.killSession = async () => { killCalls += 1; return 'tmux kill-session'; };
+    tmuxCore.injectPromptIntoPane = async () => {
+      timer = setTimeout(() => { authFailed = true; }, 600);
+      return { commands: ['tmux paste-buffer', 'tmux send-keys Enter'] };
+    };
+    process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+    delete process.env.CODELARK_DEBUG;
+
+    try {
+      let accepted = 0;
+      const reader = streamCursorTmuxTui({
+        onInputAccepted: () => { accepted += 1; },
+        prompt: 'continue the previous task',
+        sessionId: 'bridge-cursor-expired-auth',
+        cursorSessionId: sessionId,
+        runtime: 'cursor',
+        workingDirectory: cwd,
+      }).getReader();
+      let wire = '';
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        wire += item.value;
+      }
+      const events = wire.trim().split('\n').map((line) => JSON.parse(line.slice(6)) as {
+        type: string;
+        data: string;
+      });
+      assert.equal(accepted, 1, 'the failure happens after CodeLark accepted the user message');
+      assert.ok(events.some((event) => event.type === 'status'
+        && JSON.parse(event.data).reasoning === 'Cursor Agent 已接收消息，正在运行。'));
+      assert.equal(events.at(-1)?.type, 'error');
+      assert.match(events.at(-1)?.data || '', /credentials are invalid or expired/i);
+      assert.match(events.at(-1)?.data || '', /agent login/i);
+      assert.equal(events.some((event) => event.type === 'result'), false);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(killCalls, 1, 'an unrecoverable authenticated turn must not remain falsely running');
+    } finally {
+      clearTimeout(timer);
+      Object.assign(tmuxCore, originals);
+      if (previousPoll === undefined) delete process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+      else process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = previousPoll;
+      if (previousDebug === undefined) delete process.env.CODELARK_DEBUG;
+      else process.env.CODELARK_DEBUG = previousDebug;
+    }
+  });
+
+  for (const footer of ['enter steer · ↑ select/edit · esc cancel', '+2 more lines · enter steer · ↑ select/edit · esc cancel', 'enter interrupt and send · ↑ select/edit · esc cancel', 'steering', '']) {
+    it(`only promotes a queued follow-up when Cursor offers steer: ${footer || 'idle'}`, async () => {
+      const originals = { capturePane: tmuxCore.capturePane, sendActions: tmuxCore.sendActions };
+      const sent: unknown[] = [];
+      tmuxCore.capturePane = async () => ({ screen: footer && sent.length === 0
+        ? `┌─ follow-ups ──┐\n│ change direction │\n│ ${footer} │\n└─────────┘\n→ Add a follow-up    ctrl+c to stop`
+        : '→ Plan, search, build anything', command: '' });
+      tmuxCore.sendActions = async (_target, actions) => { sent.push(actions); return { commands: [] }; };
+      try {
+        await waitForCursorInputSubmitted('isolated-pane');
+        assert.deepEqual(sent, footer.includes('enter steer') ? [[{ type: 'key', key: 'Enter' }]] : []);
+      } finally { Object.assign(tmuxCore, originals); }
+    });
+  }
+
+  for (const delivered of [true, false]) it(`steer waits for acceptance and never interrupts a pending injection (${delivered ? 'delivered' : 'pending'})`, async (t) => {
+    const prompt = 'change direction';
+    let queued = false, submitted = false, pendingCaptures = 0;
+    const sends: unknown[] = [];
+    const timeout = process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS;
+    const pollInterval = process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+    if (!delivered) {
+      process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS = '3000';
+      process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+    }
+    t.after(() => {
+      if (timeout === undefined) delete process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS;
+      else process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS = timeout;
+      if (pollInterval === undefined) delete process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+      else process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = pollInterval;
+    });
+    t.mock.method(tmuxCore, 'capturePane', async () => {
+      if (submitted) pendingCaptures++;
+      return { screen: queued && !(delivered && pendingCaptures >= 2)
+        ? `┌─ follow-ups ──┐\n│ ○ ${prompt} │\n│ ${submitted ? 'steering' : 'enter steer · ↑ select/edit · esc cancel'} │\n└─────────┘\n→ Add a follow-up    ctrl+c to stop`
+        : `${submitted ? prompt : ''}\n→ Add a follow-up    ctrl+c to stop`, command: '' };
+    });
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => { sends.push(actions); submitted = true; return { commands: [] }; });
+    const confirmation = await prepareCursorInputConfirmation('isolated-pane', prompt);
+    queued = true;
+    const abort = new AbortController();
+    const timer = delivered ? undefined : setTimeout(() => abort.abort(), 3_500);
+    t.after(() => clearTimeout(timer));
+    const submission = waitForCursorInputSubmitted('isolated-pane', undefined, confirmation, abort.signal);
+    if (delivered) await submission;
+    else await assert.rejects(submission, { name: 'AbortError' });
+    assert.deepEqual(sends, [[{ type: 'key', key: 'Enter' }]]);
+    assert.ok(pendingCaptures > 0, 'input must not return immediately after requesting steer');
+  });
+
+  it('waits for a safe steer window instead of choosing interrupt and send', async (t) => {
+    const prompt = 'change direction without interrupting the active turn';
+    let queued = false;
+    let interruptOnlyFrames = 0;
+    let steerSent = false;
+    const sends: TmuxSendAction[][] = [];
+    t.mock.method(tmuxCore, 'capturePane', async () => {
+      if (!queued) {
+        return { screen: '→ Add a follow-up    ctrl+c to stop', command: '' };
+      }
+      if (steerSent) {
+        return { screen: `${prompt}\n→ Add a follow-up    ctrl+c to stop`, command: '' };
+      }
+      interruptOnlyFrames += 1;
+      const footer = interruptOnlyFrames < 3
+        ? 'enter interrupt and send · ↑ select/edit · esc cancel'
+        : 'enter steer · ↑ select/edit · esc cancel';
+      return {
+        screen: `┌─ follow-ups ──┐\n│ ○ ${prompt} │\n│ ${footer} │\n└─────────┘\n→ Add a follow-up    ctrl+c to stop`,
+        command: '',
+      };
+    });
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => {
+      sends.push(actions);
+      steerSent = true;
+      return { commands: [] };
+    });
+
+    const confirmation = await prepareCursorInputConfirmation('isolated-pane', prompt);
+    assert.equal(confirmation.running, true);
+    queued = true;
+    await waitForCursorInputSubmitted('isolated-pane', undefined, confirmation);
+
+    assert.ok(interruptOnlyFrames >= 3, 'the test must observe interrupt-only frames before steer becomes safe');
+    assert.deepEqual(sends, [[{ type: 'key', key: 'Enter' }]], 'only the safe enter-steer action may be sent');
+  });
+
+  it('does not acknowledge an idle input from an old empty editor or an identical historical message', async (t) => {
+    const prompt = 'continue with the configuration';
+    const storePath = path.join(root, 'idle-confirmation.db');
+    const db = new DatabaseSync(storePath);
+    db.exec('CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY,data BLOB)');
+    const message = Buffer.from(JSON.stringify({ role: 'user', content: [{ type: 'text', text: prompt }] }));
+    const messageId = crypto.createHash('sha256').update(message).digest('hex');
+    const rootBlob = Buffer.concat([Buffer.from([10, 32]), Buffer.from(messageId, 'hex')]);
+    const rootId = crypto.createHash('sha256').update(rootBlob).digest('hex');
+    db.prepare('INSERT INTO blobs VALUES (?,?)').run(messageId, message);
+    db.prepare('INSERT INTO blobs VALUES (?,?)').run(rootId, rootBlob);
+    db.prepare("INSERT INTO meta VALUES ('0',?)").run(Buffer.from(JSON.stringify({ latestRootBlobId: rootId })).toString('hex'));
+    db.close();
+    const keys = ['CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS', 'CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS'];
+    const old = keys.map(key => process.env[key]);
+    process.env[keys[0]!] = '1000'; process.env[keys[1]!] = '50';
+    t.after(() => keys.forEach((key, i) => { if (old[i] === undefined) delete process.env[key]; else process.env[key] = old[i]; }));
+    const sends: TmuxSendAction[][] = [];
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: '→ Add a follow-up', command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => { sends.push(actions); return { commands: [] }; });
+    const confirmation = await prepareCursorInputConfirmation('isolated-pane', prompt, storePath);
+    assert.equal(confirmation.nativeCount, 1);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 1_500);
+    t.after(() => clearTimeout(timer));
+    await assert.rejects(waitForCursorInputSubmitted('isolated-pane', undefined, confirmation, abort.signal), { name: 'AbortError' });
+    assert.deepEqual(sends, [], 'an empty editor waiting for native acceptance must not cause extra Enter presses');
+  });
+
+  it('retries an initially idle submission once when Cursor hides every draft marker', async (t) => {
+    const prompt = 'initial prompt hidden by the collapsed editor';
+    let submitted = false;
+    const sends: TmuxSendAction[][] = [];
+    t.mock.method(tmuxCore, 'capturePane', async () => ({
+      screen: submitted
+        ? `${prompt}\n→ Plan, search, build anything`
+        : 'kasumi]sandbox"\n\nGemini 4 Carbon High\n/opt/tiger/workspace',
+      command: '',
+    }));
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => {
+      sends.push(actions);
+      submitted = true;
+      return { commands: [] };
+    });
+
+    await waitForCursorInputSubmitted('isolated-pane', undefined, {
+      prompt,
+      screenCount: 0,
+      running: false,
+    });
+
+    assert.deepEqual(sends, [[{ type: 'key', key: 'Enter' }]]);
+  });
+
+  it('cancels input confirmation promptly even while a queued input retains a draft', async (t) => {
+    const abort = new AbortController();
+    let sends = 0;
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: '┌─ follow-ups ──┐\n│ ○ change direction │\n│ enter steer · ↑ select/edit · esc cancel │\n└────┘\n→ change direction', command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async () => { sends++; abort.abort(); return { commands: [] }; });
+    const started = Date.now();
+    await assert.rejects(waitForCursorInputSubmitted('isolated-pane', undefined, { prompt: 'change direction', screenCount: 0, running: true }, abort.signal), { name: 'AbortError' });
+    assert.equal(sends, 1, 'queued input allows only one promotion, never draft resubmissions');
+    assert.ok(Date.now() - started < 2_000);
+  });
+
+  it('ends receipt waiting when tmux retains the dead process last frame', async (t) => {
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: '→ Add a follow-up    ctrl+c to stop', command: '' }));
+    tmuxCore.readPaneDead = async () => true;
+    t.mock.method(tmuxCore, 'sendActions', async () => { assert.fail('dead panes cannot receive retry keys'); });
+    await assert.rejects(waitForCursorInputSubmitted('dead-pane:0.0', undefined, {
+      prompt: 'pending input', screenCount: 0, running: true,
+    }), /Cursor Agent exited before confirming input/);
+  });
+
   it('retries Enter when Cursor leaves the injected prompt in its input editor', async () => {
     const cwd = path.join(root, 'submit-retry-workspace');
     fs.mkdirSync(cwd, { recursive: true });
@@ -942,6 +1374,7 @@ describe('Cursor tmux provider helpers', () => {
     let prompt = '';
     let submitted = false;
     let retryEnterCalls = 0;
+    let accepted = 0;
     core.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
     core.killSession = async () => 'tmux kill-session';
     core.ensureDetachedSession = async () => ({ existed: false, commands: ['tmux new-session'] });
@@ -973,6 +1406,7 @@ describe('Cursor tmux provider helpers', () => {
 
     try {
       const reader = streamCursorTmuxTui({
+        onInputAccepted: () => { assert.equal(submitted, true); accepted++; },
         prompt: 'prompt whose first Enter was swallowed',
         sessionId: 'bridge-cursor-submit-retry',
         runtime: 'cursor',
@@ -989,6 +1423,7 @@ describe('Cursor tmux provider helpers', () => {
         data: string;
       });
       assert.equal(retryEnterCalls, 1);
+      assert.equal(accepted, 1);
       assert.ok(events.some((event) => event.type === 'text_snapshot' && event.data === 'submitted after retry'));
       assert.equal(events.at(-1)?.type, 'result');
     } finally {
@@ -1079,6 +1514,89 @@ describe('Cursor tmux provider helpers', () => {
       assert.equal(events.at(-1)?.type, 'result');
     } finally {
       Object.assign(core, originals);
+      if (previousPoll === undefined) delete process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+      else process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = previousPoll;
+    }
+  });
+
+  it('recovers resumed snapshot rewrites and late native results without replaying the baseline', async () => {
+    const cwd = path.join(root, 'resume-rewrite');
+    fs.mkdirSync(cwd, { recursive: true });
+    const sessionId = '33333333-3333-4333-8333-333333333334';
+    const user = { role: 'user', message: { content: [{ type: 'text', text: 'inspect' }] } };
+    const args = { glob_pattern: '*.py', target_directory: cwd };
+    const calls = (count: number) => ({ role: 'assistant', message: {
+      content: Array.from({ length: count }, () => ({ type: 'tool_use', name: 'Glob', input: args })),
+    } });
+    const terminal = { type: 'turn_ended', status: 'success' };
+    const old = [user, calls(1), { role: 'assistant', message: { content: [{ type: 'text', text: 'old answer' }] } }];
+    const wire = (rows: unknown[]) => rows.map((row) => JSON.stringify(row)).join('\n') + '\n';
+    const transcript = writeCursorSession({ sessionId, cwd, lines: [...old, terminal] });
+    const baselineSize = fs.statSync(transcript).size;
+    const store = path.join(configRoot, 'chats', cursorWorkspaceHash(cwd), sessionId, 'store.db');
+    fs.unlinkSync(store);
+    const db = new DatabaseSync(store);
+    db.exec('CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT); CREATE TABLE blobs (id TEXT PRIMARY KEY,data BLOB)');
+    const put = (bytes: Buffer) => {
+      const id = crypto.createHash('sha256').update(bytes).digest('hex');
+      db.prepare('INSERT OR IGNORE INTO blobs VALUES (?,?)').run(id, bytes);
+      return id;
+    };
+    const checkpoint = (messages: unknown[]) => {
+      const refs = messages.map((m) => Buffer.concat([Buffer.from([10, 32]), Buffer.from(put(Buffer.from(JSON.stringify(m))), 'hex')]));
+      const id = put(Buffer.concat(refs));
+      db.prepare("INSERT OR REPLACE INTO meta VALUES ('0',?)").run(Buffer.from(JSON.stringify({ latestRootBlobId: id })).toString('hex'));
+    };
+    const nativeUser = { role: 'user', content: user.message.content };
+    const nativeCalls = (...ids: string[]) => ({ role: 'assistant', content: ids.map((id) => ({ type: 'tool-call', toolName: 'Glob', toolCallId: id, args })) });
+    const result = (id: string, isError = false) => ({ role: 'tool', content: [{ type: 'tool-result', toolName: 'Glob', toolCallId: id, result: `${id}.py`, isError }] });
+    checkpoint([nativeUser, nativeCalls('old')]);
+    const current = [...old, user, calls(2)];
+    assert.ok(Buffer.byteLength(wire(current)) > baselineSize, 'a growing rewrite still invalidates the old offset');
+    const core = tmuxCore as unknown as Record<string, unknown>;
+    const originals = { hasSession: core.hasSession, capturePane: core.capturePane, injectPromptIntoPane: core.injectPromptIntoPane, ensureExtendedKeys: core.ensureExtendedKeys };
+    const previousPoll = process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
+    process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = '50';
+    let injected = false;
+    let polls = 0;
+    core.hasSession = async () => ({ exists: true, command: 'tmux has-session' });
+    core.ensureExtendedKeys = async () => '';
+    core.injectPromptIntoPane = async () => { injected = true; return { commands: [] }; };
+    core.capturePane = async () => {
+      if (injected) {
+        polls += 1;
+        // The old terminal remains visible for the first poll after submit.
+        if (polls === 2) {
+          fs.writeFileSync(transcript, wire(current));
+          checkpoint([nativeUser, nativeCalls('old'), nativeUser, nativeCalls('one', 'two')]);
+        }
+        if (polls === 3) checkpoint([nativeUser, nativeCalls('old'), result('old'), nativeUser, nativeCalls('one', 'two'), result('one'), result('two', true)]);
+        // Another unchanged snapshot must not repeat tools or their results.
+        if (polls === 5) fs.writeFileSync(transcript, wire([...current, terminal]));
+      }
+      return { screen: 'Agent\nContext 0%\n› ', command: 'tmux capture-pane' };
+    };
+    try {
+      const events: Array<{ type: string; data: string }> = [];
+      const reader = streamCursorTmuxTui({ prompt: 'inspect', sessionId: 'bridge-resume-rewrite', runtime: 'cursor', workingDirectory: cwd, cursorSessionId: sessionId }).getReader();
+      while (true) {
+        const item = await reader.read();
+        if (item.done) break;
+        for (const line of item.value.trim().split('\n')) events.push(JSON.parse(line.slice(6)));
+      }
+      const starts = events.filter((e) => e.type === 'tool_use').map((e) => JSON.parse(e.data));
+      const results = events.filter((e) => e.type === 'tool_result').map((e) => JSON.parse(e.data));
+      assert.equal(starts.length, 2);
+      assert.deepEqual(results.map((r) => [r.tool_use_id, r.content, r.is_error]), [
+        [starts[0].id, 'one.py', false], [starts[1].id, 'two.py', true],
+      ]);
+      assert.equal(events.filter((e) => e.type === 'result').length, 1);
+      assert.equal(events.at(-1)?.type, 'result');
+      assert.ok(!events.some((e) => e.data.includes('old answer') || e.data.includes('old.py')));
+      assert.equal(polls, 5);
+    } finally {
+      Object.assign(core, originals);
+      db.close();
       if (previousPoll === undefined) delete process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS;
       else process.env.CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS = previousPoll;
     }

@@ -14,6 +14,8 @@ export function formatHealthStatusLabel(healthStatus: string | undefined | null)
       return '正常运行';
     case 'waiting_tool':
       return '等待工具';
+    case 'waiting_input':
+      return '等待回答';
     case 'slow_observed':
       return '长时运行，待观察';
     case 'suspected_stall':

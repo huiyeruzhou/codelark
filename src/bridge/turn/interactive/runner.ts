@@ -227,6 +227,7 @@ export interface RunInteractiveMessageDeps {
   buildStopCallbackData?: BuildStopCallbackData;
   resolveInteractiveTurnDisplayInfo?: ResolveInteractiveTurnDisplayInfo;
   listInteractiveTurnBindings?: ListInteractiveTurnBindings;
+  onInputAccepted?: () => void;
   nowMs?(): number;
   setIntervalFn?(callback: () => void, intervalMs: number): unknown;
   clearIntervalFn?(handle: unknown): void;
@@ -487,6 +488,7 @@ export async function runInteractiveMessage(
     endPreview: endPreviewOnce,
     normalizeFinalText: (finalText) => assembleCodexFinalResponse({ text: finalText }).text,
     recordSnapshot: deps.recordInteractiveStreamUiSnapshot,
+    getPendingUserInput: () => deps.resolveSdkConversationRuntime?.().store.getSession(binding.bridgeSessionId)?.pending_user_input,
   });
   const streamingArtifacts = !isRuntimeMirrorTurn
     && !msg.address.cloudDocument
@@ -665,6 +667,7 @@ export async function runInteractiveMessage(
       },
       {
         isCurrentTask: () => deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId),
+        onInputAccepted: deps.onInputAccepted,
         expandToolCalls: true,
         streamPreview: {
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,

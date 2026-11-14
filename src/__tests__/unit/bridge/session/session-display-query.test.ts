@@ -1,10 +1,13 @@
 import '../../../setup/test-setup.js';
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import type { CodexSessionSummary } from '../../../../runtime/codex/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../../../../bridge/session/local-runtime-session.js';
 import { SessionDisplayQuery } from '../../../../bridge/session/display/session-display-query.js';
+import { ThreadDisplayService } from '../../../../bridge/session/thread-display-resolver.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -276,5 +279,37 @@ describe('SessionDisplayQuery', () => {
     assert.equal(row.cursorSessionId, 'cursor-linked');
     assert.equal(row.threadId, 'cursor-linked');
     assert.equal(row.executionProvider, 'tmux');
+  });
+
+  it('does not resolve a Cursor session ID through the Codex thread index', () => {
+    const threadId = 'cursor-id-also-present-in-codex';
+    const codexDir = path.join(process.env.CODEX_HOME!, 'sessions', '2026', '11', '11');
+    fs.mkdirSync(codexDir, { recursive: true });
+    fs.writeFileSync(path.join(codexDir, `rollout-${threadId}.jsonl`), `${JSON.stringify({
+      timestamp: '2026-11-11T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: threadId,
+        timestamp: '2026-11-11T00:00:00.000Z',
+        cwd: '/wrong/codex/workspace',
+        originator: 'Codex CLI',
+      },
+    })}\n`);
+
+    const store = new JsonFileStore(makeBridgeSettings());
+    const linked = store.createSession('Cursor mirror', 'test-model', undefined, '/repo/cursor');
+    store.updateSession(linked.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: { sessionId: threadId, cwd: '/repo/cursor', provider: 'tmux' },
+        general: { workingDirectory: '/repo/cursor' },
+      },
+    });
+
+    const display = new ThreadDisplayService(store).thread(threadId, linked.id);
+    assert.equal(display.title, 'Cursor mirror');
+    assert.equal(display.cwd, '/repo/cursor');
+    assert.equal(display.originator, 'Cursor Agent');
+    assert.equal(display.creatorKind, 'tui_cli');
   });
 });

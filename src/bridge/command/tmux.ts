@@ -79,6 +79,8 @@ import {
 } from '../../runtime/kimi/tmux-provider.js';
 import {
   ensureCursorTmuxInputSession,
+  prepareCursorInputConfirmation,
+  waitForCursorInputSubmitted,
 } from '../../runtime/cursor/tmux-provider.js';
 import { listCursorDesktopThreads } from '../../runtime/cursor/desktop-bridge-client.js';
 import { inspectCursorDesktopHookActivity } from '../../runtime/cursor/desktop-diagnostics.js';
@@ -315,6 +317,7 @@ export interface HandleTmuxBridgeCommandParams {
   richCard?: (card: OutboundRichCard) => void;
   autoRecoverProviderSession?: boolean;
   suppressSuccessfulResponse?: boolean;
+  inputAbortSignal?: AbortSignal;
   tmuxProviderAutoForward?: boolean;
   onTmuxProviderAutoForwarded?: () => Promise<void> | void;
   onAppServerPrepared?: (handle: CodexAppServerSession) => void;
@@ -1826,6 +1829,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
             sessionName: target,
             send: () => sendTmuxActions(target, actionsToSend, {
               delayMs: SEND_ACTION_DELAY_MS,
+              ...(runtimeProvider.runtime === 'cursor' && !keySequenceActions ? { bracketedPaste: true } : {}),
               forcePasteLiterals: (
                 runtimeProvider.runtime === 'codex'
                 || runtimeProvider.runtime === 'kimi'
@@ -1875,7 +1879,16 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
               };
             }
           }
+          const cursorConfirmation = runtimeProvider.runtime === 'cursor' && !keySequenceActions
+            ? await prepareCursorInputConfirmation(`${target}:0.0`, args,
+              effectiveSession.runtime?.cursor?.sessionId
+                ? findCursorSessionFileById(effectiveSession.runtime.cursor.sessionId, getSessionWorkingDirectory(effectiveSession))?.storePath
+                : undefined)
+            : undefined;
           await submitProviderInput();
+          if (runtimeProvider.runtime === 'cursor' && !keySequenceActions) {
+            await waitForCursorInputSubmitted(`${target}:0.0`, undefined, cursorConfirmation, params.inputAbortSignal);
+          }
           if (runtimeProvider.runtime === 'kimi' && expectedKimiPrompt) {
             if (!kimiSubmission) {
               throw new Error('Kimi Code 输入确认信息缺失；已停止本次转发，避免把未提交的消息误报为成功。');
@@ -1928,6 +1941,8 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         target,
         actions: manualActions,
         lines,
+        ...(manualRuntime === 'cursor' && command === '/tmux' && !keySequenceActions
+          ? { sendOptions: { bracketedPaste: true } } : {}),
         sendDelayMs: SEND_ACTION_DELAY_MS,
         captureDelayMs: CAPTURE_AFTER_SEND_DELAY_MS,
       });

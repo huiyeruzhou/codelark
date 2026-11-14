@@ -1,3 +1,5 @@
+import { isCursorQuestionScreen, assertCursorPromptAvailable } from './questions.js';
+import { readCursorNativeUserPrompts } from './cli-store.js';
 import { prepareTextAttachmentPrompt } from '../local-attachments.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,13 +34,9 @@ import {
 const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_INPUT_READY_TIMEOUT_MS = 180_000;
 const INPUT_READY_PROGRESS_INTERVAL_MS = 10_000;
-const INPUT_SUBMISSION_RETRY_INTERVAL_MS = 1_000;
 const INPUT_SUBMISSION_CONFIRMATION_GRACE_MS = 300;
-const DEFAULT_SESSION_FILE_TIMEOUT_MS = 30_000;
-const DEFAULT_OUTPUT_IDLE_TIMEOUT_MS = 120_000;
 
 class CursorInputReadinessTimeoutError extends Error {}
-class CursorInputSubmissionTimeoutError extends Error {}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -119,6 +117,12 @@ function normalizeScreen(screen: string): string {
 
 export function cursorAuthenticationScreenError(screen: string): string | null {
   const normalized = normalizeScreen(screen);
+  if (
+    /(?:^|\n)\s*Error:\s*Authentication error\s*(?:\n|$)/i.test(normalized)
+    || /Authentication failed:\s*(?:your )?Cursor credentials or API key are invalid or expired/i.test(normalized)
+  ) {
+    return 'Cursor Agent authentication failed because its credentials are invalid or expired. Run `agent login`, then resend this message.';
+  }
   if (/Press any key to log in/i.test(normalized)) {
     return 'Cursor Agent is not authenticated. Run `agent login` in a terminal first.';
   }
@@ -130,7 +134,11 @@ export function cursorAuthenticationScreenError(screen: string): string | null {
 
 export function isCursorInputReadyScreen(screen: string): boolean {
   const normalized = normalizeScreen(screen);
-  if (cursorAuthenticationScreenError(normalized)) return false;
+  if (cursorAuthenticationScreenError(normalized) || isCursorQuestionScreen(normalized)) return false;
+  // Cursor renders the prompt shell before a persisted conversation has
+  // finished restoring. Input sent during that window stays as a multiline
+  // draft, and Enter edits the draft instead of starting a turn.
+  if (/\bLoading conversation\b/i.test(normalized)) return false;
   const hasPrompt = /(?:^|\n)\s*[>›❯→]\s*/u.test(normalized);
   const hasMode = /(?:^|\s)(?:Agent|Ask|Plan)(?:\s|$)/u.test(normalized);
   const hasContext = /(?:^|\s)Context(?:\s|$)/u.test(normalized);
@@ -139,12 +147,24 @@ export function isCursorInputReadyScreen(screen: string): boolean {
 
 export function isCursorInputDraftScreen(screen: string): boolean {
   const normalized = normalizeScreen(screen);
+  if (/ctrl\+c\s+to\s+stop/i.test(normalized)) return false;
   const promptLines = normalized.split('\n').filter((line) => /^\s*[>›❯→]\s*/u.test(line));
   const promptText = promptLines.at(-1)
     ?.replace(/^\s*[>›❯→]\s*/u, '')
     .replace(/\s{2,}ctrl\+c\s+to\s+stop\s*$/i, '')
     .trim() || '';
-  if (!promptText) return false;
+  if (!promptText) {
+    // Cursor 2026.11 can render a pasted multiline prompt without the old
+    // leading arrow: the collapsed editor shows only its first source tag
+    // immediately above the model footer. Treat that tail-local marker as a
+    // draft so submission confirmation retries Enter instead of falsely
+    // waiting forever for a turn that never started.
+    return normalized.split('\n').slice(-12).some((line) =>
+      /^\s*<(?:codelark_source|user_query|local_attachment)(?:\s|>)/u.test(line)
+      || /<\/(?:codelark_source|user_query)>/u.test(line)
+      || /(?:来源群聊|来源\s*Bot|来源会话\s*ID|当前会话\s*ID)\s*[：:]/u.test(line),
+    );
+  }
   return !/^(?:Plan, search, build anything|Add a follow-up|Ask anything)[.!]?$/i.test(promptText);
 }
 
@@ -154,7 +174,7 @@ function assertCursorPaneAlive(screen: string): void {
   const paneDead = detectRuntimeTmuxPaneDead(screen);
   if (!paneDead) return;
   const status = paneDead.status === undefined ? '' : ` (exit ${paneDead.status})`;
-  throw new Error(`Cursor Agent exited before becoming ready${status}.`);
+  throw new Error(`Cursor Agent exited${status}.`);
 }
 
 export function withCursorReasoningEffort(model: string, effort?: string): string {
@@ -223,6 +243,7 @@ async function waitForCursorInputReady(
     const capture = await tmuxCore.capturePane(targetPane, 160);
     lastScreen = capture.screen;
     assertCursorPaneAlive(lastScreen);
+    assertCursorPromptAvailable(lastScreen);
     if (isCursorInputReadyScreen(lastScreen)) return;
     const now = Date.now();
     if (onProgress && now - lastProgressAt >= INPUT_READY_PROGRESS_INTERVAL_MS) {
@@ -244,15 +265,43 @@ async function waitForCursorInputReady(
   ].join(' '));
 }
 
-async function waitForCursorInputSubmitted(
+interface CursorInputConfirmation {
+  prompt: string;
+  storePath?: string;
+  nativeCount?: number;
+  screenCount: number;
+  running: boolean;
+}
+
+const compactInput = (text: string) => normalizeScreen(text).replace(/[│\s]/gu, '');
+function screenPromptCount(screen: string, prompt: string): number {
+  // A follow-up shown in the queue has not reached the model yet.
+  const history = screen.split(/┌─ follow-ups\b/u)[0]!;
+  return compactInput(history).split(compactInput(prompt)).length - 1;
+}
+function nativePromptCount(storePath: string | undefined, prompt: string): number | undefined {
+  const prompts = storePath ? readCursorNativeUserPrompts(storePath) : null;
+  return prompts?.filter(text => {
+    // Native user messages carry timestamp/context wrappers; compare the query,
+    // not the surrounding orchestration text, with the submitted input.
+    const query = /<user_query>\s*([\s\S]*)<\/user_query>\s*$/u.exec(text)?.[1] || text;
+    return normalizeScreen(text).trim() === normalizeScreen(prompt).trim()
+      || normalizeScreen(query).trim() === normalizeScreen(prompt).trim();
+  }).length;
+}
+
+export async function prepareCursorInputConfirmation(targetPane: string, prompt: string, storePath?: string): Promise<CursorInputConfirmation> {
+  const { screen } = await tmuxCore.capturePane(targetPane, 160);
+  assertCursorPromptAvailable(screen);
+  return { prompt, storePath, nativeCount: nativePromptCount(storePath, prompt), screenCount: screenPromptCount(screen, prompt), running: /ctrl\+c\s+to\s+stop/i.test(screen) };
+}
+
+export async function waitForCursorInputSubmitted(
   targetPane: string,
   onProgress?: (elapsedMs: number) => void,
+  confirmation?: CursorInputConfirmation,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const timeoutMs = positiveIntEnv(
-    'CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS',
-    DEFAULT_INPUT_READY_TIMEOUT_MS,
-    1_000,
-  );
   const pollIntervalMs = positiveIntEnv(
     'CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS',
     DEFAULT_POLL_INTERVAL_MS,
@@ -261,26 +310,69 @@ async function waitForCursorInputSubmitted(
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
   let lastRetryAt = 0;
+  let steerSent = false;
   await sleep(INPUT_SUBMISSION_CONFIRMATION_GRACE_MS);
-  while (Date.now() - startedAt <= timeoutMs) {
+  // Receipt is checkpoint-backed, not a deadline: a live Cursor may accept
+  // input long before persisting its first checkpoint. Keep the same turn
+  // pending until acceptance, explicit cancellation or a real pane failure.
+  while (true) {
+    signal?.throwIfAborted();
     const capture = await tmuxCore.capturePane(targetPane, 160);
+    signal?.throwIfAborted();
     assertCursorPaneAlive(capture.screen);
-    if (!isCursorInputDraftScreen(capture.screen)) return;
-    const now = Date.now();
-    if (now - lastRetryAt >= INPUT_SUBMISSION_RETRY_INTERVAL_MS) {
-      await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
-      lastRetryAt = now;
+    if (await tmuxCore.readPaneDead?.(targetPane)) throw new Error('Cursor Agent exited before confirming input.');
+    signal?.throwIfAborted();
+    const accepted = confirmation && (confirmation.nativeCount !== undefined
+      ? (nativePromptCount(confirmation.storePath, confirmation.prompt) || 0) > confirmation.nativeCount
+      : screenPromptCount(capture.screen, confirmation.prompt) > confirmation.screenCount);
+    const screen = normalizeScreen(capture.screen);
+    const queued = /^\s*┌─ follow-ups\b/im.test(screen);
+    // Cursor can retain the submitted text below a queue while repainting.
+    // A queued input is never an unsubmitted draft.
+    const inputDraft = !queued && isCursorInputDraftScreen(screen);
+    if (accepted && (confirmation?.nativeCount !== undefined || !inputDraft)) return;
+    let retryInitialSubmit = false;
+    if (isCursorQuestionScreen(capture.screen)) {
+      if (confirmation?.running) throw new Error('Cursor 正在等待问卷回答，尚未确认这条补充消息已进入当前轮。');
+      return;
     }
+    if (!inputDraft) {
+      // Recent Cursor CLI queues the text on the first Enter. Only the explicit
+      // native footer authorizes a second Enter to promote it into this turn.
+      // Repeating Enter after promotion can interrupt a pending steer.
+      if (queued && !steerSent && /^\s*│\s*(?:\+\d+ more lines?\s*·\s*)?enter\s+steer(?:\s+·|\s+│)/im.test(screen)) {
+        await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+        steerSent = true;
+      } else if (!confirmation?.running && (!steerSent || !queued)) {
+        if (!confirmation) return;
+        const inputReady = isCursorInputReadyScreen(capture.screen);
+        // A resumed chat already has a native message baseline. Its previous
+        // empty editor can survive the paste/Enter redraw, so readiness alone
+        // cannot acknowledge this input. Wait for the new native user record.
+        if (confirmation.nativeCount === undefined && inputReady) return;
+        // Cursor 2026.11 can collapse an initial multiline draft so completely
+        // that no stable input marker remains visible. One delayed Enter is
+        // safe for an initially idle editor; never apply this fallback to an
+        // active turn, where Enter could interrupt or promote a follow-up.
+        retryInitialSubmit = !inputReady && lastRetryAt === 0;
+      } else if (queued && /enter\s+interrupt and send/i.test(screen)) {
+        // Cursor has queued the follow-up but is not at a safe in-turn steer
+        // boundary yet. Leave it queued and keep polling; pressing Enter here
+        // would abort the active turn instead of injecting context into it.
+      }
+    }
+    if (!steerSent && (retryInitialSubmit
+      || (inputDraft && lastRetryAt === 0))) {
+      await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+      lastRetryAt = Date.now();
+    }
+    const now = Date.now();
     if (onProgress && now - lastProgressAt >= INPUT_READY_PROGRESS_INTERVAL_MS) {
       lastProgressAt = now;
       onProgress(now - startedAt);
     }
     await sleep(pollIntervalMs);
   }
-  throw new CursorInputSubmissionTimeoutError([
-    `Cursor Agent 在 ${Math.round(timeoutMs / 1_000)}s 内仍未接受输入。`,
-    '输入保留在编辑框，tmux session 也已保留；可以稍后重新发送，或用 `/tmux-screen` 查看当前屏幕。',
-  ].join(' '));
 }
 
 function transcriptSize(summary: CursorSessionFileSummary | null | undefined): number {
@@ -324,7 +416,8 @@ export async function ensureCursorTmuxInputSession(
     sessionName,
     hasSession: () => tmuxCore.hasSession(sessionName),
   });
-  const launched = !inspection.exists || options.recreate === true;
+  const paneDead = inspection.exists && await tmuxCore.readPaneDead?.(targetPane);
+  const launched = !inspection.exists || paneDead || options.recreate === true;
   if (launched) await launchCursorTmuxSession(sessionName, params);
   if (launched || inspection.needsReadiness) {
     await tmuxCore.ensureExtendedKeys?.();
@@ -366,6 +459,8 @@ export interface CursorTurnContext {
   nextSpecialCallIds: string[];
   emittedSignatures: Set<string>;
   emittedToolStarts: Set<string>;
+  /** Turns present before input submission cannot belong to this direct stream. */
+  baselineTurnIds?: Set<string>;
   /** Desktop hooks expose Cursor's real tool ID before transcript rows assign a synthetic one. */
   liveHookToolIdsByFingerprint?: Map<string, string[]>;
   transcriptToolIdsByFingerprint?: Map<string, string[]>;
@@ -396,6 +491,7 @@ export function enqueueCursorRecord(
   context: CursorTurnContext,
   record: BridgeMirrorRecord,
 ): void {
+  if (record.turnId && context.baselineTurnIds?.has(record.turnId)) return;
   if (context.emittedSignatures.has(record.signature)) return;
   context.emittedSignatures.add(record.signature);
   if (record.type === 'message' && record.role === 'assistant' && record.content) {
@@ -479,19 +575,16 @@ async function waitForCursorTranscript(
   context: CursorTurnContext,
   baselineSessionIds: Set<string>,
   targetPane: string,
+  abortSignal: AbortSignal | undefined,
 ): Promise<void> {
-  const timeoutMs = positiveIntEnv(
-    'CODELARK_CURSOR_TMUX_SESSION_FILE_TIMEOUT_MS',
-    DEFAULT_SESSION_FILE_TIMEOUT_MS,
-    1_000,
-  );
   const pollIntervalMs = positiveIntEnv(
     'CODELARK_CURSOR_TMUX_POLL_INTERVAL_MS',
     DEFAULT_POLL_INTERVAL_MS,
     50,
   );
-  const startedAt = Date.now();
-  while (Date.now() - startedAt <= timeoutMs) {
+  while (true) {
+    assertRuntimeTmuxInputOwner('cursor', context.sessionName);
+    if (abortSignal?.aborted) throw new Error('Cursor Agent request was aborted.');
     if (context.sessionId && context.cwd) {
       const filePath = getCursorTranscriptCandidates(context.sessionId, context.cwd)
         .find((candidate) => fs.existsSync(candidate));
@@ -515,7 +608,6 @@ async function waitForCursorTranscript(
     assertCursorPaneAlive(capture.screen);
     await sleep(pollIntervalMs);
   }
-  throw new Error('Timed out waiting for Cursor Agent to create its transcript JSONL.');
 }
 
 async function pollCursorTranscript(
@@ -529,12 +621,6 @@ async function pollCursorTranscript(
     DEFAULT_POLL_INTERVAL_MS,
     50,
   );
-  const idleTimeoutMs = positiveIntEnv(
-    'CODELARK_CURSOR_TMUX_OUTPUT_IDLE_TIMEOUT_MS',
-    DEFAULT_OUTPUT_IDLE_TIMEOUT_MS,
-    1_000,
-  );
-  let lastActivityAt = Date.now();
   while (!context.terminalSeen) {
     assertRuntimeTmuxInputOwner('cursor', context.sessionName);
     if (abortSignal?.aborted) throw new Error('Cursor Agent request was aborted.');
@@ -545,18 +631,16 @@ async function pollCursorTranscript(
     } catch {
       // Preserve the cursor and retry transient replacement races.
     }
-    if (endOffset < context.nextOffset) {
-      context.nextOffset = 0;
-      context.trailingText = '';
-    }
-    const previousOffset = context.nextOffset;
+    // Like the mirror, recover semantic identities from the whole snapshot.
+    // Cursor removes the previous EOF terminal when resuming; the old byte
+    // offset can land inside the next user row even when the file grows.
     const delta = readCursorSessionMirrorRecordDeltaByFilePath(
       context.sessionFilePath,
-      context.nextOffset,
+      0,
       endOffset,
-      context.trailingText,
-      context.nextTurnId,
-      context.nextSpecialCallIds,
+      '',
+      null,
+      [],
       context.sessionStorePath,
     );
     context.nextOffset = delta.nextOffset;
@@ -564,15 +648,13 @@ async function pollCursorTranscript(
     context.nextTurnId = delta.nextTurnId;
     context.nextSpecialCallIds = delta.nextSpecialCallIds;
     for (const record of delta.records) enqueueCursorRecord(controller, context, record);
-    if (context.nextOffset > previousOffset) lastActivityAt = Date.now();
     if (context.terminalSeen) break;
     const existence = await tmuxCore.hasSession(context.sessionName);
     if (!existence.exists) throw new Error('Cursor Agent exited before writing a terminal turn event.');
-    if (Date.now() - lastActivityAt > idleTimeoutMs) {
-      const capture = await tmuxCore.capturePane(targetPane, 160);
-      assertCursorPaneAlive(capture.screen);
-      throw new Error(`Cursor Agent produced no transcript activity for ${idleTimeoutMs}ms.`);
-    }
+    // Like the other TUI providers, wait for the native terminal event while
+    // the process is alive. Cursor may defer JSONL writes until a checkpoint.
+    const capture = await tmuxCore.capturePane(targetPane, 160);
+    assertCursorPaneAlive(capture.screen);
     await sleep(pollIntervalMs);
   }
 }
@@ -618,6 +700,13 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           context.sessionFilePath = prepared.sessionFilePath;
           context.sessionStorePath = prepared.sessionStorePath;
           context.nextOffset = prepared.nextOffset;
+          if (context.sessionFilePath) {
+            const baseline = readCursorSessionMirrorRecordDeltaByFilePath(
+              context.sessionFilePath, 0, context.nextOffset, '', null, [], context.sessionStorePath,
+            );
+            context.baselineTurnIds = new Set(baseline.records.flatMap((record) => record.turnId ? [record.turnId] : []));
+            for (const record of baseline.records) context.emittedSignatures.add(record.signature);
+          }
           if (context.sessionId) {
             controller.enqueue(sseEvent('status', {
               session_id: context.sessionId,
@@ -628,20 +717,23 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
             runtime: 'cursor',
             sessionName,
             send: async () => {
-              const result = await tmuxCore.injectPromptIntoPane(targetPane, prepareTextAttachmentPrompt(params));
+              const prompt = prepareTextAttachmentPrompt(params);
+              const confirmation = await prepareCursorInputConfirmation(targetPane, prompt, context.sessionStorePath);
+              const result = await tmuxCore.injectPromptIntoPane(targetPane, prompt, { bracketedPaste: true });
               await waitForCursorInputSubmitted(targetPane, (elapsedMs) => {
                 controller.enqueue(sseEvent('status', {
-                  reasoning: `输入已写入 Cursor；工作区索引可能仍在进行，正在确认提交，已等待 ${Math.floor(elapsedMs / 1_000)}s。`,
+                  reasoning: `输入已发送，正在等待 Cursor 确认接收；已等待 ${Math.floor(elapsedMs / 1_000)}s，可使用停止按钮取消。`,
                 }));
-              });
+              }, confirmation, params.abortController?.signal);
               return result;
             },
           });
+          params.onInputAccepted?.();
           controller.enqueue(sseEvent('status', {
             reasoning: 'Cursor Agent 已接收消息，正在运行。',
           }));
           if (!context.sessionFilePath) {
-            await waitForCursorTranscript(context, baselineSessionIds, targetPane);
+            await waitForCursorTranscript(context, baselineSessionIds, targetPane, params.abortController?.signal);
             context.nextOffset = 0;
             controller.enqueue(sseEvent('status', {
               session_id: context.sessionId,
@@ -652,8 +744,7 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           controller.close();
         } catch (error) {
           failed = true;
-          preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError
-            || error instanceof CursorInputSubmissionTimeoutError;
+          preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError;
           const message = error instanceof Error ? error.message : String(error);
           transitionRuntimeTmuxInputState('cursor', sessionName, 'failed', 'Cursor tmux lifecycle failed', { error: message });
           console.error('[cursor-tmux] Error:', error instanceof Error ? error.stack || error.message : error);

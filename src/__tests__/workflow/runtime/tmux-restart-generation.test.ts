@@ -47,6 +47,7 @@ describe('legacy tmux restart ownership', { concurrency: false, timeout: 10_000 
     originalCore = { ...tmuxCore };
     // A missed mock must never contact a real tmux server.
     for (const key of Object.keys(tmuxCore)) (tmuxCore as any)[key] = async () => { throw new Error(`unexpected tmux call: ${key}`); };
+    tmuxCore.readPaneDead = async () => false;
     resetRuntimeTmuxInputStatesForTests();
     params = { sessionId: 'bridge-test', prompt: 'old input', workingDirectory: root,
       cursorSessionId: '11111111-1111-4111-8111-111111111111', kimiSessionId: 'session_test', zcodeSessionId: 'sess_test' };

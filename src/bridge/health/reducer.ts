@@ -24,6 +24,7 @@ export const HEALTH_STREAM_UI_STALL_MS = 60 * 1000;
 const RUNNING_HEALTH_STATUSES = new Set<BridgeSessionHealthStatus>([
   'running_active',
   'waiting_tool',
+  'waiting_input',
   'slow_observed',
   'suspected_stall',
   'suspected_stream_ui_stall',
@@ -216,7 +217,7 @@ export function hasActiveToolState(session: BridgeSession | null | undefined): b
 }
 
 export function shouldTrackSession(session: BridgeSession): boolean {
-  return isRunningRuntimeStatus(session.runtime_status)
+  return Boolean(session.pending_user_input) || isRunningRuntimeStatus(session.runtime_status)
     || isRunningHealthStatus(session.health_status)
     || hasActiveToolState(session);
 }
@@ -269,6 +270,7 @@ export function computeBaseDiagnosis(
     !isRunningRuntimeStatus(runtimeStatus)
     && isRunningHealthStatus(previousStatus)
     && !activeToolName
+    && !session.pending_user_input
   ) {
     return {
       sessionId: session.id,
@@ -294,7 +296,7 @@ export function computeBaseDiagnosis(
     };
   }
 
-  if (!lastProgressMs) {
+  if (!lastProgressMs && !session.pending_user_input) {
     const fallbackStatus = isRunningRuntimeStatus(runtimeStatus) ? 'running_active' : previousStatus;
     return {
       sessionId: session.id,
@@ -324,11 +326,14 @@ export function computeBaseDiagnosis(
     };
   }
 
-  const idleMs = Math.max(0, nowMs - lastProgressMs);
+  const idleMs = Math.max(0, nowMs - (lastProgressMs || nowMs));
   let healthStatus: BridgeSessionHealthStatus;
   let healthReason: string;
 
-  if (previousStatus === 'completed' || previousStatus === 'failed' || previousStatus === 'aborted') {
+  if (session.pending_user_input) {
+    healthStatus = 'waiting_input';
+    healthReason = `正在等待你的回答：${session.pending_user_input}`;
+  } else if (previousStatus === 'completed' || previousStatus === 'failed' || previousStatus === 'aborted') {
     healthStatus = previousStatus;
     healthReason = session.health_reason?.trim() || buildProgressReason(
       previousStatus === 'completed'
@@ -382,10 +387,10 @@ export function applyProcessProbeDiagnosis(
   diagnosis: Omit<SessionHealthDiagnosis, 'processProbe'>,
   processProbe: ThreadProcessProbeResult | null,
 ): SessionHealthDiagnosis {
-  if (!processProbe) {
+  if (!processProbe || diagnosis.healthStatus === 'waiting_input') {
     return {
       ...diagnosis,
-      processProbe: null,
+      processProbe,
     };
   }
 

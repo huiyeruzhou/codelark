@@ -232,6 +232,7 @@ export interface SendTmuxActionsAndCaptureParams {
   actions: TmuxSendAction[];
   lines: number;
   sendDelayMs?: number;
+  sendOptions?: Omit<TmuxSendActionsOptions, 'delayMs'>;
   captureDelayMs?: number;
 }
 
@@ -1602,7 +1603,7 @@ export async function sendTmuxActionsAndCapture(
   params: SendTmuxActionsAndCaptureParams,
   core: TmuxCore = tmuxCore,
 ): Promise<SendTmuxActionsAndCaptureResult> {
-  const sendResult = await core.sendActions(params.target, params.actions, { delayMs: params.sendDelayMs });
+  const sendResult = await core.sendActions(params.target, params.actions, { ...params.sendOptions, delayMs: params.sendDelayMs });
   if (params.captureDelayMs && params.captureDelayMs > 0) {
     await sleep(params.captureDelayMs);
   }
