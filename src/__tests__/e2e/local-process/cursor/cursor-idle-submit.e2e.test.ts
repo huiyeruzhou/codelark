@@ -31,7 +31,7 @@ class IdleAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }]) it(`real Cursor confirms idle input after a swallowed Enter (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint})`, { timeout: 75_000 }, async (t) => {
+for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }]) it(`real Cursor confirms idle input after a swallowed Enter (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)})`, { timeout: 75_000 }, async (t) => {
   const { redrawDelay, delayedCheckpoint } = scenario;
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
@@ -40,14 +40,15 @@ for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDe
   if (!executable) { t.skip('real Cursor CLI is not installed'); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-cursor-idle-e2e-'));
   const workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
-  const initial = '<codelark_source>\n来源群聊："回归原群"\n来源 Bot："kasumi"\n</codelark_source>\n\n先分析当前实现', followup = '<codelark_source>\n来源群聊："回归原群"\n</codelark_source>\n\n加一个 argmax 和 remask 开关，沿用原来的着色逻辑\n保留中文、多行和代码 `x < 2`，不要重复执行。';
+  const initial = '<codelark_source>\n来源群聊："回归原群"\n来源 Bot："kasumi"\n</codelark_source>\n\n先分析当前实现', followup = scenario.plainMultiline ? '核验当前任务状态，\n汇报结果并继续监控。' : '<codelark_source>\n来源群聊："回归原群"\n</codelark_source>\n\n加一个 argmax 和 remask 开关，沿用原来的着色逻辑\n保留中文、多行和代码 `x < 2`，不要重复执行。';
   let releaseFinal!: () => void;
   const beforeFinish = new Promise<void>(resolve => { releaseFinal = resolve; });
   let releaseCheckpoint!: () => void;
   const beforeCheckpoint = new Promise<void>(resolve => { releaseCheckpoint = resolve; });
   const backend = await startFakeCursorBackend({
     call(prompt) {
-      assert.ok([initial, followup].includes(prompt));
+      prompt = prompt.trim();
+      assert.ok([initial, followup].includes(prompt.trim()));
       return { final: prompt === initial ? 'INITIAL_DONE' : 'IDLE_DONE', ...(prompt === followup ? { beforeFinish, deferModelContext: true, ...(delayedCheckpoint ? { beforeCheckpoint } : {}) } : {}) };
     },
   });
@@ -91,7 +92,7 @@ fi\n` : '';
   // swallowed and the renderer briefly returning its previous idle frame.
   const pasteDraft = async (target: string, text: string) => {
     swallowedEnter = true;
-    const result = await originalSend(target, [{ type: 'literal', text }], { forcePasteLiterals: true });
+    const result = await originalSend(target, [{ type: 'literal', text: scenario.plainMultiline ? '\n' + text : text }], { forcePasteLiterals: true });
     staleUntil = Date.now() + redrawDelay;
     return result;
   };
@@ -134,14 +135,14 @@ fi\n` : '';
       const nativeId = store.getSession(session.id)!.runtime!.cursor!.sessionId!;
       const native = findCursorSessionFileById(nativeId, workspace)!;
       assert.ok(!readCursorNativeUserPrompts(native.storePath!)?.includes(followup), 'the entire native receipt must still be absent while the model already has the input');
-      assert.deepEqual(backend.prompts, [initial, followup], 'slow checkpoint must not resubmit input');
+      assert.deepEqual(backend.prompts.map(prompt => prompt.trim()), [initial, followup], 'slow checkpoint must not resubmit input');
       releaseCheckpoint();
     }
     await until(() => adapter.reactions.includes('steer'), 'Get must acknowledge persisted input before model context updates or the final answer');
     assert.ok(!finished.includes('steer'), 'model must still be running when receipt is confirmed');
     releaseFinal();
     await until(() => finished.includes('steer'), 'second native turn must finish');
-    assert.deepEqual(backend.prompts, [initial, followup], 'retry must not duplicate either request');
+    assert.deepEqual(backend.prompts.map(prompt => prompt.trim()), [initial, followup], 'retry must not duplicate either request');
     assert.equal(backend.steers.length, 0, 'an idle input starts a new turn');
     assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('IDLE_DONE')));
     assert.ok(adapter.reactions.includes('steer'));

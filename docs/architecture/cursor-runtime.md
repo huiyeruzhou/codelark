@@ -178,6 +178,8 @@ Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能
 3. provider 检查 pane 未退出、未停在登录页且已出现输入编辑器。Cursor 首次进入较大工作区时会先做 workspace indexing，这一阶段进程仍存活但 pane 可能完全空白；它属于合法冷启动，而不是 CLI 退出或 prompt parser 失败。显式 `/p tmux` 会在等待 TUI 前立即回复“首次打开工作区时可能需要先建立索引”；普通消息触发冷启动时，当前流式卡片会立即显示同类说明，并从第 10 秒起持续更新已等待时间。readiness 默认最多等待 180 秒；若窗口用尽但 pane 仍活着，只结束当前 IM turn，并说明索引可能仍在进行，同时保留 tmux，下一条消息会重新执行 readiness 后复用它。登录页、pane 退出等确定失败仍立即报错并清理；未登录时提示先运行 `agent login`。
 4. 普通用户消息以整块 bracketed paste 保留换行，再提交一次 Enter；冷启动、空闲续聊、运行中追加和显式 `/tmux` 文本共用这条发送方式。已知原生会话时，接收确认读取当前根 `ConversationState.turns` 所引用的 `UserMessage`，包括 `text_blob_id` 外置文本。`turns` 也依赖 Cursor 的 checkpoint 写入，并不保证接收瞬间落盘；`rootPromptMessagesJson` 是可能更晚才更新的模型上下文，不能作为唯一接收来源；工具结果仍从后者读取。只跟随当前根中的有序引用，不扫描孤立 blob，不把两份记录相加；相同文字再次提交必须出现新的记录。旧格式没有 turns 时兼容读取模型上下文。首次还没有原生 store 的冷启动才使用屏幕接收证据，随后发现 UUID 并写入 Bridge session。
 
+普通多行草稿既可能紧跟输入箭头，也可能缩进显示在空箭头下一行。识别范围覆盖两种编辑框布局，不依赖来源标签。桥接重启仅撤销监听，必须保留取消原因 `BRIDGE_SHUTDOWN_REASON`，Cursor 不得把它当作失败清理并删除 tmux；恢复后读取原生会话继续同步，不重新发送原请求。
+
 接收确认不设固定截止时间：已发送的输入在首次 checkpoint 迟到时仍保持原卡等待，定期显示待确认状态；晚到记录确认后点 Get，继续读取同一任务的工具和结果。`CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS` 只控制发送前的冷启动 readiness，不再把发送后的慢回执变成任务失败。进程退出、认证失败或用户取消仍结束等待，不能依靠延长超时或重复发送掩盖问题。
 
 草稿确实还在编辑框时最多补一次 Enter；出现 follow-ups 就不能再把残留文字视作未提交草稿。等待确认接受当前任务的 AbortSignal，停止后不继续发键。输入接收与模型完成分别确认，不能要求模型先输出或完成才添加 Get。

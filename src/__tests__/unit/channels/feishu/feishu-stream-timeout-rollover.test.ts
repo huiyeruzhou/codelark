@@ -56,7 +56,7 @@ function fixture(code = 200850, failContinuation = false) {
           requests.push({ kind: 'content', payload });
           if (!rejected && payload.path.card_id === 'card-1' && payload.path.element_id === 'streaming_content') {
             rejected = true;
-            return { code, msg: 'card streaming timeout' };
+            return { code, msg: 'card payload exceeds Feishu limit' };
           }
           return {};
         },
@@ -152,3 +152,46 @@ it('releases the background request and retries the source card when continuatio
     assert.equal(f.state().cardId, 'card-1');
   } finally { f.cleanup(); }
 });
+
+for (const code of [200850, 300309]) {
+  it(`keeps one message when status updates outlive streaming mode (${code})`, { timeout: 5_000 }, async () => {
+    const f = fixture();
+    const api = f.internal.restClient.cardkit.v1;
+    let creates = 0, expired = false, staticUpdates = 0;
+    const writes: string[] = [];
+    api.card.create = async () => ({ data: { card_id: `card-${++creates}` } });
+    api.cardElement.content = async () => {
+      expired = true;
+      return { code, msg: code === 200850 ? 'card streaming timeout' : 'streaming mode is closed' };
+    };
+    api.card.update = async (payload: any) => {
+      const card = JSON.parse(payload.data.card.data);
+      if (expired) {
+        assert.notEqual(card.config.streaming_mode, true, 'expired cards must use ordinary updates');
+        staticUpdates++;
+      }
+      writes.push(payload.data.card.data);
+      return {};
+    };
+    try {
+      await f.internal.createStreamingCard(chat, undefined, stream);
+      f.adapter.onStreamActions(chat, [[{ text: '停止', callbackData: '/stop', type: 'danger' }]], stream);
+      await until(() => writes.some(text => text.includes('停止')));
+      f.adapter.onStreamStatus(chat, '等待输入确认 10 分钟', stream);
+      await until(() => staticUpdates > 0 || creates > 1);
+      assert.equal(creates, 1, 'a timer update must not send another message');
+      for (let index = 1; index <= 48; index++) {
+        const status = `等待输入确认 ${index * 10} 分钟`;
+        f.adapter.onStreamStatus(chat, status, stream);
+        await until(() => writes.some(text => text.includes(status)));
+      }
+      f.adapter.onStreamText(chat, '确认后产生的新输出', stream);
+      await until(() => writes.some(text => text.includes('确认后产生的新输出')));
+      assert.ok(writes.at(-1)!.includes('停止'), 'stop remains usable throughout the wait');
+      assert.equal(await f.internal.finalizeCard(chat, 'completed', '最终回答', stream), true);
+      assert.ok(writes.at(-1)!.includes('最终回答'));
+      assert.equal(creates, 1, 'updates and finalization must retain the original message');
+      assert.ok(!f.state()?.backgroundFlushInFlight);
+    } finally { f.cleanup(); }
+  });
+}

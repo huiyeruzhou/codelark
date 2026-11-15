@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { BridgeMirrorRecord, LLMProvider, StreamChatParams } from '../contracts.js';
+import { BRIDGE_SHUTDOWN_REASON } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../tmux/core.js';
 import {
@@ -154,6 +155,14 @@ export function isCursorInputDraftScreen(screen: string): boolean {
     .replace(/\s{2,}ctrl\+c\s+to\s+stop\s*$/i, '')
     .trim() || '';
   if (!promptText) {
+    const lines = normalized.split('\n');
+    const arrowIndex = lines.findLastIndex(line => /^\s*[>›❯→]\s*$/u.test(line));
+    const arrowLine = lines[arrowIndex];
+    const nextLine = lines[arrowIndex + 1];
+    // Multiline drafts can put the arrow on its own line. Cursor indents the
+    // editor body beneath it; the model/footer sits outside that indentation.
+    if (arrowLine && nextLine?.trim()
+      && nextLine.search(/\S/u) > arrowLine.search(/\S/u)) return true;
     // Cursor 2026.11 can render a pasted multiline prompt without the old
     // leading arrow: the collapsed editor shows only its first source tag
     // immediately above the model footer. Treat that tail-local marker as a
@@ -744,7 +753,8 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           controller.close();
         } catch (error) {
           failed = true;
-          preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError;
+          preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError
+            || params.abortController?.signal.reason === BRIDGE_SHUTDOWN_REASON;
           const message = error instanceof Error ? error.message : String(error);
           transitionRuntimeTmuxInputState('cursor', sessionName, 'failed', 'Cursor tmux lifecycle failed', { error: message });
           console.error('[cursor-tmux] Error:', error instanceof Error ? error.stack || error.message : error);

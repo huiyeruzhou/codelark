@@ -132,6 +132,8 @@ interface FeishuCardState {
   messageId: string;
   replyToMessageId?: string;
   sequence: number;
+  /** CardKit streaming lifetime ended; keep updating this message as a normal card. */
+  streamingModeExpired?: boolean;
   continuationIndex: number;
   startTime: number;
   taskItems: TaskProgressInfo[];
@@ -1193,7 +1195,15 @@ function isFeishuCardElementLimitError(error: unknown): boolean {
     || /\belement exceeds the limit\b/i.test(message);
 }
 
+function isFeishuCardStreamingExpiredError(error: unknown): boolean {
+  const code = error && typeof error === 'object' ? (error as Record<string, unknown>).code : undefined;
+  const message = error instanceof Error ? error.message : String((error as { msg?: string })?.msg || error || '');
+  return code === 300309 || code === '300309'
+    || /(?:code=|code:\s*)300309\b|card streaming timeout|streaming mode is closed/i.test(message);
+}
+
 function isFeishuCardPayloadLimitError(error: unknown): boolean {
+  if (isFeishuCardStreamingExpiredError(error)) return false;
   const code = error && typeof error === 'object'
     ? (error as Record<string, unknown>).code
     : undefined;
@@ -4185,7 +4195,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     metadata: StructuredStreamingUiMetadata,
     reason: string,
   ): Promise<boolean> {
-    // 飞书 200850/200860 payload 限制不是组件数问题；从“上一个已渲染 group”后续接，保留当前正在更新的 group。
+    // 真正的 payload 限制从“上一个已渲染 group”后续接，保留当前正在更新的 group。
     const offsets = this.streamingCardContinuationOffsets(state);
     console.log('[feishu-adapter] Streaming card forcing continuation rollover:', {
       streamKey,
@@ -4434,7 +4444,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     });
 
     let fullRefreshReason: string | null = null;
-    if (desiredRender.render.hasMore || state.historyTextOffset) {
+    if (state.streamingModeExpired && (state.shadowTrust !== 'trusted' || snapshot.revision !== state.shadowRevision)) {
+      fullRefreshReason = 'streaming_mode_expired';
+    } else if (desiredRender.render.hasMore || state.historyTextOffset) {
       fullRefreshReason = 'history_page';
     } else if (state.shadowTrust !== 'trusted') {
       fullRefreshReason = `shadow_${state.shadowTrust}`;
@@ -4854,6 +4866,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
               onError: async (err) => {
                 const current = this.activeCards.get(streamKey);
                 if (!current || current.cardId !== cardId) return;
+                if (isFeishuCardStreamingExpiredError(err)) {
+                  current.streamingModeExpired = true;
+                  this.markCardFlushQueued(current);
+                  return;
+                }
                 if (isFeishuCardPayloadLimitError(err)) {
                   // Keep this request in flight through the state handoff. Otherwise
                   // its cleanup runs on the source card before the continuation
@@ -4949,7 +4966,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
           break;
         }
       } catch (err) {
-        if (isFeishuCardPayloadLimitError(err)) {
+        if (isFeishuCardStreamingExpiredError(err)) {
+          state.streamingModeExpired = true;
+          this.markCardFlushQueued(state);
+          break;
+        } else if (isFeishuCardPayloadLimitError(err)) {
           const rolled = await this.forceStreamingCardContinuationRollover(
             streamKey,
             state,
@@ -5631,6 +5652,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         'streaming_content',
         render.historyItems,
       );
+      if (state.streamingModeExpired) (render.body.config as Record<string, unknown>).streaming_mode = false;
       const refreshCardJson = JSON.stringify(render.body);
       const payloadBytes = Buffer.byteLength(refreshCardJson, 'utf8');
       recordFeishuCardPayloadPerf(state.perf, payloadBytes, render.componentCount);
@@ -5701,6 +5723,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       this.markCardFlushSuccess(state);
       return true;
     } catch (err) {
+      if (isFeishuCardStreamingExpiredError(err) && !state.streamingModeExpired) {
+        state.streamingModeExpired = true;
+        this.markCardFlushQueued(state);
+        return false;
+      }
       if (isFeishuCardPayloadLimitError(err) || isFeishuCardElementLimitError(err)) {
         const rolled = await this.forceStreamingCardContinuationRollover(
           streamKey,

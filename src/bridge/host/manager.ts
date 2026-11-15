@@ -31,6 +31,7 @@ import * as router from './channel-router.js';
 import * as broker from '../permission/broker.js';
 import { getBridgeContext } from './context.js';
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
+import { BRIDGE_SHUTDOWN_REASON } from '../../runtime/contracts.js';
 import { archiveCodexSession } from '../../runtime/codex/session-index.js';
 import {
   injectPromptIntoClaudePtySession,
@@ -3009,7 +3010,7 @@ export async function stop(): Promise<void> {
   const activeSessionIds = Array.from(state.activeTasks.keys());
   const queuedSessionIds = Array.from(state.queuedCounts.keys());
   for (const task of state.activeTasks.values()) {
-    task.abortController.abort();
+    task.abortController.abort(BRIDGE_SHUTDOWN_REASON);
   }
   state.activeTasks.clear();
   stopAllEveryTasks();

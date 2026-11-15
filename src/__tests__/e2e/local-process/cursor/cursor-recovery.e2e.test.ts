@@ -8,7 +8,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startFakeCursorBackend } from '../../../helpers/runtime/cursor-fake-backend.js';
 import { initBridgeTestContext, RecordingAdapter, inboundMessage, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
-import { _testOnly as manager, registerAdapter } from '../../../../bridge/host/manager.js';
+import { _testOnly as manager, registerAdapter, stop as stopBridge } from '../../../../bridge/host/manager.js';
 import { createAdapterRuntime } from '../../../../channels/adapter-runtime/runtime.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
 import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
@@ -34,7 +34,7 @@ class RecoveryAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of ['dead-pane', 'manual-mirror'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
+for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
     ...(process.env.PATH || '').split(path.delimiter).map(dir => path.join(dir, 'agent')),
@@ -48,7 +48,7 @@ for (const scenario of ['dead-pane', 'manual-mirror'] as const) it(`real Cursor 
   const backend = await startFakeCursorBackend({
     call(prompt) {
       assert.ok([initial, followup].includes(prompt));
-      return { final: prompt === initial ? 'INITIAL_DONE' : 'RECOVERED_DONE', ...(scenario === 'manual-mirror' && prompt === followup ? { beforeFinish } : {}) };
+      return { final: prompt === initial ? 'INITIAL_DONE' : 'RECOVERED_DONE', ...(scenario !== 'dead-pane' && prompt === followup ? { beforeFinish } : {}) };
     },
   });
   const wrapper = path.join(root, 'cursor'), tmux = path.join(root, 'tmux');
@@ -103,6 +103,24 @@ for (const scenario of ['dead-pane', 'manual-mirror'] as const) it(`real Cursor 
       adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'relaunch'));
       await until(() => finished.includes('relaunch'), 'IM request after process exit must finish');
       assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('RECOVERED_DONE')), 'dead pane must relaunch and deliver a successful reply');
+    } else if (scenario === 'bridge-restart') {
+      // Production has no debug escape hatch: shutdown must preserve native work.
+      delete process.env.CODELARK_DEBUG;
+      adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'running-before-restart'));
+      await until(() => adapter.reactions.includes('running-before-restart'), 'native input must be accepted before shutdown');
+      const panePid = execFileSync(tmux, ['display-message', '-p', '-t', pane, '#{pane_pid}'], { encoding: 'utf8' }).trim();
+      await stopBridge();
+      await Promise.all(jobs);
+      await delay(300);
+      assert.equal((await tmuxCore.hasSession(target)).exists, true, 'bridge shutdown must not kill the active native Cursor');
+      assert.equal(execFileSync(tmux, ['display-message', '-p', '-t', pane, '#{pane_pid}'], { encoding: 'utf8' }).trim(), panePid);
+      bridge.running = true;
+      adapter.live = true;
+      registerAdapter(adapter);
+      await manager.reconcileMirrorSubscriptions();
+      releaseFinal();
+      await until(() => adapter.events.some(e => e.streamKey?.startsWith('mirror:') && e.type === 'end'
+        && e.status === 'completed' && e.text.includes('RECOVERED_DONE')), 'restarted bridge must mirror the original turn final without resending its input');
     } else {
       tmuxCore.injectPromptIntoPane = async (target, prompt, options) => {
         if (prompt === rejected) throw new Error('test: input failed before native acceptance');

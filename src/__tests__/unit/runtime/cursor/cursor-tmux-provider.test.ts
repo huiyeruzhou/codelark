@@ -173,6 +173,13 @@ describe('Cursor tmux provider helpers', () => {
   });
 
   it('distinguishes a real running Cursor pane from an unsubmitted draft', () => {
+    assert.equal(isCursorInputDraftScreen([
+      '  Previous assistant answer', '', '  →',
+      '    核验当前任务状态，', '    汇报结果并继续监控。', '', '',
+      '  Gemini 4 Carbon High · 66.2%                  Run Everything',
+      '  /tmp/workspace',
+    ].join('\n')), true, 'a plain multiline draft can start below an otherwise empty arrow');
+    assert.equal(isCursorInputDraftScreen('  →\n\n  Gemini 4 Carbon High\n  /tmp/workspace'), false);
     const runningPane = [
       '  Read package.json and reply with exactly CURSOR_SUBMIT_REPRO_OK',
       '',

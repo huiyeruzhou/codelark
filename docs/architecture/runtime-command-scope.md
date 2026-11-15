@@ -282,3 +282,7 @@ Accessor 边界：
 - Claude Code pty：设置 `CODELARK_REAL_CLAUDE_E2E=1`，可选 `CODELARK_REAL_CLAUDE_E2E_EXECUTABLE=ccr|claude`、`CODELARK_REAL_CLAUDE_E2E_PROMPT=<prompt>`、`CODELARK_REAL_CLAUDE_E2E_EXPECT=<expected text>`。
 
 Claude Code pty/tmux 会按全局 Claude executable 语义启动真实 TUI：`ccr` 对应 `ccr code`，`claude` 对应 `claude`。如果只想验证本地临时 `ccr` 配置，应设置 `/set claudeExecutable ccr` 并将目标会话切到 `/runtime claude`。Claude SDK provider 走 `@anthropic-ai/claude-agent-sdk` 原生事件路径，不使用 TUI，也不等同于 `ccr code`。
+
+### 桥接重启与 Cursor 原生会话
+
+桥接停止监听与用户停止任务是两种不同操作。`manager.stop()` 用 `BRIDGE_SHUTDOWN_REASON` 取消观察任务，SDK 层保留这个原因，Cursor provider 只结束监听，不能在失败清理中删除原生 tmux。重启后由既有 mirror 从记录位置继续同步；用户 `/stop` 仍走原来的中断路径。真实 Cursor 回归验证关闭桥接前后的 PID 和原生 session 不变、原任务最终回答能够重新同步，且没有再次发送输入。

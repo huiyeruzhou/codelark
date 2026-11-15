@@ -269,9 +269,9 @@ export async function processMessage(
     const abortController = new AbortController();
     if (abortSignal) {
       if (abortSignal.aborted) {
-        abortController.abort();
+        abortController.abort(abortSignal.reason);
       } else {
-        abortSignal.addEventListener('abort', () => abortController.abort(), { once: true });
+        abortSignal.addEventListener('abort', () => abortController.abort(abortSignal.reason), { once: true });
       }
     }
 

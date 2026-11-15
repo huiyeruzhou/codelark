@@ -11,6 +11,9 @@ import type {
 } from '../domain/session.js';
 import type { ClaudePermissionMode } from './options.js';
 
+/** Bridge shutdown detaches observers from persistent native sessions. */
+export const BRIDGE_SHUTDOWN_REASON = 'codelark:bridge-shutdown';
+
 export interface SSEEvent {
   type: SSEEventType;
   data: string;
