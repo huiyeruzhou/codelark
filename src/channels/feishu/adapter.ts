@@ -83,7 +83,7 @@ import {
   formatElapsed,
   type FeishuCardActionButton,
 } from './markdown.js';
-import { buildHistoryPage, type HistoryPageCursor } from './streaming-history-page.js';
+import { buildHistoryPage, historyTextCursorMatches, type HistoryPageCursor } from './streaming-history-page.js';
 import { saveCardForkCheckpoint } from '../../storage/card-fork-checkpoints.js';
 import type { HistoryForkSource } from '../../domain/progress.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
@@ -3938,8 +3938,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     state.lastFlushStartedAt = Date.now();
-    const flushPromise = this.flushCardUpdate(streamKey)
+    // 先登记请求，再开始渲染；同步进入续卡时也必须继承同一个 in-flight promise。
+    const flushPromise = Promise.resolve().then(() => this.flushCardUpdate(streamKey))
       .catch((err: unknown) => {
+        const current = this.activeCards.get(streamKey);
+        if (current) this.markCardFlushFailure(current, err);
         console.warn('[feishu-adapter] cardElement.content failed:', err instanceof Error ? err.message : err);
       })
       .finally(() => {
@@ -4147,6 +4150,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       next.desiredRevision = initialRevision;
       next.shadowRevision = initialRevision;
       if (state.desiredRevision !== initialRevision) {
+        this.rebaseStreamingHistoryPage(next, state.historyItems);
         next.historyItems = state.historyItems;
         next.toolCalls = state.toolCalls;
         next.pendingText = state.pendingText;
@@ -5034,10 +5038,24 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     const state = this.activeCards.get(cardKey);
     if (!state) return;
+    this.rebaseStreamingHistoryPage(state, items);
     state.historyItems = items;
     state.historyDriven = true;
     this.markStreamingDesiredDirty(state);
     this.scheduleCardFlush(cardKey);
+  }
+
+  private rebaseStreamingHistoryPage(state: FeishuCardState, items: StreamingHistoryItem[]): void {
+    const startChanged = !historyTextCursorMatches(state.historyItems, items, state);
+    const endChanged = state.renderedPageNext
+      && !historyTextCursorMatches(state.historyItems, items, state.renderedPageNext);
+    if (!startChanged && !endChanged) return;
+    if (startChanged) state.historyTextOffset = 0;
+    // 旧页的确认位置属于旧文本；先原地重绘新版，再计算是否继续分页。
+    state.renderedPageNext = undefined;
+    state.renderedPageHasMore = false;
+    state.renderedHistoryItemCount = 0;
+    state.shadowTrust = 'unknown';
   }
 
   private async awaitCardFlushCompletion(
@@ -5102,8 +5120,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       try { await pending; } catch { /* creation failed — no card to finalize */ }
     }
 
-    let state = this.activeCards.get(cardKey);
-    if (!state || !this.restClient) return false;
+    const initialState = this.activeCards.get(cardKey);
+    if (!initialState || !this.restClient) return false;
+    let state: FeishuCardState = initialState;
     const cardkit = (this.restClient as any).cardkit?.v1;
     if (!cardkit?.card?.settings || !cardkit?.card?.update) return false;
 
@@ -5136,22 +5155,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.flushQueued = false;
     }
 
-    // 批量恢复可能仍有多页。逐页确认发送，最后才写终态；失败保留当前卡以供重试。
-    while (state.historyDriven) {
-      const remaining = this.currentStreamingCardRender(state, state.pendingText || '',
-        state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
-      if (!remaining.hasMore && !state.renderedPageHasMore) break;
-      const previousCardId = state.cardId;
-      const previousRevision = state.shadowRevision;
-      await this.flushCardUpdate(cardKey);
-      state = this.activeCards.get(cardKey)!;
-      if (state.cardId === previousCardId && (state.consecutiveFlushFailures > 0
-        || (state.shadowRevision === previousRevision && !state.renderedPageHasMore))) return false;
-    }
-
     let terminalReactionEmoji: string | null = null;
     let streamingModeClosed = false;
+    let historyDrained = false;
     try {
+      // 批量恢复可能仍有多页。逐页确认发送，最后才写终态；失败从未完成页恢复。
+      while (state.historyDriven) {
+        const remaining = this.currentStreamingCardRender(state, state.pendingText || '',
+          state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
+        if (!remaining.hasMore && !state.renderedPageHasMore) break;
+        const previousCardId = state.cardId;
+        const previousRevision = state.shadowRevision;
+        this.enqueueCardFlush(cardKey);
+        if (!await this.awaitCardFlushCompletion(cardKey)) return false;
+        state = this.activeCards.get(cardKey)!;
+        if (state.cardId === previousCardId && (state.consecutiveFlushFailures > 0
+          || (state.shadowRevision === previousRevision && !state.renderedPageHasMore))) return false;
+      }
+      historyDrained = true;
+
       // Step 1: Close streaming mode
       state.sequence++;
       const settingsStartedAt = Date.now();
@@ -5247,6 +5269,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       console.log(`[feishu-adapter] Card finalized: streamKey=${cardKey}, cardId=${state.cardId}, status=${status}, elapsed=${formatElapsed(elapsedMs)}`);
       return true;
     } catch (err) {
+      if (!historyDrained) {
+        console.warn('[feishu-adapter] History pagination failed during finalization; recovering undelivered history:', err instanceof Error ? err.message : err);
+        return false;
+      }
       if (isFeishuCardInvalidError(err)) {
         console.warn('[feishu-adapter] Final card update failed because the card id is invalid; allowing message fallback:', err instanceof Error ? err.message : err);
         return false;
@@ -5286,6 +5312,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
       return false;
     } finally {
+      // 排空过程中可能已成功续页；恢复只能从当前未完成页开始。
+      const recovery = this.pendingCardCreateStates.get(cardKey);
+      if (recovery) Object.assign(recovery, {
+        historyItems: state.historyItems,
+        historyItemOffset: state.historyItemOffset,
+        historyToolCallOffset: state.historyToolCallOffset,
+        historyTextOffset: state.historyTextOffset,
+      });
       this.logStreamingCardPerfSummary(cardKey, state, status);
       this.activeCards.delete(cardKey);
       this.streamActionRows.delete(cardKey);
@@ -5433,6 +5467,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (!finalizePromise) {
       let trackedPromise: Promise<boolean>;
       trackedPromise = this.finalizeCard(chatId, status, responseText, cardKey)
+        .catch((error: unknown) => {
+          console.warn('[feishu-adapter] Card finalization failed; allowing structured recovery:', error instanceof Error ? error.message : error);
+          return false;
+        })
         .finally(() => {
           if (this.cardFinalizePromises.get(cardKey) === trackedPromise) {
             this.cardFinalizePromises.delete(cardKey);

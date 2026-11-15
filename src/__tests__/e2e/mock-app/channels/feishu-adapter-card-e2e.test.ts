@@ -650,6 +650,49 @@ describe('feishu adapter card e2e', () => {
     }
   });
 
+  it('delivers tools and a rewritten final answer after the model snapshot spans multiple cards', async () => {
+    resetBridgeTestState({ cleanCodexHome: true });
+    _testOnly.resetStateForTests();
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' }, { runtime: { codex: { provider: 'sdk', yoloMode: 'on' } } },
+    );
+    const calls: RecordedFeishuMessageCall[] = [];
+    const model = new ScriptedToolModelProvider({ steps: [
+      ...scriptedToolCall('inspect', 'Read', { path: 'src/app.ts' }, 'checked'),
+      { type: 'text_snapshot', text: 'INTERIM_SNAPSHOT_BEGIN ' + 'draft '.repeat(7_000) + ' INTERIM_SNAPSHOT_END' },
+      { type: 'delay', ms: 250 },
+      { type: 'text_snapshot', text: 'FINAL_REVISION_BEGIN 完整的最终回答 FINAL_REVISION_END' },
+      { type: 'result', data: {} },
+    ] });
+    initBridgeTestContext({ settings: makeBridgeSettings({ bridge_default_provider: 'sdk' }), llm: model });
+    const adapter = createRecordingFeishuAdapter(calls, { streamingEnabled: true });
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-revised-card-work-'));
+    const address = { channelType: 'feishu', chatId: 'chat-revised-card-e2e' } as const;
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear revisions ${workDir}`, 'revision-clear'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '检查代码并回答', 'revision-prompt'));
+      assert.equal(model.requests.length, 1, 'UI recovery must not repeat the model request');
+      assert.equal(model.lastError, null);
+      const creates = calls.filter(c => c.kind === 'card-create');
+      assert.ok(creates.length >= 3, 'the interim snapshot must actually cross page boundaries');
+      assert.match(recordedStreamingCardMarkdown(calls), /读取 `src\/app.ts`/);
+      const final = calls.filter(c => c.kind === 'card-update').at(-1)!;
+      const body = JSON.parse(final.payload.data.card.data);
+      const markdown = findCardElementsByTag(body, 'markdown').map(e => e.content || '').join('\n');
+      assert.match(markdown, /FINAL_REVISION_BEGIN 完整的最终回答 FINAL_REVISION_END/);
+      assert.doesNotMatch(markdown, /INTERIM_SNAPSHOT|draft/);
+      assert.notEqual(body.config.streaming_mode, true);
+      const stopButtons = findCardElementsByTag(body, 'button').filter(button => /停止/.test(button.text?.content || ''));
+      assert.ok(stopButtons.every(button => button.disabled === true), JSON.stringify(stopButtons));
+      assert.equal((adapter as any).activeCards.size, 0);
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      _testOnly.resetStateForTests();
+    }
+  });
+
   it('delivers mirror clk-ask forms through FeishuAdapter.send', async () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();

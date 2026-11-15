@@ -6,7 +6,7 @@ export type ScriptedToolModelStep =
   | { type: 'reasoning'; text: string; label?: string }
   | { type: 'tool_start'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; id: string; output: string; isError?: boolean }
-  | { type: 'text'; text: string }
+  | { type: 'text' | 'text_snapshot'; text: string }
   | { type: 'result'; data?: Record<string, unknown> }
   | { type: 'error'; message: string }
   | { type: 'delay'; ms: number };
@@ -56,8 +56,8 @@ export class ScriptedToolModelProvider implements LLMProvider {
                   content: step.output,
                   is_error: step.isError === true,
                 }));
-              } else if (step.type === 'text') {
-                controller.enqueue(sseEvent('text', step.text));
+              } else if (step.type === 'text' || step.type === 'text_snapshot') {
+                controller.enqueue(sseEvent(step.type, step.text));
               } else if (step.type === 'result') {
                 controller.enqueue(sseEvent('result', step.data || {}));
               } else if (step.type === 'error') {

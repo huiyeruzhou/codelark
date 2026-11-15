@@ -10,6 +10,7 @@ function harness() {
   const cards = new Map<string, any>();
   const closed = new Set<string>();
   const operations: string[] = [];
+  const sent: any[] = [];
   let serial = 0;
   let failNext = false;
   let duringCreate: (() => void) | undefined;
@@ -54,12 +55,13 @@ function harness() {
         create: async () => ({}),
       },
     } },
-    im: { message: { create: async () => {
+    im: { message: { create: async (payload: any) => {
+      sent.push(payload);
       operations.push('send');
       return { data: { message_id: `message-${serial}` } };
     } } },
   };
-  return { adapter, cards, closed, operations,
+  return { adapter, cards, closed, operations, sent,
     failCreate: () => { failNext = true; },
     duringCreate: (fn: () => void) => { duringCreate = fn; },
   };
@@ -130,4 +132,70 @@ it('splits one oversized patch across bounded cards without losing its lines or 
   for (const line of expectedLines) assert.equal(all.split(line).length - 1, 1, line);
   assert.ok(cards.size > 1);
   for (const content of contents) assert.equal((content.match(/^```/gm) || []).length % 2, 0);
+});
+
+for (const size of [200, 40_000]) {
+  it(`delivers the complete revised answer after a long snapshot was paginated (${size} chars)`, async () => {
+    const { adapter, cards } = harness();
+    await adapter.createStreamingCard('chat', undefined, 'revision');
+    const prefix: StreamingHistoryItem[] = [{ type: 'markdown', role: 'user', content: 'CHECK_REVISION' }];
+    const old = 'INTERIM_BEGIN ' + 'interim '.repeat(5_000) + ' INTERIM_END';
+    adapter.onStreamHistory('chat', [...prefix, { type: 'markdown', role: 'assistant', content: old }], 'revision');
+    for (let i = 0; i < 5 && !adapter.activeCards.get('revision').historyTextOffset; i++) {
+      await adapter.flushCardUpdate('revision');
+    }
+    assert.ok(adapter.activeCards.get('revision').historyTextOffset > 1_000);
+    const answer = 'REVISED_BEGIN ' + '新'.repeat(size) + ' REVISED_END';
+    adapter.onStreamHistory('chat', [...prefix, { type: 'markdown', role: 'assistant', content: answer }], 'revision');
+    assert.equal(await adapter.onStreamEnd('chat', 'completed', answer, 'revision'), true);
+    const all = [...cards.values()].map(x => JSON.stringify(x)).join('\n');
+    assert.equal(all.split('CHECK_REVISION').length - 1, 1, 'do not replay the already delivered user input');
+    assert.equal(all.split('REVISED_BEGIN').length - 1, 1);
+    assert.equal(all.split('REVISED_END').length - 1, 1);
+    assert.equal((all.match(/新/g) || []).length, size, 'do not drop the rewritten prefix or tail');
+    assert.notEqual([...cards.values()].at(-1).config.streaming_mode, true);
+    assert.equal(adapter.hasActiveCard('chat', 'revision'), false);
+  });
+}
+
+it('preserves the page position when the same snapshot only grows', async () => {
+  const { adapter, cards } = harness();
+  await adapter.createStreamingCard('chat', undefined, 'append');
+  const old = 'APPEND_BEGIN ' + '字'.repeat(12_000);
+  adapter.onStreamHistory('chat', [{ type: 'markdown', role: 'assistant', content: old }], 'append');
+  for (let i = 0; i < 5 && !adapter.activeCards.get('append').historyTextOffset; i++) await adapter.flushCardUpdate('append');
+  const offset = adapter.activeCards.get('append').historyTextOffset;
+  assert.ok(offset > 0);
+  const answer = old + ' APPEND_END';
+  adapter.onStreamHistory('chat', [{ type: 'markdown', role: 'assistant', content: answer }], 'append');
+  assert.equal(adapter.activeCards.get('append').historyTextOffset, offset);
+  assert.equal(await adapter.onStreamEnd('chat', 'completed', answer, 'append'), true);
+  const all = [...cards.values()].map(x => JSON.stringify(x)).join('\n');
+  assert.equal(all.split('APPEND_BEGIN').length - 1, 1);
+  assert.equal(all.split('APPEND_END').length - 1, 1);
+  assert.equal((all.match(/字/g) || []).length, 12_000);
+});
+
+it('recovers the answer when local pagination throws before terminal card update', async () => {
+  const { adapter, sent } = harness();
+  await adapter.createStreamingCard('chat', undefined, 'failed-render');
+  adapter.onStreamHistory('chat', [{ type: 'markdown', role: 'assistant', content: 'RECOVER_LOCAL_RENDER_FAILURE' }], 'failed-render');
+  adapter.currentStreamingCardRender = () => { throw new Error('local pagination failed'); };
+  assert.equal(await adapter.onStreamEnd('chat', 'completed', '', 'failed-render'), true);
+  assert.ok(sent.some(p => p.data.msg_type === 'interactive' && p.data.content.includes('RECOVER_LOCAL_RENDER_FAILURE')));
+  assert.equal(adapter.hasActiveCard('chat', 'failed-render'), false);
+});
+
+it('rebases a rewritten snapshot that arrives while the continuation is being created', async () => {
+  const h = harness();
+  await h.adapter.createStreamingCard('chat', undefined, 'concurrent-revision');
+  const old: StreamingHistoryItem[] = [{ type: 'markdown', role: 'assistant', content: 'DRAFT ' + '旧'.repeat(15_000) }];
+  h.adapter.onStreamHistory('chat', old, 'concurrent-revision');
+  await h.adapter.flushCardUpdate('concurrent-revision');
+  assert.ok(h.adapter.activeCards.get('concurrent-revision').renderedPageHasMore);
+  h.duringCreate(() => h.adapter.onStreamHistory('chat', [{ type: 'markdown', role: 'assistant', content: 'CONCURRENT_FINAL' }], 'concurrent-revision'));
+  await h.adapter.flushCardUpdate('concurrent-revision');
+  assert.equal(await h.adapter.onStreamEnd('chat', 'completed', '', 'concurrent-revision'), true);
+  const all = [...h.cards.values()].map(x => JSON.stringify(x)).join('\n');
+  assert.equal(all.split('CONCURRENT_FINAL').length - 1, 1);
 });

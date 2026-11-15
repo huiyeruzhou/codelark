@@ -7,6 +7,29 @@ export interface HistoryPageCursor {
   historyTextOffset?: number;
 }
 
+// 已分页的记录可能被 provider 的新版快照替换。只有已发送前缀仍相同，
+// 字符位置才仍有意义；不能仅把越界位置 clamp 到新长度，否则会吞掉新版正文。
+export function historyTextCursorMatches(
+  previous: StreamingHistoryItem[], history: StreamingHistoryItem[], cursor: HistoryPageCursor,
+): boolean {
+  const offset = cursor.historyTextOffset || 0;
+  if (!offset) return true;
+  const atomAt = (items: StreamingHistoryItem[]) => {
+    const item = items[cursor.historyItemOffset];
+    if (item?.type === 'tool_panel') {
+      const tool = item.tools[cursor.historyToolCallOffset];
+      return tool ? { ...item, tools: [tool] } : undefined;
+    }
+    return item;
+  };
+  const before = atomAt(previous);
+  const after = atomAt(history);
+  if (!before || !after || before.type !== after.type) return false;
+  const beforeText = historyAtomText(before).content;
+  const afterText = historyAtomText(after).content;
+  return offset < afterText.length && beforeText.slice(0, offset) === afterText.slice(0, offset);
+}
+
 // 页游标始终指向原始历史；分页不能通过删除前部记录来满足容量限制。
 export function buildHistoryPage(
   history: StreamingHistoryItem[],

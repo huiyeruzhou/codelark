@@ -349,6 +349,7 @@ adapter 重建不能把正在路上的平台 UI 资源当成新消息重建。ad
 - 组件数接近上限时，先 rollover 到 continuation card，失败后再 full refresh。
 - 连续工具在公共 history 中始终保留为一个 runtime-neutral `tool_panel`；Feishu continuation cursor 同时记录 history item index 和 panel 内 tool index，因此分页原子是单个工具调用，外层“工具调用 · N”只是每张卡对当前可见工具的重新分组。不能预先把公共 panel 改写成若干大块，也不能为了让整组塞进一张卡而降低 apply_patch 的 8,000 字符/160 行详情上限。
 - 用户输入由同一个 runtime-neutral history item 渲染：不超过 800 个 Unicode 字符时保持普通 markdown；超过后使用无边框、默认收起的 panel，标题展示规范化后的前 240 字符，展开内容保留完整原文。该规则属于 Feishu 展示层，不改写 Codex、Claude 或 Kimi 的 history 数据。
+- 历史中的正文快照允许整体改写。跨页字符位置只有在新版保留已发送前缀时才能复用；前缀改变或正文缩短时，当前卡从该条记录的开头重绘，并重新计算后续页，不能跳过新版开头。已发送的其他历史项不重放。续卡请求期间到达的新版也按同一规则处理。flush 必须先登记 in-flight promise 再开始执行，收尾排空复用该入口，保证下一卡继承正在执行的请求，避免并行续卡用旧内容或旧按钮覆盖新状态。收尾分页的本地异常必须进入结构化消息恢复，不能只改完成状态就把未发送正文当作已送达。
 - final renderer 判断正文是否存在时必须同时考虑 `text`、legacy `tools` 和 runtime-neutral `historyItems`。已有 stream message 的 mirror finalize 会故意传空 text 以避免重复；若漏掉 history，工具-only / history-only 卡会在终态 full update 时被错误替换成只有 footer 的空卡。
 
 因此“只对变化 element 调 `cardElement.content`”是正文、任务、状态这类固定元素的正常快路径；当前实现还保留 create/patch、batchUpdate、direct full refresh 和 rollover 作为工具/history/结构变化与失败恢复路径。sync plan 日志会记录 desired component count、direct refresh 阈值、增量 action 类型/element IDs、是否命中用户文本更新和 direct refresh rule，便于核对 planner 分流。
