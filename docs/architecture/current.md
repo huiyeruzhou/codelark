@@ -431,6 +431,8 @@ toolUseIdToRootTurnId
 增量读取必须返回下一次读取所需的 state。整文件读取和任意分段增量读取应生成相同的
 record turnId 序列。
 
+Cursor 的 `/p tmux` 重启确认以活动任务或实际存在的 tmux 会话为依据。只剩持久化名称、原生会话已消失且没有活动任务时，直接按原 native session ID 恢复，不把失效绑定当作正在运行的任务。
+
 当原生终态已由后台 observer 交给当前任务时，runner 使用明确的 `RUNTIME_TURN_FINALIZED_REASON` 取消重复监听。Cursor provider 收到此原因只关闭本地流，不报告执行失败，也不删除持久 tmux 会话。用户主动停止和实际 provider 错误仍沿用原有取消/错误处理；bridge 热更新继续使用独立的 `BRIDGE_SHUTDOWN_REASON`。
 
 Cursor 会在长任务中写入仅含子代理类型、模型和动态工具目录的内部 `user` 记录，随后重放当前输入。transcript parser 识别完整目录结构，并仅忽略紧随其后、与当前输入逐字相同的重放；目录更新跨增量读取时也保留这一状态。它们不创建新 turn，也不清空工具配对和正文快照。其他重复输入、不同输入以及模型输出之后的重复输入仍创建新 turn。这样正在由 IM 卡片同步的工具过程不会因错误的轮次切分进入历史积压队列。

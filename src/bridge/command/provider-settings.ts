@@ -7,6 +7,7 @@ import { createConfigService } from '../../configuration/service.js';
 import { prepareCodexAppServerForBinding, scheduleCodexAppServerView } from './tmux.js';
 import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
 import { getProviderOwnedRuntimeTmuxTarget } from '../session/stop-running-session.js';
+import { tmuxCore } from '../../runtime/tmux/core.js';
 import type { RuntimeProviderChoice } from '../../domain/session.js';
 import type { BridgeStore, ChannelChat, InboundMessage } from '../../domain/index.js';
 import {
@@ -326,7 +327,9 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
     // A remote terminal is only a view: attaching it does not stop the shared turn.
     const shared = runtime === 'codex'
       && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id));
-    if (!shared && (sessionHasActiveRuntimeTurn(options.deps, session) || getProviderOwnedRuntimeTmuxTarget(session, binding))) {
+    const target = getProviderOwnedRuntimeTmuxTarget(session, binding);
+    if (!shared && (sessionHasActiveRuntimeTurn(options.deps, session)
+      || (target && (runtime !== 'cursor' || (await tmuxCore.hasSession(target.sessionName)).exists)))) {
       return requestTmuxRestart(binding, session, task);
     }
   }

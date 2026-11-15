@@ -36,7 +36,7 @@ import {
   _testOnlyTmuxCommandFormatting,
   _testOnlyTmuxScreenMonitors,
 } from '../../../../bridge/command/tmux.js';
-import { _testOnlyTmuxCore, createTmuxCliCore } from '../../../../runtime/tmux/core.js';
+import { tmuxCore, _testOnlyTmuxCore, createTmuxCliCore } from '../../../../runtime/tmux/core.js';
 import {
   getRuntimeTmuxInputState,
   resetRuntimeTmuxInputStatesForTests,
@@ -4916,6 +4916,42 @@ enabled = true
     assert.equal(store.getSession(session.id)?.runtime?.zcode?.sessionId, 'sess_existing');
     assert.equal(store.getSession(session.id)?.runtime?.general?.tmuxSessionName, `clk-zcode-${session.id}`);
     assert.match(sent.at(-1)?.text || '', /已切换 ZCode Provider/);
+  });
+
+  it('restarts an idle missing Cursor pane while retaining confirmation for a live pane', async (t) => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter = createGroupCapableAdapter({ sent });
+    const address = { channelType: 'feishu', chatId: 'chat-cursor-missing-pane' } as const;
+    const session = store.createSession('cursor-missing-pane', 'test-model');
+    const name = `clk-cursor-${session.id}`;
+    store.updateSession(session.id, { runtime_status: 'idle', runtime: {
+      activeRuntime: 'cursor', cursor: { sessionId: 'native-preserved' }, general: { tmuxSessionName: name },
+    } });
+    store.upsertChannelChat({ ...address, bridgeSessionId: session.id });
+    let exists = true, starts = 0;
+    t.mock.method(tmuxCore, 'hasSession', async (target: string) => {
+      assert.equal(target, name);
+      return { exists, command: 'tmux has-session' };
+    });
+    const deps = {
+      getActiveTask: () => undefined, diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [], reconcileMirrorSubscriptions: async () => {},
+      restartCursorTmuxSession: async (params: any) => {
+        starts++;
+        assert.equal(params.cursorSessionId, 'native-preserved');
+        return { sessionName: name, targetPane: `${name}:0.0`, nextOffset: 0, existed: false,
+          sessionId: 'native-preserved' };
+      },
+    };
+    await handleBridgeCommand(adapter, { address, text: '/p tmux', messageId: 'live-pane' } as any, '/p tmux', deps);
+    assert.equal(starts, 0, 'a live native pane still requires confirmation');
+    assert.match(sent.at(-1)?.text || '', /结束并重启/);
+    exists = false;
+    await handleBridgeCommand(adapter, { address, text: '/p tmux', messageId: 'missing-pane' } as any, '/p tmux', deps);
+    assert.equal(starts, 1, 'an old binding with no active task or native pane can be restored');
+    assert.match(sent.at(-1)?.text || '', /Cursor Provider · tmux 已启动/);
+    assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, 'native-preserved');
   });
 
   it('explains Cursor workspace indexing before /p tmux cold startup finishes', async () => {
