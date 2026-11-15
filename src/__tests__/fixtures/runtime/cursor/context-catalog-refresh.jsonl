@@ -1,0 +1,7 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Sunday, Nov 15, 2026, 4:11 PM (UTC)</timestamp>\n<user_query>\ninspect\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"path":"README.md"}},{"type":"text","text":"reading"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<available_subagent_types>\n- explore: Read project files.\n</available_subagent_types>\n<available_subagent_models>\n- inherit\n</available_subagent_models>\n<dynamic_tool_catalog>\n<dynamic_tool_namespaces>\n<namespace name=\"cursor\" tools=\"AwaitShell, Task\" source=\"cursor\" />\n</dynamic_tool_namespaces>\n</dynamic_tool_catalog>"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Sunday, Nov 15, 2026, 4:11 PM (UTC)</timestamp>\n<user_query>\ninspect\n</user_query>"}]}}
+{"role":"tool","message":{"content":[{"type":"text","text":"{\"tool_name\":\"Read\",\"tool_result\":\"file contents\"}"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"reading complete"}]}}
+{"type":"turn_ended","status":"success"}

@@ -603,6 +603,15 @@ function isCursorMetadataOnlyUserRow(blocks: CursorTranscriptContentBlock[]): bo
   ));
 }
 
+function isCursorCatalogUserRow(blocks: CursorTranscriptContentBlock[]): boolean {
+  if (!blocks.length || blocks.some(block => block.type !== 'text' || typeof block.text !== 'string')) return false;
+  const text = blocks.map(block => block.text).join('\n').trim();
+  // Cursor refreshes this internal catalog in a user-role row, then repeats
+  // the current prompt. Require the complete catalog shape, with no user text.
+  return text.startsWith('<available_subagent_types>') && text.endsWith('</dynamic_tool_catalog>')
+    && !text.replace(/<(available_subagent_types|available_subagent_models|dynamic_tool_catalog)>[\s\S]*?<\/\1>/gu, '').trim();
+}
+
 function stableAssistantTextSignature(turnId: string, text: string): string {
   const digest = crypto.createHash('sha256').update(`${turnId}\0${text}`).digest('hex').slice(0, 16);
   return `cursor:${digest}:assistant-text`;
@@ -615,6 +624,7 @@ function cursorAssistantReplacementKey(turnId: string): string {
 const CURSOR_ASSISTANT_SNAPSHOT_STATE_PREFIX = 'cursor-assistant-snapshot:';
 const CURSOR_OCCURRENCE_STATE_PREFIX = 'cursor-occurrence:';
 const CURSOR_NATIVE_TOOL_STATE_PREFIX = 'cursor-native-tools:';
+const CURSOR_CATALOG_REFRESH_STATE = 'cursor-catalog-refresh';
 
 interface CursorAssistantSnapshotState {
   lastContent: string;
@@ -967,6 +977,7 @@ function parseCursorTranscriptRecordState(
   const occurrences = decodeCursorOccurrences(encodedState);
   let activeTurnId = options.currentTurnId || null;
   let activeTurnTimestamp = cursorTurnTimestamp(activeTurnId);
+  let catalogRefreshed = encodedState.includes(CURSOR_CATALOG_REFRESH_STATE);
   const flushNativeResults = () => {
     for (const [name, ids] of pendingToolIdsByName) {
       const pending = ids.filter((id) => {
@@ -998,6 +1009,13 @@ function parseCursorTranscriptRecordState(
     // active turn's tool/snapshot/occurrence state. Keep non-text inputs.
     if (role === 'user' && isCursorMetadataOnlyUserRow(blocks)) continue;
     const lineDigest = crypto.createHash('sha256').update(line).digest('hex').slice(0, 16);
+    if (role === 'user' && isCursorCatalogUserRow(blocks)) {
+      catalogRefreshed = true;
+      continue;
+    }
+    const replayedPrompt = catalogRefreshed && role === 'user' && activeTurnId?.startsWith(`cursor:${lineDigest}:`);
+    catalogRefreshed = false;
+    if (replayedPrompt) continue;
     let lineOccurrence = activeTurnId
       ? nextCursorOccurrence(occurrences, `event:${activeTurnId}:${lineDigest}`)
       : 1;
@@ -1241,6 +1259,7 @@ function parseCursorTranscriptRecordState(
       ...(nativeToolBindings.size ? [CURSOR_NATIVE_TOOL_STATE_PREFIX + Buffer.from(JSON.stringify([...nativeToolBindings])).toString('base64url')] : []),
       ...encodeCursorAssistantSnapshots(assistantSnapshots),
       encodeCursorOccurrences(occurrences),
+      ...(catalogRefreshed ? [CURSOR_CATALOG_REFRESH_STATE] : []),
     ],
   };
 }

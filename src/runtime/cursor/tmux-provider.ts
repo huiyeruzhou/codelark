@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { BridgeMirrorRecord, LLMProvider, StreamChatParams } from '../contracts.js';
-import { BRIDGE_SHUTDOWN_REASON } from '../contracts.js';
+import { BRIDGE_SHUTDOWN_REASON, RUNTIME_TURN_FINALIZED_REASON } from '../contracts.js';
 import { sseEvent } from '../sse.js';
 import { tmuxCore } from '../tmux/core.js';
 import {
@@ -752,6 +752,12 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           await pollCursorTranscript(controller, context, targetPane, params.abortController?.signal);
           controller.close();
         } catch (error) {
+          if (params.abortController?.signal.reason === RUNTIME_TURN_FINALIZED_REASON) {
+            // The native turn already ended. Its observer owns final delivery;
+            // cancellation here releases this reader, not the persistent TUI.
+            try { controller.close(); } catch { /* Already closed by the consumer. */ }
+            return;
+          }
           failed = true;
           preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError
             || params.abortController?.signal.reason === BRIDGE_SHUTDOWN_REASON;

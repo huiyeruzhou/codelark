@@ -5,6 +5,7 @@ import type {
   StreamingPreviewState,
 } from '../../../domain/index.js';
 import type { BaseChannelAdapter, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
+import { RUNTIME_TURN_FINALIZED_REASON } from '../../../runtime/contracts.js';
 import { enqueueDelivery } from '../../../channels/delivery/deliver.js';
 import { supportsOutboundArtifacts } from '../../../channels/delivery/artifacts.js';
 import { resolveStructuredStreamingUiMessageId } from '../../../channels/delivery/stream-feedback.js';
@@ -333,7 +334,7 @@ export async function runInteractiveMessage(
     hasCodexThread: () => Boolean(observedCodexThreadId),
     isCurrentTask: () => deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId),
     isAborted: () => taskAbort.signal.aborted,
-    abortTask: () => taskAbort.abort(),
+    abortTask: () => taskAbort.abort(RUNTIME_TURN_FINALIZED_REASON),
     finalizationTimeoutMs: deps.codexTerminalFinalizationTimeoutMs,
   });
   deps.resetMirrorSessionForInteractiveRun(binding.bridgeSessionId);

@@ -15,7 +15,8 @@ import { consumeMirrorRecords, hasPendingMirrorWork } from '../../../../bridge/m
 import { buildCommandCallbackData, parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import { setSessionActiveRuntimeUpdate, setSessionCursorIdentityUpdate } from '../../../../domain/session-runtime.js';
 import { buildRichCardContent } from '../../../../channels/feishu/markdown.js';
-import { createCursorMirrorJsonlSource } from '../../../../runtime/cursor/session-index.js';
+import { beginMirrorSuppression, filterSuppressedMirrorRecords } from '../../../../bridge/mirror/suppression.js';
+import { parseCursorTranscriptRecords, createCursorMirrorJsonlSource } from '../../../../runtime/cursor/session-index.js';
 
 const NOW = Date.parse('2026-10-09T15:40:00.000Z');
 const stamp = (offset: number) => new Date(NOW + offset).toISOString();
@@ -306,3 +307,29 @@ for (const sourceKind of ['snapshot', 'buffer', 'retry'] as const) {
     }
   });
 }
+
+it('does not turn a native catalog refresh into a tool backlog while an IM turn owns the output', async () => {
+  const f = fixture();
+  const lines = fs.readFileSync(path.resolve('src/__tests__/fixtures/runtime/cursor/context-catalog-refresh.jsonl'), 'utf8').trim().split('\n');
+  const suppression = { suppressions: new Map(), ignoredTurnIds: new Map() };
+  const config = { suppressionWindowMs: 60_000, promptMatchGraceMs: 60_000 };
+  beginMirrorSuppression(suppression, f.session.id, 'inspect', NOW);
+  const tools = Array.from({ length: 110 }, (_, i) => JSON.stringify({ role: 'assistant', message: { content: [
+    { type: 'tool_use', name: 'Read', input: { path: `file-${i}.md` } },
+  ] } }));
+  // The CLI keeps the original user timestamp even while new tools arrive.
+  const records = parseCursorTranscriptRecords([...lines.slice(0, 4), ...tools, ...lines.slice(4)].join('\n') + '\n');
+  f.setNow(Date.parse('2026-11-15T16:33:00.000Z'));
+  for (const record of records) {
+    const unclaimed = filterSuppressedMirrorRecords(suppression, f.session.id, [record], config, NOW);
+    const result = await f.gate(f.subscription, unclaimed, '2026-11-15T16:32:59.000Z');
+    await result.notify?.();
+    f.subscription.bufferedRecords.push(...result.records);
+  }
+  assert.deepEqual(f.notices, [], 'live tools must not ask the user to choose empty historical summaries');
+  assert.deepEqual(f.subscription.bufferedRecords, [], 'the direct turn owns all of this output');
+  assert.equal(f.state(), undefined);
+  // A subsequent local turn must still pass through suppression and mirror.
+  const local = parseCursorTranscriptRecords(lines[0]!.replace('inspect', 'local follow-up') + '\n' + lines[5] + '\n' + lines[6] + '\n');
+  assert.deepEqual(filterSuppressedMirrorRecords(suppression, f.session.id, local, config, NOW), local);
+});

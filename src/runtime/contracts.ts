@@ -13,6 +13,8 @@ import type { ClaudePermissionMode } from './options.js';
 
 /** Bridge shutdown detaches observers from persistent native sessions. */
 export const BRIDGE_SHUTDOWN_REASON = 'codelark:bridge-shutdown';
+/** A native observer already finalized the turn; only detach the stream reader. */
+export const RUNTIME_TURN_FINALIZED_REASON = 'codelark:runtime-turn-finalized';
 
 export interface SSEEvent {
   type: SSEEventType;

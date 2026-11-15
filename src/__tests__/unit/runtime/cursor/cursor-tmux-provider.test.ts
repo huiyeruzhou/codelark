@@ -501,6 +501,35 @@ describe('Cursor tmux provider helpers', () => {
       parseCursorTranscriptRecords(firstText + finalText));
   });
 
+  it('preserves a turn and pending tools across native catalog refresh and prompt replay in separate deltas', () => {
+    // Shape captured from Cursor's runtime catalog refresh during a long turn.
+    const fixture = fs.readFileSync(path.resolve('src/__tests__/fixtures/runtime/cursor/context-catalog-refresh.jsonl'), 'utf8');
+    const lines = fixture.trim().split('\n');
+    const expected = parseCursorTranscriptRecords(lines.filter((_, i) => i !== 2 && i !== 3).join('\n') + '\n');
+    assert.deepEqual(parseCursorTranscriptRecords(fixture), expected);
+    const file = path.join(root, 'catalog-refresh.jsonl');
+    fs.writeFileSync(file, fixture);
+    let cursor = { nextOffset: 0, trailingText: '', nextTurnId: null as string | null, nextSpecialCallIds: [] as string[] };
+    const records: ReturnType<typeof parseCursorTranscriptRecords> = [];
+    for (const line of lines) {
+      const delta = readCursorSessionMirrorRecordDeltaByFilePath(file, cursor.nextOffset,
+        cursor.nextOffset + Buffer.byteLength(line + '\n'), cursor.trailingText, cursor.nextTurnId, cursor.nextSpecialCallIds);
+      records.push(...delta.records);
+      cursor = delta;
+    }
+    // Incremental delivery includes the intermediate "reading" snapshot;
+    // a full parse retains only the last revision of that same message.
+    assert.deepEqual(records.filter((record, i) => !record.replacementKey
+      || !records.slice(i + 1).some(next => next.replacementKey === record.replacementKey)), expected);
+    assert.equal(records.filter(r => r.type === 'task_started').length, 1);
+    assert.equal(records.find(r => r.type === 'tool_finished')?.toolId, records.find(r => r.type === 'tool_started')?.toolId);
+    // A real repeat after a refresh with intervening model output is a new input.
+    const actualRepeat = [...lines.slice(0, 3), lines[5], lines[3], ...lines.slice(4)].join('\n') + '\n';
+    assert.equal(parseCursorTranscriptRecords(actualRepeat).filter(r => r.type === 'task_started').length, 2);
+    const changedInput = [...lines.slice(0, 3), lines[3]!.replace('inspect', 'inspect again'), ...lines.slice(4)].join('\n') + '\n';
+    assert.equal(parseCursorTranscriptRecords(changedInput).filter(r => r.type === 'task_started').length, 2);
+  });
+
   it('keeps mixed timestamp text and image-only user input as real Cursor turn boundaries', () => {
     const timestamp = '<timestamp>Friday, Oct 9, 2026, 1:44 PM (UTC+8)</timestamp>';
     const rows = [

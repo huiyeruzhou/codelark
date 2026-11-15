@@ -14,6 +14,7 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import type { StructuredStreamingUiActionButton } from '../../../../channels/contracts.js';
+import { findCursorSessionFileById } from '../../../../runtime/cursor/session-index.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 
 const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
@@ -34,7 +35,7 @@ class RecoveryAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
+for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'external-terminal'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
     ...(process.env.PATH || '').split(path.delimiter).map(dir => path.join(dir, 'agent')),
@@ -78,6 +79,7 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart'] as const
     getImmediateLane: manager.adapterImmediateLane, getSessionLane: manager.adapterSessionLane, resolveSessionIdForMessage: () => session.id,
   });
   const originalCapture = tmuxCore.capturePane, originalInject = tmuxCore.injectPromptIntoPane;
+  let releasePoll = () => {};
   let passed = false;
   const until = async (check: () => boolean | Promise<boolean>, label: string, timeoutMs = 30_000) => {
     const end = Date.now() + timeoutMs;
@@ -103,6 +105,41 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart'] as const
       adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'relaunch'));
       await until(() => finished.includes('relaunch'), 'IM request after process exit must finish');
       assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('RECOVERED_DONE')), 'dead pane must relaunch and deliver a successful reply');
+    } else if (scenario === 'external-terminal') {
+      delete process.env.CODELARK_DEBUG;
+      // Let the external native-record observer win the race against polling.
+      let pollReached = false;
+      const holdPoll = new Promise<void>(resolve => { releasePoll = resolve; });
+      tmuxCore.capturePane = async (target, lines) => {
+        const result = await originalCapture(target, lines);
+        if (target === pane && lines === 160 && adapter.reactions.includes('externally-finalized')) {
+          pollReached = true;
+          await holdPoll;
+        }
+        return result;
+      };
+      const panePid = execFileSync(tmux, ['display-message', '-p', '-t', pane, '#{pane_pid}'], { encoding: 'utf8' }).trim();
+      adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'externally-finalized'));
+      await until(() => adapter.reactions.includes('externally-finalized'), 'follow-up must reach the native process');
+      await until(() => pollReached, 'native polling must be in flight before the external final');
+      const task = bridge.activeTasks.get(session.id);
+      assert.ok(task?.finalizeFromExternalTerminal);
+      releaseFinal();
+      await until(() => {
+        const source = findCursorSessionFileById(nativeSessionId, workspace);
+        if (!source?.filePath) return false;
+        const raw = fs.readFileSync(source.filePath, 'utf8');
+        const terminal = JSON.parse(raw.trim().split('\n').at(-1) || '{}');
+        return raw.includes('RECOVERED_DONE') && terminal.type === 'turn_ended' && terminal.status === 'success';
+      }, 'native final must exist before an external observer finalizes the task');
+      assert.equal(await task.finalizeFromExternalTerminal('completed', 'native terminal observed', 'RECOVERED_DONE'), true);
+      await until(() => finished.includes('externally-finalized'), 'external completion must finish the IM job');
+      releasePoll();
+      await delay(700);
+      assert.equal((await tmuxCore.hasSession(target)).exists, true, 'successful external completion must not delete the persistent native session');
+      assert.equal(execFileSync(tmux, ['display-message', '-p', '-t', pane, '#{pane_pid}'], { encoding: 'utf8' }).trim(), panePid);
+      assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('RECOVERED_DONE')));
+      assert.equal(adapter.events.some(e => e.type === 'end' && e.status === 'error'), false);
     } else if (scenario === 'bridge-restart') {
       // Production has no debug escape hatch: shutdown must preserve native work.
       delete process.env.CODELARK_DEBUG;
@@ -145,7 +182,7 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart'] as const
     assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, nativeSessionId);
     assert.deepEqual(backend.errors, []); passed = true;
   } finally {
-    tmuxCore.injectPromptIntoPane = originalInject; releaseFinal();
+    tmuxCore.injectPromptIntoPane = originalInject; tmuxCore.capturePane = originalCapture; releasePoll(); releaseFinal();
     if (!passed || process.env.CODELARK_REAL_CURSOR_E2E_KEEP_ARTIFACTS === '1') {
       fs.writeFileSync(path.join(root, 'mirror-state.json'), JSON.stringify({ session: store.getSession(session.id), subscriptions: [...bridge.cursorMirrorSubscriptions.values()], suppression: [...bridge.mirrorSuppressUntil] }, (_key, value) => value instanceof Set ? [...value] : value instanceof Map ? [...value] : value, 2));
       fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ prompts: backend.prompts, steers: backend.steers, errors: backend.errors, events: adapter.events, messages: adapter.sent }, null, 2));
