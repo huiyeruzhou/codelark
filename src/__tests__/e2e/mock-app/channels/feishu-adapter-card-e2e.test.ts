@@ -693,6 +693,47 @@ describe('feishu adapter card e2e', () => {
     }
   });
 
+  it('stops a tool-using turn without repeating the existing answer as a stop diagnostic', async () => {
+    resetBridgeTestState({ cleanCodexHome: true });
+    _testOnly.resetStateForTests();
+    createConfigService({ migrate: false, env: {} }).set(
+      { kind: 'home' }, { runtime: { codex: { provider: 'sdk', yoloMode: 'on' } } },
+    );
+    const calls: RecordedFeishuMessageCall[] = [];
+    const answer = 'MODEL_OUTPUT_ONCE 已经读取文件，正在核对结果。';
+    const model = new ScriptedToolModelProvider({ steps: [
+      ...scriptedToolCall('inspect', 'Read', { path: 'src/app.ts' }, 'checked'),
+      { type: 'text_snapshot', text: answer },
+      { type: 'delay', ms: 750 },
+      { type: 'result', data: {} },
+    ] });
+    initBridgeTestContext({ settings: makeBridgeSettings({ bridge_default_provider: 'sdk' }), llm: model });
+    const adapter = createRecordingFeishuAdapter(calls, { streamingEnabled: true });
+    registerAdapter(adapter);
+    (globalThis as unknown as Record<string, any>).__bridge_manager__.running = true;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-stop-answer-work-'));
+    const address = { channelType: 'feishu', chatId: 'chat-stop-answer-e2e' } as const;
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/clear stop-answer ${workDir}`, 'stop-answer-clear'));
+      const turn = _testOnly.handleMessage(adapter, inboundMessage(address, '检查并解释', 'stop-answer-prompt'));
+      await waitForRecordedCall(() => recordedStreamingCardMarkdown(calls).includes(answer));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/stop', 'stop-answer-stop'));
+      await turn;
+      await waitForRecordedCall(() => calls.some(c => c.kind === 'card-update'));
+      const final = calls.filter(c => c.kind === 'card-update').at(-1)!;
+      const body = JSON.parse(final.payload.data.card.data);
+      const markdown = findCardElementsByTag(body, 'markdown').map(e => e.content || '').join('\n');
+      assert.equal(markdown.split('MODEL_OUTPUT_ONCE').length - 1, 1, 'the model output must occur exactly once after stop');
+      assert.match(markdown, /停止/);
+      assert.equal(model.requests.length, 1);
+      assert.equal((adapter as any).activeCards.size, 0);
+    } finally {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      fs.rmSync(workDir, { recursive: true, force: true });
+      _testOnly.resetStateForTests();
+    }
+  });
+
   it('delivers mirror clk-ask forms through FeishuAdapter.send', async () => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();

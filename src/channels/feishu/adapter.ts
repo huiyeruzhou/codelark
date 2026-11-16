@@ -5209,7 +5209,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const trimmedExisting = existingText.trim();
       const trimmedResponse = responseText.trim();
       let finalText = trimmedResponse || trimmedExisting;
-      if (trimmedExisting && trimmedResponse && trimmedResponse !== trimmedExisting && !trimmedExisting.includes(trimmedResponse)) {
+      // Structured history already owns the answer. A terminal reason belongs
+      // in its own row; merging the answer into it would render that text twice.
+      if (!state.historyDriven && trimmedExisting && trimmedResponse && trimmedResponse !== trimmedExisting && !trimmedExisting.includes(trimmedResponse)) {
         finalText = `${trimmedExisting}\n\n${trimmedResponse}`;
       }
 
