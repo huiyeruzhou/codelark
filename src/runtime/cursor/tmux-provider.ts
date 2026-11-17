@@ -300,8 +300,32 @@ function nativePromptCount(storePath: string | undefined, prompt: string): numbe
 }
 
 export async function prepareCursorInputConfirmation(targetPane: string, prompt: string, storePath?: string): Promise<CursorInputConfirmation> {
-  const { screen } = await tmuxCore.capturePane(targetPane, 160);
+  let { screen } = await tmuxCore.capturePane(targetPane, 160);
   assertCursorPromptAvailable(screen);
+  const running = /ctrl\+c\s+to\s+stop/i.test(screen);
+  const queued = /^\s*┌─ follow-ups\b/im.test(screen);
+  const draft = isCursorInputDraftScreen(screen.replace(/ctrl\+c\s+to\s+stop/ig, ''));
+  if (draft && (running || queued)) {
+    throw new CursorInputReadinessTimeoutError('Cursor 正在运行且输入框另有草稿，本条消息尚未发送；已保留草稿和会话，请用 `/tmux-screen` 查看。');
+  }
+  // An IM message replaces the managed editor's idle draft. Pasting into a
+  // retained draft concatenates previously submitted instructions with it.
+  // Ctrl+U only deletes one visual line in Cursor; Ctrl+C clears the whole
+  // idle editor. Never use it while running or while follow-ups are queued.
+  if (draft) {
+    assertCursorPaneAlive(screen);
+    await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-c' }]);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(100);
+      ({ screen } = await tmuxCore.capturePane(targetPane, 160));
+      assertCursorPaneAlive(screen);
+      assertCursorPromptAvailable(screen);
+      if (isCursorInputReadyScreen(screen) && !isCursorInputDraftScreen(screen)) break;
+    }
+    if (!isCursorInputReadyScreen(screen) || isCursorInputDraftScreen(screen)) {
+      throw new CursorInputReadinessTimeoutError('Cursor 输入框仍有旧草稿，本条消息尚未发送；已保留会话，请用 `/tmux-screen` 查看。');
+    }
+  }
   return { prompt, storePath, nativeCount: nativePromptCount(storePath, prompt), screenCount: screenPromptCount(screen, prompt), running: /ctrl\+c\s+to\s+stop/i.test(screen) };
 }
 
@@ -320,6 +344,7 @@ export async function waitForCursorInputSubmitted(
   let lastProgressAt = startedAt;
   let lastRetryAt = 0;
   let steerSent = false;
+  let observedRunning = confirmation?.running || false;
   await sleep(INPUT_SUBMISSION_CONFIRMATION_GRACE_MS);
   // Receipt is checkpoint-backed, not a deadline: a live Cursor may accept
   // input long before persisting its first checkpoint. Keep the same turn
@@ -335,6 +360,7 @@ export async function waitForCursorInputSubmitted(
       ? (nativePromptCount(confirmation.storePath, confirmation.prompt) || 0) > confirmation.nativeCount
       : screenPromptCount(capture.screen, confirmation.prompt) > confirmation.screenCount);
     const screen = normalizeScreen(capture.screen);
+    observedRunning ||= /ctrl\+c\s+to\s+stop/i.test(screen);
     const queued = /^\s*┌─ follow-ups\b/im.test(screen);
     // Cursor can retain the submitted text below a queue while repainting.
     // A queued input is never an unsubmitted draft.
@@ -370,7 +396,7 @@ export async function waitForCursorInputSubmitted(
         // would abort the active turn instead of injecting context into it.
       }
     }
-    if (!steerSent && (retryInitialSubmit
+    if (!observedRunning && !steerSent && (retryInitialSubmit
       || (inputDraft && lastRetryAt === 0))) {
       await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
       lastRetryAt = Date.now();

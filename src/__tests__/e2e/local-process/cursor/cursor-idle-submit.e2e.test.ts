@@ -31,7 +31,7 @@ class IdleAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }]) it(`real Cursor confirms idle input after a swallowed Enter (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)})`, { timeout: 75_000 }, async (t) => {
+for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }, { redrawDelay: 0, delayedCheckpoint: false, retainedDraft: true }]) it(`real Cursor confirms idle input after a swallowed Enter (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)}, retained draft ${Boolean(scenario.retainedDraft)})`, { timeout: 75_000 }, async (t) => {
   const { redrawDelay, delayedCheckpoint } = scenario;
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
@@ -41,6 +41,7 @@ for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDe
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-cursor-idle-e2e-'));
   const workspace = path.join(root, 'workspace'); fs.mkdirSync(workspace);
   const initial = '<codelark_source>\n来源群聊："回归原群"\n来源 Bot："kasumi"\n</codelark_source>\n\n先分析当前实现', followup = scenario.plainMultiline ? '核验当前任务状态，\n汇报结果并继续监控。' : '<codelark_source>\n来源群聊："回归原群"\n</codelark_source>\n\n加一个 argmax 和 remask 开关，沿用原来的着色逻辑\n保留中文、多行和代码 `x < 2`，不要重复执行。';
+  const third = '继续核验第三条消息，只处理这一次的新输入。';
   let releaseFinal!: () => void;
   const beforeFinish = new Promise<void>(resolve => { releaseFinal = resolve; });
   let releaseCheckpoint!: () => void;
@@ -48,8 +49,8 @@ for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDe
   const backend = await startFakeCursorBackend({
     call(prompt) {
       prompt = prompt.trim();
-      assert.ok([initial, followup].includes(prompt.trim()));
-      return { final: prompt === initial ? 'INITIAL_DONE' : 'IDLE_DONE', ...(prompt === followup ? { beforeFinish, deferModelContext: true, ...(delayedCheckpoint ? { beforeCheckpoint } : {}) } : {}) };
+      assert.ok([initial, followup, third].includes(prompt.trim()));
+      return { final: prompt === initial ? 'INITIAL_DONE' : prompt === third ? 'THIRD_DONE' : 'IDLE_DONE', ...(prompt === followup ? { beforeFinish, deferModelContext: true, ...(delayedCheckpoint ? { beforeCheckpoint } : {}) } : {}) };
     },
   });
   const wrapper = path.join(root, 'cursor'), tmux = path.join(root, 'tmux');
@@ -66,7 +67,7 @@ fi\n` : '';
   const old = new Map<string, string | undefined>();
   for (const [key, value] of Object.entries(env)) { old.set(key, process.env[key]); if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   fs.mkdirSync(env.CURSOR_CONFIG_DIR); fs.mkdirSync(env.CURSOR_DATA_DIR);
-  fs.writeFileSync(path.join(env.CURSOR_CONFIG_DIR, 'cli-config.json'), JSON.stringify({ steering: true, approvalMode: 'unrestricted' }));
+  fs.writeFileSync(path.join(env.CURSOR_CONFIG_DIR, 'cli-config.json'), JSON.stringify({ version: 1, steering: true, approvalMode: 'unrestricted', ...(scenario.retainedDraft ? { display: { mode: 'zen', showThinkingBlocks: false, showStatusIndicators: false, showStatusLineRunningTime: false } } : {}) }));
   _testOnlyTmuxCore.reset(); resetBridgeTestState(); manager.resetStateForTests();
   const store = initBridgeTestContext({ dynamicSettings: true, llm: new CodexRoutingProvider() });
   const adapter = new IdleAdapter(); registerAdapter(adapter);
@@ -125,6 +126,10 @@ fi\n` : '';
       return /→ Add a follow-up/.test(screen) && !/ctrl\+c to stop|Working/.test(screen);
     }, 'native editor must be idle');
     assert.ok(store.getSession(session.id)?.runtime?.cursor?.sessionId, 'second input must use the known native store');
+    if (scenario.retainedDraft) {
+      await originalSend(pane, [{ type: 'literal', text: initial }], { bracketedPaste: true });
+      await until(async () => (await originalCapture(pane, 80)).screen.includes('先分析当前实现'), 'retained multiline draft must be visible');
+    }
     if (delayedCheckpoint) process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS = '1000';
     adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'steer'));
     await until(() => backend.prompts.length === 2, 'fake model must receive the idle input despite an initially swallowed Enter');
@@ -150,6 +155,14 @@ fi\n` : '';
     assert.ok(adapter.events.filter(e => e.type === 'end').every(e => e.status === 'completed'));
     assert.ok(swallowedEnter, 'test must leave the first submission as a real native draft');
     if (redrawDelay) assert.ok(staleFrames > 0, 'test must observe a stale empty editor before the draft becomes visible');
+    if (scenario.retainedDraft) {
+      await until(async () => /→ Add a follow-up/.test((await originalCapture(pane, 80)).screen), 'second turn must return to idle');
+      await originalSend(pane, [{ type: 'literal', text: followup }], { bracketedPaste: true });
+      adapter.enqueueManualInboundMessage(inboundMessage(address, third, 'third'));
+      await until(() => finished.includes('third'), 'third native turn must finish independently');
+      assert.deepEqual(backend.prompts.map(prompt => prompt.trim()), [initial, followup, third]);
+      assert.equal(adapter.events.filter(e => e.type === 'end').length, 3);
+    }
     assert.deepEqual(backend.errors, []); passed = true;
   } finally {
     releaseCheckpoint(); releaseFinal();

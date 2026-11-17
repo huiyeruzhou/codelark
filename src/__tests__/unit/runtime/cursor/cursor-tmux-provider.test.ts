@@ -1348,6 +1348,30 @@ describe('Cursor tmux provider helpers', () => {
     assert.deepEqual(sends, [], 'an empty editor waiting for native acceptance must not cause extra Enter presses');
   });
 
+  for (const queued of [false, true]) it(`preserves another draft while Cursor is ${queued ? 'queued' : 'running'}`, async (t) => {
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen:
+      `${queued ? '┌─ follow-ups ──┐\n│ earlier input │\n└────┘\n' : ''}→ existing draft    ctrl+c to stop`, command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async () => { assert.fail('preflight must neither interrupt nor submit another draft'); });
+    await assert.rejects(prepareCursorInputConfirmation('isolated-pane', 'new message'), /本条消息尚未发送/);
+  });
+
+  it('never retries Enter after observing a running turn, including a later retained draft', async (t) => {
+    const sends: TmuxSendAction[][] = [];
+    let frames = 0;
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: ++frames === 1
+      ? 'Working …    ctrl+c to stop\nGemini 4 Carbon High'
+      : '→ old submitted multiline draft\nGemini 4 Carbon High', command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => { sends.push(actions); return { commands: [] }; });
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 1_500);
+    t.after(() => clearTimeout(timer));
+    await assert.rejects(waitForCursorInputSubmitted('isolated-pane', undefined, {
+      prompt: 'pending native checkpoint', nativeCount: 0, screenCount: 0, running: false,
+    }, abort.signal), { name: 'AbortError' });
+    assert.ok(frames >= 2);
+    assert.deepEqual(sends, [], 'running and completed frames cannot authorize resubmission');
+  });
+
   it('retries an initially idle submission once when Cursor hides every draft marker', async (t) => {
     const prompt = 'initial prompt hidden by the collapsed editor';
     let submitted = false;

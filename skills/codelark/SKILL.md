@@ -7,6 +7,8 @@ description: Use when an agent runs through CodeLark and needs to send Feishu/La
 
 Use completed/final responses for CodeLark control blocks. Keep ordinary user-facing prose outside the blocks. Do not expose control-block implementation details unless the user asks.
 
+当前群的正常回复、进度说明和最终回答由 CodeLark 自动同步到对话卡片，直接回复正文即可。不要为了“确保用户看见”再调用 `codelark send message` 或 `<clk-send>` 向当前群补发同一回答；只有用户明确要求另发消息、发送附件或向其他群汇报时，才使用相应发送能力。读取群历史遇到权限错误只代表无法读取，不能据此判断卡片没有送达或触发补发。
+
 ## Distinguish CodeLark agents from runtime subagents
 
 A CodeLark delegated agent is an independent IM group plus Bridge session. A runtime-native subagent is a private worker created by tools such as Codex `multi_agent`. They are different systems:
