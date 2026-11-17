@@ -1,7 +1,12 @@
 import { maskMarkdownCode } from '../../shared/markdown/code-mask.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
+import { inlineMathMarkdown } from './math-inline.js';
 
 export interface MarkdownFormula { start: number; end: number; tex: string; display: boolean }
+
+export function formulaInlineMarkdown(formula: MarkdownFormula): string | null {
+  return formula.display ? null : inlineMathMarkdown(formula.tex);
+}
 
 /** Only paired delimiters outside code. Dollar math cannot start/end with whitespace. */
 export function findMarkdownFormulas(text: string): MarkdownFormula[] {
@@ -73,16 +78,24 @@ export class FeishuCardMath {
       if (content.trim()) elements.push({ tag: 'markdown', content: content.trim(), text_size: node.text_size || 'normal' });
     };
     let offset = 0;
-    for (const [index, formula] of formulas.entries()) {
-      appendText(text.slice(offset, formula.start));
-      const image = index < 32 ? await this.image(formula.tex, formula.display) : null;
+    let pendingText = '';
+    let imageCount = 0;
+    for (const formula of formulas) {
+      pendingText += text.slice(offset, formula.start);
+      offset = formula.end;
+      const inline = formulaInlineMarkdown(formula);
+      if (inline !== null) { pendingText += inline; continue; }
+      appendText(pendingText);
+      pendingText = '';
+      const image = imageCount++ < 32 ? await this.image(formula.tex, formula.display) : null;
       if (image) elements.push({ tag: 'img', img_key: image.key,
         alt: { tag: 'plain_text', content: formula.tex },
         scale_type: 'crop_center', size: `${image.width}px ${image.height}px`, preview: true });
       else appendText(buildFencedCodeBlock(formula.tex, 'latex'));
-      offset = formula.end;
     }
-    appendText(text.slice(offset));
+    pendingText += text.slice(offset);
+    if (!imageCount) return { ...node, content: pendingText };
+    appendText(pendingText);
     return { tag: 'column_set', flex_mode: 'none', ...(node.element_id ? { element_id: node.element_id } : {}),
       columns: [{ tag: 'column', width: 'weighted', weight: 1, vertical_spacing: '4px', elements }] };
   }

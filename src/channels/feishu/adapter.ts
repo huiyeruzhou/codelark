@@ -49,7 +49,7 @@ import {
 } from './site.js';
 import { fetchFeishuBotIdentity, readFeishuAppCreator, buildFeishuChatOpenLink } from './bot-identity.js';
 import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
-import { FeishuCardMath, findMarkdownFormulas, renderedElementHasFormula } from './math.js';
+import { FeishuCardMath, findMarkdownFormulas, formulaInlineMarkdown, renderedElementHasFormula } from './math.js';
 import {
   BaseChannelAdapter,
   registerAdapterFactory,
@@ -1306,7 +1306,7 @@ function countFeishuCardComponents(value: unknown): number {
   const record = value as Record<string, unknown>;
   let count = typeof record.tag === 'string' && record.tag.trim() ? 1 : 0;
   if (record.tag === 'markdown' && typeof record.content === 'string') {
-    const formulas = findMarkdownFormulas(record.content).length;
+    const formulas = findMarkdownFormulas(record.content).filter(formula => formulaInlineMarkdown(formula) === null).length;
     if (formulas) count += 3 * formulas + 2; // Reserve the image, alt, text slices and wrapper before pagination.
   }
   for (const child of Object.values(record)) {

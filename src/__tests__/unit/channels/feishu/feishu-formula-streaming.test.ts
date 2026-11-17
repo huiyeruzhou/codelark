@@ -41,6 +41,12 @@ for (const mode of ['text', 'history', 'summary'] as const) {
       update(String.raw`结果 \[\frac{a}{b}`);
       await flush();
       assert.equal(uploads, 0, 'incomplete formulas do not upload images');
+      update(String.raw`原句 $E=mc^2$ 与 $x_i$ 继续。`); await flush();
+      assert.equal(uploads, 0, 'simple formulas stay in the same Markdown paragraph');
+      assert.ok(calls.filter(c => c.kind === 'element-update').some(c => {
+        const element = JSON.parse(c.payload.data.element);
+        return element.tag === 'markdown' && element.content.includes('原句 E=mc² 与 xᵢ 继续。');
+      }));
       const complete = String.raw`结果 \[\frac{a}{b}\] 解释仍可复制`;
       update(complete); await flush();
       assert.equal(uploads, 1);
@@ -48,10 +54,15 @@ for (const mode of ['text', 'history', 'summary'] as const) {
       assert.ok(replacements.some(e => e.tag === 'column_set'), 'replace Markdown with a sized image container');
       const state = internal.activeCards.get('math-stream');
       assert.ok(mode === 'text' ? state.pendingText === complete : state.historyItems.some((i: any) => i.content === complete));
-      update('改成纯文字，去掉公式'); await flush();
-      assert.ok(calls.filter(c => c.kind === 'element-update').some(c => JSON.parse(c.payload.data.element).tag === 'markdown'), 'replace the old image container when math disappears');
-      update(complete + '。'); await flush();
-      assert.equal(await adapter.onStreamEnd('math-chat', 'completed', complete + '。', 'math-stream'), true);
+      const beforeSimple = calls.length;
+      update('回到行内 $x^2$，继续。'); await flush();
+      assert.ok(calls.slice(beforeSimple).filter(c => c.kind === 'element-update').some(c => {
+        const element = JSON.parse(c.payload.data.element);
+        return element.tag === 'markdown' && element.content.includes('回到行内 x²，继续。');
+      }), 'replace the old image container with inline Markdown');
+      const finalText = complete + '\n\n简单公式：' + '$x^2$ '.repeat(80);
+      update(finalText); await flush();
+      assert.equal(await adapter.onStreamEnd('math-chat', 'completed', finalText, 'math-stream'), true);
       assert.equal(uploads, 1, 'reuse uploaded image through finalization');
       assert.equal(calls.filter(c => c.kind === 'message').length, 1);
       assert.equal(calls.find(c => c.kind === 'message')!.payload.data.msg_type, 'interactive');
@@ -59,6 +70,8 @@ for (const mode of ['text', 'history', 'summary'] as const) {
       assert.match(JSON.stringify(final), /img_v3_formula/);
       assert.match(JSON.stringify(final), /\d+px \d+px/);
       assert.match(JSON.stringify(final), /解释仍可复制/);
+      assert.match(JSON.stringify(final), /简单公式：x² x²/);
+      assert.doesNotMatch(JSON.stringify(final), /\$x\^2\$/);
     } finally { await adapter.stop(); }
   });
 }
