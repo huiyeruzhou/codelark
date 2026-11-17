@@ -200,6 +200,7 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
     lastEventRole,
     lastEventTurnId,
     lastEventCount,
+    seenTurnSignatures,
   } = subscription.cursor;
   return {
     threadId: subscription.threadId,
@@ -209,6 +210,7 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
     lastEventRole,
     lastEventTurnId,
     lastEventCount,
+    ...(seenTurnSignatures ? { seenTurnSignatures } : {}),
   };
 }
 

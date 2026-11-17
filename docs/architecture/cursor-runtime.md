@@ -205,6 +205,8 @@ Cursor 后台 mirror 同样等待正式原生终态，不使用通用的 10 分�
 
 - **连续追加与延迟上下文**：真实 CLI + fake 模型在同一 native run 接收两条快速不同补充、三条快速相同补充；逐条核对输入、唯一 injection ID 和 Get，不重开 run、不按 Enter 复制队列。另在已有会话中延迟首条输入的 checkpoint，等下一条已进入 follow-ups 后才释放，验证不同消息的晚到回执不导致误报或重复提交。空闲续聊用 gate 阻止模型终态与上下文更新，仍须在输入已保存到 turns 时确认接收。
 
+- **工具结果与快照重排**：真实 CLI 从 fake backend 保存工具调用和结果，Bridge 重启后先收到中间正文、随后才允许模型完成；断言正文位于旧原生工具结果之前仍立即到卡片。同一场景的原生库回归还覆盖签名持久化、旧修订暂时消失后恢复不重放。
+
 - **本地 workflow**：Cursor direct transcript turn 与后台 mirror 之间只有一个 terminal owner，不出现空 completed、重复 final 或历史重放。
 - **真实进程**：已登录官方 `agent` 首次启动前注入一次超过旧 30 秒门限的确定性延迟，证明等待期间有可见进度且不会误杀；提交前必须确认粘贴文本已在编辑框显示，不能仅凭 tmux 已接收字节就按 Enter；提交后的旧画面不能触发重发。输入被真实 TUI 接收后、第一个 transcript 输出或终态前，必须出现用户可见的“正在运行”状态。随后冷启动一个 UUID，第二轮在清空 bridge 输入状态后复用同一 tmux/UUID，杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。延迟 wrapper 只控制启动时序，实际 TUI、tmux、backend 和 transcript 仍全部来自官方 Cursor Agent。
 - **真实飞书**：隔离 bridge 创建或复用测试群并邀请当前用户；用户身份发送 `/runtime cursor`、`/p tmux` 和普通消息。冷启动场景还要在 `/p tmux` 完成前读到索引原因提示；随后用户身份回读最终卡片、Cursor UUID/transcript/provider output path，测试群保留到用户确认。`runtime-message::cursor-tmux` 还会读取隔离 bridge 输出的最终 CardKit checkpoint，要求卡片具有共享会话标题、`tmux` header tag、`cursor`/model metadata 区域和统一 history 区域；thinking summary 必须作为独立的引用样式历史项出现在最终正文之前，不能丢失、混入正文或误占卡片标题。只在历史回显中找到 prompt，或者只看到正确回答文本，都不算 UI 验收通过。

@@ -41,6 +41,8 @@ export interface MirrorReadPosition {
   lastEventRole?: 'user' | 'assistant' | 'commentary' | 'system';
   lastEventTurnId?: string;
   lastEventCount: number;
+  /** Cursor 当前轮已读取的稳定事件签名，防止快照中间插入漏读；不含正文。 */
+  seenTurnSignatures?: string[];
 }
 
 /** A bounded, durable choice about missed mirror output; never the full transcript. */

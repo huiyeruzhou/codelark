@@ -33,7 +33,7 @@ function fields(bytes: Uint8Array): Map<number, Buffer[]> {
 const get = (bytes: Uint8Array, no: number) => fields(bytes).get(no)?.[0] || Buffer.alloc(0);
 export interface FakeCursorAnswer { questionId: string; selectedOptionIds: string[]; freeformText: string }
 export interface FakeCursorModel {
-  call(prompt: string): CursorPendingQuestion | { waitingForSteer: true; beforeCheckpoint?: Promise<void> } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean };
+  call(prompt: string): CursorPendingQuestion | { waitingForSteer: true; beforeCheckpoint?: Promise<void> } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean; toolProgress?: Promise<void> };
   continue?(answers: FakeCursorAnswer[]): string;
   steer?(text: string): string | { waitingForSteer: true };
 }
@@ -95,8 +95,13 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
             const response = model.call(prompt);
             if ('final' in response) {
               const user = { role: 'user', content: [{ type: 'text', text: `<timestamp>${new Date().toISOString()} (UTC)</timestamp>\n<user_query>\n${prompt}\n</user_query>` }] };
+              const toolMessages = response.toolProgress ? [
+                { role: 'assistant', content: [{ type: 'tool-call', toolName: 'Glob', toolCallId: 'progress-glob', args: { glob_pattern: '*.py' } }] },
+                { role: 'tool', content: [{ type: 'tool-result', toolName: 'Glob', toolCallId: 'progress-glob', result: 'one.py' }] },
+              ] : [];
+              const progress = { role: 'assistant', content: [{ type: 'text', text: 'NATIVE_TOOL_PROGRESS' }] };
               const finish = () => {
-                completedMessages.push(user, { role: 'assistant', content: [{ type: 'text', text: response.final }] });
+                completedMessages.push(user, ...toolMessages, ...(response.toolProgress ? [progress] : []), { role: 'assistant', content: [{ type: 'text', text: response.final }] });
                 persist(completedMessages, [], () => {
                   send(field(1, field(1, field(1, response.final))));
                   send(field(1, field(14, Buffer.alloc(0)))); send(Buffer.from('{}'), 2); stream.end();
@@ -106,9 +111,12 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
                 if (response.beforeFinish) {
                   // Model context can lag a persisted input; beforeCheckpoint
                   // separately delays the entire first checkpoint, as in production.
-                  persist(response.deferModelContext ? completedMessages : [...completedMessages, user], [], () => {
+                  persist(response.deferModelContext ? completedMessages : [...completedMessages, user, ...toolMessages], [], () => {
                     send(field(1, field(4, field(1, 'MANUAL_RUNNING'))));
-                    void response.beforeFinish!.then(finish).catch(error => errors.push(String(error)));
+                    const progressReady = response.toolProgress
+                      ? response.toolProgress.then(() => new Promise<void>(resolve => persist([...completedMessages, user, ...toolMessages, progress], [], resolve)))
+                      : Promise.resolve();
+                    void progressReady.then(() => response.beforeFinish).then(finish).catch(error => errors.push(String(error)));
                   });
                 } else finish();
               };

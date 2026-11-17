@@ -35,7 +35,7 @@ class RecoveryAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-restart-with-history', 'external-terminal'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
+for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-restart-with-history', 'bridge-restart-with-tool-progress', 'external-terminal'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
     ...(process.env.PATH || '').split(path.delimiter).map(dir => path.join(dir, 'agent')),
@@ -46,10 +46,12 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-
   const initial = '先分析当前实现', followup = '本地手动 hi', rejected = '继续';
   let releaseFinal!: () => void;
   const beforeFinish = new Promise<void>(resolve => { releaseFinal = resolve; });
+  let releaseProgress!: () => void;
+  const toolProgress = new Promise<void>(resolve => { releaseProgress = resolve; });
   const backend = await startFakeCursorBackend({
     call(prompt) {
       assert.ok([initial, followup].includes(prompt));
-      return { final: prompt === initial ? 'INITIAL_DONE' : 'RECOVERED_DONE', ...(scenario !== 'dead-pane' && prompt === followup ? { beforeFinish } : {}) };
+      return { final: prompt === initial ? 'INITIAL_DONE' : 'RECOVERED_DONE', ...(scenario !== 'dead-pane' && prompt === followup ? { beforeFinish } : {}), ...(scenario === 'bridge-restart-with-tool-progress' && prompt === followup ? { toolProgress } : {}) };
     },
   });
   const wrapper = path.join(root, 'cursor'), tmux = path.join(root, 'tmux');
@@ -140,7 +142,7 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-
       assert.equal(execFileSync(tmux, ['display-message', '-p', '-t', pane, '#{pane_pid}'], { encoding: 'utf8' }).trim(), panePid);
       assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('RECOVERED_DONE')));
       assert.equal(adapter.events.some(e => e.type === 'end' && e.status === 'error'), false);
-    } else if (scenario === 'bridge-restart' || scenario === 'bridge-restart-with-history') {
+    } else if (scenario === 'bridge-restart' || scenario === 'bridge-restart-with-history' || scenario === 'bridge-restart-with-tool-progress') {
       if (scenario === 'bridge-restart-with-history') {
         const binding = store.listChannelChats().find(b => b.bridgeSessionId === session.id)!;
         store.updateSession(session.id, { mirror_history_sync: {
@@ -164,6 +166,11 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-
       adapter.live = true;
       registerAdapter(adapter);
       await manager.reconcileMirrorSubscriptions();
+      if (scenario === 'bridge-restart-with-tool-progress') {
+        assert.ok(store.getSession(session.id)?.mirror_read_position?.lastEventSignature?.startsWith('cursor:native-tool-result:'), 'native tool completion must remain the snapshot tail');
+        releaseProgress();
+        await until(() => adapter.events.some(e => e.streamKey?.startsWith('mirror:') && e.type === 'text' && e.text.includes('NATIVE_TOOL_PROGRESS')), 'output before the old native tool tail must reach the card before the model completes');
+      }
       releaseFinal();
       await until(() => adapter.events.some(e => e.streamKey?.startsWith('mirror:') && e.type === 'end'
         && e.status === 'completed' && e.text.includes('RECOVERED_DONE')), 'restarted bridge must mirror the original turn final without resending its input');
@@ -192,7 +199,7 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-
     assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, nativeSessionId);
     assert.deepEqual(backend.errors, []); passed = true;
   } finally {
-    tmuxCore.injectPromptIntoPane = originalInject; tmuxCore.capturePane = originalCapture; releasePoll(); releaseFinal();
+    tmuxCore.injectPromptIntoPane = originalInject; tmuxCore.capturePane = originalCapture; releasePoll(); releaseProgress(); releaseFinal();
     if (!passed || process.env.CODELARK_REAL_CURSOR_E2E_KEEP_ARTIFACTS === '1') {
       fs.writeFileSync(path.join(root, 'mirror-state.json'), JSON.stringify({ session: store.getSession(session.id), subscriptions: [...bridge.cursorMirrorSubscriptions.values()], suppression: [...bridge.mirrorSuppressUntil] }, (_key, value) => value instanceof Set ? [...value] : value instanceof Map ? [...value] : value, 2));
       fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ prompts: backend.prompts, steers: backend.steers, errors: backend.errors, events: adapter.events, messages: adapter.sent }, null, 2));

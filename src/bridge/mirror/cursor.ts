@@ -9,6 +9,7 @@ export interface BridgeMirrorCursor {
   lastEventContent?: string;
   lastEventTurnId?: string;
   lastEventCount: number;
+  seenTurnSignatures?: string[];
 }
 
 export interface BridgeMirrorDelta {
@@ -17,7 +18,7 @@ export interface BridgeMirrorDelta {
   reset: boolean;
 }
 
-function makeCursor(records: BridgeMirrorRecord[]): BridgeMirrorCursor {
+function makeCursor(records: BridgeMirrorRecord[], previous?: BridgeMirrorCursor | null, trackTurn = false): BridgeMirrorCursor {
   const lastEvent = records.length > 0 ? records[records.length - 1] : undefined;
   return {
     initialized: true,
@@ -28,6 +29,10 @@ function makeCursor(records: BridgeMirrorRecord[]): BridgeMirrorCursor {
     lastEventContent: lastEvent?.content,
     lastEventTurnId: lastEvent?.turnId,
     lastEventCount: records.length,
+    ...(trackTurn && lastEvent?.turnId ? { seenTurnSignatures: [...new Set([
+      ...(previous?.lastEventTurnId === lastEvent.turnId ? previous.seenTurnSignatures || [] : []),
+      ...records.filter(record => record.turnId === lastEvent.turnId).map(record => record.signature),
+    ])] } : {}),
   };
 }
 
@@ -132,7 +137,7 @@ export function reconcileBridgeMirrorCursor(
   records: BridgeMirrorRecord[],
   recoverByTurnId = false,
 ): BridgeMirrorDelta {
-  const nextCursor = makeCursor(records);
+  const nextCursor = makeCursor(records, cursor, recoverByTurnId);
 
   if (!cursor?.initialized) {
     return {
@@ -148,6 +153,18 @@ export function reconcileBridgeMirrorCursor(
       deliverableRecords: [],
       reset: cursor.lastEventCount > 0,
     };
+  }
+
+  // Cursor rewrites snapshots and appends SQLite tool completions at the end
+  // of a turn. New text/tools may therefore appear BEFORE the last seen row.
+  // Retain identities for the current turn (including temporarily removed
+  // revisions), across restarts, and release them when the next turn begins.
+  if (recoverByTurnId && cursor.lastEventTurnId && cursor.seenTurnSignatures) {
+    const start = records.findIndex(record => record.turnId === cursor.lastEventTurnId);
+    if (start >= 0) {
+      const seen = new Set(cursor.seenTurnSignatures);
+      return { nextCursor, deliverableRecords: records.slice(start).filter(record => !seen.has(record.signature)), reset: false };
+    }
   }
 
   if (cursor.lastEventSignature) {

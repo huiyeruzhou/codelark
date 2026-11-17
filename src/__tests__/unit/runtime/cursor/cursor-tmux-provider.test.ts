@@ -34,7 +34,7 @@ import {
   withCursorReasoningEffort,
 } from '../../../../runtime/cursor/tmux-provider.js';
 import { tmuxCore, type TmuxSendAction } from '../../../../runtime/tmux/core.js';
-import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
+import { createMirrorSubscription, mirrorReadPosition } from '../../../../bridge/mirror/subscription-state.js';
 import { readMirrorDeliverableRecords } from '../../../../bridge/mirror/reconcile-core.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
 import { cursorNativeStore } from '../../../helpers/runtime/cursor-native-store.js';
@@ -558,6 +558,46 @@ describe('Cursor tmux provider helpers', () => {
     assert.equal(assistantRecords.length, 2);
     assert.notEqual(assistantRecords[0]?.turnId, assistantRecords[1]?.turnId);
     assert.notEqual(assistantRecords[0]?.signature, assistantRecords[1]?.signature);
+  });
+
+  it('mirrors new output inserted before a native tool-result tail across restart', () => {
+    const cwd = path.join(root, 'mirror-native-tail');
+    fs.mkdirSync(cwd);
+    const sessionId = '33333333-3333-4333-8333-333333333335';
+    const user = { role: 'user', message: { content: [{ type: 'text', text: '<timestamp>2026-11-17T08:00:00Z (UTC)</timestamp>\n<user_query>inspect</user_query>' }] } };
+    const args = { glob_pattern: '*.py', target_directory: cwd };
+    const call = { role: 'assistant', message: { content: [{ type: 'tool_use', name: 'Glob', input: args }] } };
+    const transcript = writeCursorSession({ sessionId, cwd, lines: [user, call] });
+    const storePath = path.join(configRoot, 'chats', cursorWorkspaceHash(cwd), sessionId, 'store.db');
+    fs.unlinkSync(storePath);
+    const native = cursorNativeStore(storePath);
+    native.checkpoint([
+      { role: 'user', content: user.message.content },
+      { role: 'assistant', content: [{ type: 'tool-call', toolName: 'Glob', toolCallId: 'glob-1', args }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolName: 'Glob', toolCallId: 'glob-1', result: 'one.py' }] },
+    ]);
+    const source = createCursorMirrorJsonlSource();
+    source.findByThreadId(sessionId, cwd, 'cli');
+    const input = { bindingId: 'binding', sessionId: 'session', channelType: 'feishu', chatId: 'chat', threadId: sessionId, filePath: transcript, lastDeliveredAt: null };
+    let subscription = createMirrorSubscription(input);
+    let revision = 0;
+    const read = (rows: unknown[]) => {
+      fs.writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+      return readMirrorDeliverableRecords(subscription, { size: fs.statSync(transcript).size, mtimeMs: ++revision, identity: 'snapshot' }, source).records;
+    };
+    const text = (content: string) => ({ role: 'assistant', message: { content: [{ type: 'text', text: content }] } });
+    try {
+      assert.deepEqual(read([user, call]), []);
+      assert.equal(subscription.cursor.lastEventType, 'tool_finished', 'must exercise a native supplemental tail');
+      subscription = createMirrorSubscription({ ...input, readPosition: JSON.parse(JSON.stringify(mirrorReadPosition(subscription))) });
+      assert.deepEqual(read([user, call, text('NEW_PROGRESS')]).map(r => r.content), ['NEW_PROGRESS']);
+      assert.deepEqual(read([user, call, text('NEW_PROGRESS')]), [], 'same snapshot must not duplicate output');
+      assert.deepEqual(read([user, call]), [], 'temporary removal of a revision must preserve seen identities');
+      assert.deepEqual(read([user, call, text('NEW_PROGRESS')]), [], 'a restored revision must not replay');
+      const final = read([user, call, text('FINAL_RESULT'), { type: 'turn_ended', status: 'success' }]);
+      assert.deepEqual(final.map(r => r.type), ['message', 'task_complete']);
+      assert.equal(final[0]?.content, 'FINAL_RESULT');
+    } finally { native.close(); }
   });
 
   it('keeps semantic signatures stable when a Cursor snapshot rewrite shifts byte offsets', () => {
@@ -1325,31 +1365,32 @@ describe('Cursor tmux provider helpers', () => {
     const prompt = '写个网站，可以选择各个实验';
     const storePath = path.join(root, 'delayed-receipt.db');
     const native = cursorNativeStore(storePath);
-    t.after(() => native.close());
-    native.checkpoint([], [], ['historical input']);
-    const sends: TmuxSendAction[][] = [];
-    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: 'Working\n→ Add a follow-up    ctrl+c to stop', command: '' }));
-    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => { sends.push(actions); return { commands: [] }; });
-    const confirmation = await prepareCursorInputConfirmation('isolated-pane', prompt, storePath);
-    assert.equal(confirmation.nativeCount, 0);
-    native.checkpoint([], [], ['historical input', '先找之前的对照组']);
-    const abort = new AbortController();
-    let settled = false;
-    const waiting = waitForCursorInputSubmitted('isolated-pane', undefined, confirmation, abort.signal)
-      .then(() => { settled = true; return undefined; }, error => { settled = true; return error as Error; });
     try {
-      await new Promise(resolve => setTimeout(resolve, 700));
-      assert.equal(settled, false, 'another input receipt must neither reject nor acknowledge this input');
-      if (receiveCurrent) native.checkpoint([], [], ['historical input', '先找之前的对照组', prompt]);
-      else abort.abort();
-      const result = await waiting;
-      if (receiveCurrent) assert.equal(result, undefined);
-      else assert.equal(result?.name, 'AbortError');
-      assert.deepEqual(sends, [], 'a delayed receipt must never trigger resubmission');
-    } finally {
-      abort.abort();
-      await waiting;
-    }
+      native.checkpoint([], [], ['historical input']);
+      const sends: TmuxSendAction[][] = [];
+      t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: 'Working\n→ Add a follow-up    ctrl+c to stop', command: '' }));
+      t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => { sends.push(actions); return { commands: [] }; });
+      const confirmation = await prepareCursorInputConfirmation('isolated-pane', prompt, storePath);
+      assert.equal(confirmation.nativeCount, 0);
+      native.checkpoint([], [], ['historical input', '先找之前的对照组']);
+      const abort = new AbortController();
+      let settled = false;
+      const waiting = waitForCursorInputSubmitted('isolated-pane', undefined, confirmation, abort.signal)
+        .then(() => { settled = true; return undefined; }, error => { settled = true; return error as Error; });
+      try {
+        await new Promise(resolve => setTimeout(resolve, 700));
+        assert.equal(settled, false, 'another input receipt must neither reject nor acknowledge this input');
+        if (receiveCurrent) native.checkpoint([], [], ['historical input', '先找之前的对照组', prompt]);
+        else abort.abort();
+        const result = await waiting;
+        if (receiveCurrent) assert.equal(result, undefined);
+        else assert.equal(result?.name, 'AbortError');
+        assert.deepEqual(sends, [], 'a delayed receipt must never trigger resubmission');
+      } finally {
+        abort.abort();
+        await waiting;
+      }
+    } finally { native.close(); }
   });
 
   it('does not acknowledge an idle input from an old empty editor or an identical historical message', async (t) => {

@@ -341,7 +341,7 @@ CardKit 的 `streaming_mode` 只影响文本流式上屏的表现，不应成为
 
 游标包含原始 `historyItemOffset`、组内 `historyToolCallOffset` 和必要时的 `historyTextOffset`，不能用卡片组件数代替。旧卡静态内容直接来自成功写入的元素shadow；因此大型详情拆页后，旧卡不会重新带回完整详情或后续页的内容。
 
-Mirror把最新读取位置保存在会话的 `mirror_read_position` 中，包含thread ID、最后一条事件的签名、时间、类型、角色、语义turn ID和事件数；不保存消息正文。解绑前保存该位置，新群绑定及bridge重启后都从它继续，已经在旧群读过的内容不会从本轮开头重放，解绑期间新增的事件仍会进入新群。事件签名用于区分时间戳相同的不同事件。Cursor Desktop transcript 是会整体重写和重排的snapshot，Cursor事件签名和turn ID因此只使用稳定内容身份，不能包含byte offset；重写时优先从上一语义turn之后恢复，同turn assistant revision只替换该turn的后续内容。升级前的offset签名无法可靠映射时先静默建立新基线，不能猜测并回放历史。`mirror_last_event_at` 继续表示完整轮次的投递进度，不能代替读取位置；旧数据尚无读取位置时优先使用 `last_progress_at` 接续。绑定变更不停止runtime。Mirror的stream key包含binding ID，旧群卡片的异步收尾不会影响新群卡片。批量新事件超过单卡容量时才使用上述分页流程。
+Mirror把最新读取位置保存在会话的 `mirror_read_position` 中，包含thread ID、最后一条事件的签名、时间、类型、角色、语义turn ID和事件数；不保存消息正文。解绑前保存该位置，新群绑定及bridge重启后都从它继续，已经在旧群读过的内容不会从本轮开头重放，解绑期间新增的事件仍会进入新群。事件签名用于区分时间戳相同的不同事件。Cursor Desktop transcript 是会整体重写和重排的snapshot，Cursor事件签名和turn ID因此只使用稳定内容身份，不能包含byte offset；重写时优先从上一语义turn之后恢复，同turn assistant revision只替换该turn的后续内容。升级前的offset签名无法可靠映射时先静默建立新基线，不能猜测并回放历史。Cursor 当前轮还保存已读取的稳定事件签名：SQLite 补齐的工具结果可能一直排在快照末尾，新正文插在它前面也必须识别为新增内容；暂时消失又恢复的旧修订不得重复发送。签名随读取位置持久化，进入下一轮后释放上一轮的集合，不保存消息正文。`mirror_last_event_at` 继续表示完整轮次的投递进度，不能代替读取位置；旧数据尚无读取位置时优先使用 `last_progress_at` 接续。绑定变更不停止runtime。Mirror的stream key包含binding ID，旧群卡片的异步收尾不会影响新群卡片。批量新事件超过单卡容量时才使用上述分页流程。
 
 卡片内容超限与流式有效期结束必须分开处理。`card streaming timeout`（现场错误码 `200850`）或 `streaming mode is closed`（`300309`）表示该卡不能再使用流式增量接口，adapter 转为对同一 `card_id` 写普通卡片，继续保留正文、状态和停止按钮；没有新增正文的状态计时不得触发新消息。只有实际 payload 或组件容量不足才续页。上述 2026-10-16 注入超时后续卡的旧验收只证明当时的交接过程，不能证明长时间静默等待不会反复发卡。当前回归覆盖连续 48 次十分钟状态刻度、随后新正文和最终回答都更新原消息，以及真正超限时的续页与并发交接。首次建卡成功不代表 mirror 可用；自动化 payload 检查也不能代替飞书客户端视觉验收。
 
