@@ -80,6 +80,7 @@ import {
 import {
   ensureCursorTmuxInputSession,
   prepareCursorInputConfirmation,
+  pasteCursorPromptAndSubmit,
   waitForCursorInputSubmitted,
 } from '../../runtime/cursor/tmux-provider.js';
 import { listCursorDesktopThreads } from '../../runtime/cursor/desktop-bridge-client.js';
@@ -1885,7 +1886,12 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
                 ? findCursorSessionFileById(effectiveSession.runtime.cursor.sessionId, getSessionWorkingDirectory(effectiveSession))?.storePath
                 : undefined)
             : undefined;
-          await submitProviderInput();
+          if (cursorConfirmation) {
+            await sendRuntimeTmuxInput({ runtime: 'cursor', sessionName: target,
+              send: () => pasteCursorPromptAndSubmit(`${target}:0.0`, args, params.inputAbortSignal) });
+          } else {
+            await submitProviderInput();
+          }
           if (runtimeProvider.runtime === 'cursor' && !keySequenceActions) {
             await waitForCursorInputSubmitted(`${target}:0.0`, undefined, cursorConfirmation, params.inputAbortSignal);
           }

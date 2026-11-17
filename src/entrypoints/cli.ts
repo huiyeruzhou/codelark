@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { stdin as input, stdout as output } from 'node:process';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -500,6 +502,7 @@ export function buildSendHelpText(): string {
     'agent 会把普通输入送入目标 Agent lane，并在源群与目标群显示发送/接收卡片。',
     '发送成功时输出包含 ok=true、target 和 chat_name 的 JSON；失败时以非零状态退出。调用方必须检查结果后再宣称送达。',
     'message 会按飞书官方 msg_type + content 直接发送用户可见消息；text、post、interactive 与 @ 均由 content 表达。',
+    '当前 Cursor 群的普通回答自动进入对话卡片。仅用户明确要求独立消息时，才使用 --separate-message 另发 text/post。',
   ].join('\n') + '\n';
 }
 
@@ -512,6 +515,7 @@ export interface ParsedSendCommand {
   text?: string;
   msgType?: string;
   content?: unknown;
+  separateMessage?: boolean;
   idempotencyKey?: string;
 }
 
@@ -539,7 +543,7 @@ export function parseSendArgs(args: string[]): ParsedSendCommand {
   }
   rejectUnknownNamedArgs(parsed, [
     '--target', '--home', '--msg-type', '--content', '--idempotency-key',
-  ]);
+  ], ['--separate-message']);
   const rawContent = requiredArg(parsed.values, '--content');
   let content: unknown;
   try { content = JSON.parse(rawContent); }
@@ -550,6 +554,7 @@ export function parseSendArgs(args: string[]): ParsedSendCommand {
     target,
     targetHome,
     msgType: requiredArg(parsed.values, '--msg-type'),
+    ...(parsed.flags.has('--separate-message') ? { separateMessage: true } : {}),
     content,
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
@@ -575,8 +580,18 @@ async function runSendCommand(args: string[]): Promise<void> {
         codelarkHome: command.targetHome,
         platformMessage: { msgType: command.msgType!, content: command.content },
         idempotencyKey: command.idempotencyKey,
+        callerTmuxSession: await currentTmuxSession(),
+        separateMessage: command.separateMessage,
       });
   process.stdout.write(formatSendResult(target, command.mode));
+}
+
+async function currentTmuxSession(): Promise<string | undefined> {
+  if (!process.env.TMUX || !/^%\d+$/u.test(process.env.TMUX_PANE || '')) return undefined;
+  const { stdout } = await promisify(execFile)('tmux', [
+    'display-message', '-p', '-t', process.env.TMUX_PANE!, '#{session_name}',
+  ], { timeout: 3_000 });
+  return stdout.trim();
 }
 
 export function formatSendResult(

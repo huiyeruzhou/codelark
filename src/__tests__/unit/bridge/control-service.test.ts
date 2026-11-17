@@ -268,6 +268,19 @@ describe('bridge control service', () => {
       },
       discoveryDirectory: directory,
     });
+    for (const msgType of ['text', 'post']) {
+      await assert.rejects(deliverPlatformMessageToSession({
+        target: 'bridge-1', platformMessage: { msgType, content: { text: 'duplicate reply' } },
+        callerTmuxSession: 'clk-cursor-bridge-1', discoveryDirectory: directory,
+      }), /自动同步到对话卡片/);
+    }
+    assert.equal(platformRequests.length, 1, 'same-chat replies must not reach the platform send endpoint');
+    await deliverPlatformMessageToSession({
+      target: 'bridge-1', platformMessage: { msgType: 'post', content: { text: 'explicit separate notification' } },
+      callerTmuxSession: 'clk-cursor-bridge-1', separateMessage: true, discoveryDirectory: directory,
+    });
+    assert.equal(platformRequests.length, 2, 'explicit separate notification must still be delivered');
+    platformRequests.pop();
     const created = await createRemoteConditionMonitor({
       owner: 'bridge-1',
       scriptPath: path.join(root, 'monitor.py'),

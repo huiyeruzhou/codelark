@@ -1573,15 +1573,11 @@ function buildStreamingToolAppendOperations(
   };
 }
 
-function isToolPanelElementId(elementId: string): boolean {
-  return /^stream_tool(?:_panel)?_\d+$/.test(elementId);
-}
-
 /** Only patch panel decoration and markdown contents. Never send `expanded`
- * or replace an existing panel's children, so an open tool stays open. Each
+ * or replace an existing panel's children, so an open panel stays open. Each
  * operation records its own intermediate shadow for retries after partial success.
  */
-function buildToolPanelUpdateOperations(
+function buildPanelUpdateOperations(
   previousJson: string,
   desired: Record<string, any>,
   snapshot?: string,
@@ -1617,6 +1613,15 @@ function buildToolPanelUpdateOperations(
   for (let i = 0; i < desired.elements.length; i++) {
     const after = desired.elements[i];
     const before = current.elements[i];
+    if (after?.tag === 'markdown') {
+      if (!after.element_id || !before || !same(omit(before, ['content']), omit(after, ['content']))) return null;
+      if (!same(before, after)) {
+        current.elements[i] = after;
+        push({ kind: 'content', elementId: after.element_id, targetElementId: after.element_id,
+          element: after, content: after.content });
+      }
+      continue;
+    }
     if (!after?.element_id || after.tag !== 'collapsible_panel') return null;
     if (!before) {
       current.elements.push(after);
@@ -1672,7 +1677,7 @@ function buildStreamingHistoryAppendOperations(
         elementJson,
         ...(snapshot ? { snapshot } : {}),
         ...(eventCount ? { eventCount } : {}),
-        ...(isToolPanelElementId(elementId) ? { preservesPanelState: true } : {}),
+        ...(element.tag === 'collapsible_panel' ? { preservesPanelState: true } : {}),
       });
       continue;
     }
@@ -1691,12 +1696,12 @@ function buildStreamingHistoryAppendOperations(
       continue;
     }
 
-    if (!isToolPanelElementId(elementId)) {
+    if (element.tag !== 'collapsible_panel') {
       return { operations: [], requiresFullRefresh: true };
     }
 
     const panelUpdates = canPatchPanels
-      ? buildToolPanelUpdateOperations(state.renderedHistoryElementJson[elementId]!, element, desired.toolSnapshots[elementId])
+      ? buildPanelUpdateOperations(state.renderedHistoryElementJson[elementId]!, element, desired.toolSnapshots[elementId])
       : null;
     if (!panelUpdates) return { operations: [], requiresFullRefresh: true };
     operations.push(...panelUpdates);

@@ -28,6 +28,7 @@ import {
   isCursorInputDraftScreen,
   isCursorInputReadyScreen,
   prepareCursorInputConfirmation,
+  pasteCursorPromptAndSubmit,
   streamCursorTmuxTui,
   waitForCursorInputSubmitted,
   withCursorReasoningEffort,
@@ -1376,6 +1377,29 @@ describe('Cursor tmux provider helpers', () => {
     await assert.rejects(prepareCursorInputConfirmation('isolated-pane', 'new message'), /本条消息尚未发送/);
   });
 
+  it('waits for this paste in the editor before Enter, ignoring matching scrollback', async (t) => {
+    const prompt = '本次输入只能提交一次';
+    let frames = 0;
+    let entered = false;
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: ++frames < 4
+      ? `${prompt}\n→ 上次的旧草稿\nGemini 4 Carbon High`
+      : `→ ${prompt}\nGemini 4 Carbon High`, command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => {
+      if (actions.some(action => action.type === 'key' && action.key === 'Enter')) {
+        assert.ok(frames >= 4, 'tmux delivery alone cannot authorize submitting the previous editor contents');
+        assert.equal(entered, false); entered = true;
+      }
+      return { commands: [] };
+    });
+    t.mock.method(tmuxCore, 'injectPromptIntoPane', async (_target: string, _prompt: string, options?: { beforeSubmit?: () => Promise<void> }) => {
+      await options?.beforeSubmit?.();
+      await tmuxCore.sendActions(_target, [{ type: 'key', key: 'Enter' }]);
+      return { commands: [] };
+    });
+    await pasteCursorPromptAndSubmit('isolated-pane', prompt);
+    assert.ok(entered);
+  });
+
   it('never retries Enter after observing a running turn, including a later retained draft', async (t) => {
     const sends: TmuxSendAction[][] = [];
     let frames = 0;
@@ -1393,7 +1417,7 @@ describe('Cursor tmux provider helpers', () => {
     assert.deepEqual(sends, [], 'running and completed frames cannot authorize resubmission');
   });
 
-  it('retries an initially idle submission once when Cursor hides every draft marker', async (t) => {
+  it('does not guess that Enter was lost when Cursor hides every draft marker', async (t) => {
     const prompt = 'initial prompt hidden by the collapsed editor';
     let submitted = false;
     const sends: TmuxSendAction[][] = [];
@@ -1409,13 +1433,14 @@ describe('Cursor tmux provider helpers', () => {
       return { commands: [] };
     });
 
-    await waitForCursorInputSubmitted('isolated-pane', undefined, {
-      prompt,
-      screenCount: 0,
-      running: false,
-    });
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 800);
+    t.after(() => clearTimeout(timer));
+    await assert.rejects(waitForCursorInputSubmitted('isolated-pane', undefined, {
+      prompt, screenCount: 0, running: false,
+    }, abort.signal), { name: 'AbortError' });
+    assert.deepEqual(sends, []);
 
-    assert.deepEqual(sends, [[{ type: 'key', key: 'Enter' }]]);
   });
 
   it('cancels input confirmation promptly even while a queued input retains a draft', async (t) => {
@@ -1438,7 +1463,7 @@ describe('Cursor tmux provider helpers', () => {
     }), /Cursor Agent exited before confirming input/);
   });
 
-  it('retries Enter when Cursor leaves the injected prompt in its input editor', async () => {
+  it('submits only after the injected prompt is visible in its input editor', async () => {
     const cwd = path.join(root, 'submit-retry-workspace');
     fs.mkdirSync(cwd, { recursive: true });
     const sessionId = '44444444-4444-4444-8444-444444444444';
@@ -1466,8 +1491,10 @@ describe('Cursor tmux provider helpers', () => {
       command: 'tmux capture-pane',
     });
     core.ensureExtendedKeys = async () => 'tmux set-option extended-keys on';
-    core.injectPromptIntoPane = async (_target: string, value: string) => {
+    core.injectPromptIntoPane = async (_target: string, value: string, options: { beforeSubmit?: () => Promise<void> }) => {
       prompt = value;
+      await options.beforeSubmit?.();
+      await tmuxCore.sendActions(_target, [{ type: 'key', key: 'Enter' }]);
       return { commands: ['tmux paste-buffer', 'tmux send-keys Enter'] };
     };
     core.sendActions = async () => {

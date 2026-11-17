@@ -328,6 +328,7 @@ export async function runInteractiveMessage(
   const taskAbort = new AbortController();
   const taskId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const taskStartedAt = nowMs();
+  let cursorInputAccepted = false;
   const streamState = createStreamState(taskStartedAt);
   const externalTerminal = createExternalTerminalFinalizationController({
     abortSignal: taskAbort.signal,
@@ -355,6 +356,7 @@ export async function runInteractiveMessage(
     uiEnded: false,
     mirrorSuppressionId: null,
     finalizeFromExternalTerminal: async (outcome, detail, finalText) => {
+      if (isCursorTranscriptTurn && !cursorInputAccepted) return false;
       return externalTerminal.finalize(outcome, detail, finalText);
     },
   };
@@ -668,7 +670,7 @@ export async function runInteractiveMessage(
       },
       {
         isCurrentTask: () => deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId),
-        onInputAccepted: deps.onInputAccepted,
+        onInputAccepted: () => { cursorInputAccepted = true; deps.onInputAccepted?.(); },
         expandToolCalls: true,
         streamPreview: {
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,

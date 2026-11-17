@@ -41,6 +41,8 @@ export interface TmuxSendActionsResult {
 
 export interface TmuxSendActionsOptions {
   delayMs?: number;
+  /** Runtime acknowledgement that the pasted editor contents are ready to submit. */
+  beforeSubmit?: () => Promise<void>;
   forcePasteLiterals?: boolean;
   /** Deliver each literal as one paste, preserving newlines without editor keys. */
   bracketedPaste?: boolean;
@@ -69,7 +71,7 @@ export interface TmuxCore {
   capturePane(target: string, lines: number): Promise<TmuxCapturePaneResult>;
   sendActions(target: string, actions: TmuxSendAction[], options?: TmuxSendActionsOptions): Promise<TmuxSendActionsResult>;
   sendInterrupt(target: string): Promise<string>;
-  injectPromptIntoPane(targetPane: string, prompt: string, options?: Pick<TmuxSendActionsOptions, 'pasteNewlineKey' | 'bracketedPaste'>): Promise<TmuxSendActionsResult>;
+  injectPromptIntoPane(targetPane: string, prompt: string, options?: Pick<TmuxSendActionsOptions, 'pasteNewlineKey' | 'bracketedPaste' | 'beforeSubmit'>): Promise<TmuxSendActionsResult>;
   /** The command actually used to create this pane, not the proposed reuse command. */
   readPaneStartCommand?(target: string): Promise<string>;
   /** Process liveness from tmux metadata, independent of retained screen text. */
@@ -674,13 +676,17 @@ class TmuxCliCore implements TmuxCore {
     return result.commands[0] || this.command(['send-keys', '-t', target, 'C-c']);
   }
 
-  async injectPromptIntoPane(targetPane: string, prompt: string, options: Pick<TmuxSendActionsOptions, 'pasteNewlineKey' | 'bracketedPaste'> = {}): Promise<TmuxSendActionsResult> {
+  async injectPromptIntoPane(targetPane: string, prompt: string, options: Pick<TmuxSendActionsOptions, 'pasteNewlineKey' | 'bracketedPaste' | 'beforeSubmit'> = {}): Promise<TmuxSendActionsResult> {
     if (options.bracketedPaste && !this.psmuxServerSidePaste) {
-      return this.sendActions(targetPane, [{ type: 'literal', text: prompt }, { type: 'key', key: 'Enter' }], options);
+      const pasted = await this.sendActions(targetPane, [{ type: 'literal', text: prompt }], options);
+      await options.beforeSubmit?.();
+      const submitted = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
+      return { commands: [...pasted.commands, ...submitted.commands] };
     }
     const commands: string[] = [];
     if (this.psmuxServerSidePaste) {
       commands.push(...(await this.sendPsmuxEditorInput(targetPane, prompt, options.pasteNewlineKey)));
+      await options.beforeSubmit?.();
       const submit = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
       commands.push(...submit.commands);
       commands.push(...await this.retryUnsubmittedPsmuxPaste(targetPane, prompt));
@@ -712,6 +718,7 @@ class TmuxCliCore implements TmuxCore {
         commands.push(...newline.commands);
       }
     }
+    await options.beforeSubmit?.();
     const submit = await this.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
     commands.push(...submit.commands);
     return { commands };

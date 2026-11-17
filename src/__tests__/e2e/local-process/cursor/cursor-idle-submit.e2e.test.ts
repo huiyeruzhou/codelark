@@ -31,7 +31,7 @@ class IdleAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }, { redrawDelay: 0, delayedCheckpoint: false, retainedDraft: true }]) it(`real Cursor confirms idle input after a swallowed Enter (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)}, retained draft ${Boolean(scenario.retainedDraft)})`, { timeout: 75_000 }, async (t) => {
+for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }, { redrawDelay: 0, delayedCheckpoint: false, retainedDraft: true }, { redrawDelay: 1_200, delayedCheckpoint: true, oldTerminal: true }]) it(`real Cursor confirms idle input after the editor acknowledges a delayed paste (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)}, retained draft ${Boolean(scenario.retainedDraft)}, old terminal ${Boolean(scenario.oldTerminal)})`, { timeout: 75_000 }, async (t) => {
   const { redrawDelay, delayedCheckpoint } = scenario;
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
@@ -88,21 +88,26 @@ fi\n` : '';
     getImmediateLane: manager.adapterImmediateLane, getSessionLane: manager.adapterSessionLane, resolveSessionIdForMessage: () => session.id,
   });
   const originalCapture = tmuxCore.capturePane, originalInject = tmuxCore.injectPromptIntoPane, originalSend = tmuxCore.sendActions;
-  let staleUntil = 0, staleFrames = 0, swallowedEnter = false, passed = false;
-  // Keep the actual native editor draft, while modeling the first Enter being
-  // swallowed and the renderer briefly returning its previous idle frame.
+  let staleUntil = 0, staleFrames = 0, pasteObserved = false, passed = false;
+  // Keep the actual native draft while the renderer briefly reports its old
+  // frame. The first Enter must wait for the new editor contents.
   const pasteDraft = async (target: string, text: string) => {
-    swallowedEnter = true;
+    pasteObserved = true;
     const result = await originalSend(target, [{ type: 'literal', text: scenario.plainMultiline ? '\n' + text : text }], { forcePasteLiterals: true });
     staleUntil = Date.now() + redrawDelay;
     return result;
   };
   tmuxCore.injectPromptIntoPane = async (target, prompt, options) => {
-    if (target === pane && prompt === followup && !swallowedEnter) return pasteDraft(target, prompt);
+    if (target === pane && prompt === followup && !pasteObserved) {
+      const result = await pasteDraft(target, prompt);
+      await options?.beforeSubmit?.();
+      await originalSend(target, [{ type: 'key', key: 'Enter' }]);
+      return result;
+    }
     return originalInject(target, prompt, options);
   };
   tmuxCore.sendActions = async (target, actions, options) => {
-    if (target === pane && !swallowedEnter && actions.some(action => action.type === 'literal' && action.text === followup)) return pasteDraft(target, followup);
+    if (target === pane && !pasteObserved && actions.some(action => action.type === 'literal' && action.text === followup)) return pasteDraft(target, followup);
     return originalSend(target, actions, options);
   };
   tmuxCore.capturePane = async (...args) => {
@@ -132,7 +137,15 @@ fi\n` : '';
     }
     if (delayedCheckpoint) process.env.CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS = '1000';
     adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'steer'));
-    await until(() => backend.prompts.length === 2, 'fake model must receive the idle input despite an initially swallowed Enter');
+    if (scenario.oldTerminal) {
+      await until(() => pasteObserved, 'paste must be in flight');
+      const task = bridge.activeTasks.get(session.id);
+      assert.ok(task?.finalizeFromExternalTerminal);
+      assert.equal(await task.finalizeFromExternalTerminal('completed', 'old turn finished', 'INITIAL_DONE'), false,
+        'a previous native final must not acknowledge or finish the newly submitted input');
+      assert.ok(!finished.includes('steer'));
+    }
+    await until(() => backend.prompts.length === 2, 'fake model must receive the idle input after the paste acknowledgement');
     if (delayedCheckpoint) {
       await delay(1_600);
       assert.ok(!finished.includes('steer'), 'delayed native checkpoint must not end the active card at the old receipt deadline');
@@ -153,7 +166,7 @@ fi\n` : '';
     assert.ok(adapter.reactions.includes('steer'));
     assert.equal(adapter.events.filter(e => e.type === 'end').length, 2, 'only the initial and resumed cards may finish');
     assert.ok(adapter.events.filter(e => e.type === 'end').every(e => e.status === 'completed'));
-    assert.ok(swallowedEnter, 'test must leave the first submission as a real native draft');
+    assert.ok(pasteObserved, 'test must observe the real native draft before submission');
     if (redrawDelay) assert.ok(staleFrames > 0, 'test must observe a stale empty editor before the draft becomes visible');
     if (scenario.retainedDraft) {
       await until(async () => /→ Add a follow-up/.test((await originalCapture(pane, 80)).screen), 'second turn must return to idle');
@@ -168,7 +181,7 @@ fi\n` : '';
     releaseCheckpoint(); releaseFinal();
     tmuxCore.capturePane = originalCapture; tmuxCore.injectPromptIntoPane = originalInject; tmuxCore.sendActions = originalSend;
     if (!passed || process.env.CODELARK_REAL_CURSOR_E2E_KEEP_ARTIFACTS === '1') {
-      fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ prompts: backend.prompts, steers: backend.steers, errors: backend.errors, events: adapter.events, messages: adapter.sent, staleFrames, swallowedEnter }, null, 2));
+      fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ prompts: backend.prompts, steers: backend.steers, errors: backend.errors, events: adapter.events, messages: adapter.sent, staleFrames, pasteObserved }, null, 2));
       fs.writeFileSync(path.join(root, 'screen.txt'), (await originalCapture(pane, 120).catch(() => ({ screen: '' }))).screen);
       console.error(`Cursor idle submission evidence: ${root}`);
     }

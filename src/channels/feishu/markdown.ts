@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   OutboundCardActionSelect,
   OutboundCardActionSelectOption,
@@ -1372,7 +1373,7 @@ function formatHistoryMarkdownContent(item: Extract<StreamingHistoryItem, { type
   if (item.variant === 'thinking_summary') {
     const trimmed = item.content.trim();
     const unwrapped = trimmed.match(/^(\*\*|__)([^\r\n]+)\1$/u)?.[2]?.trim() || trimmed;
-    return unwrapped.split(/\r?\n/u).map((line) => `> ${line}`).join('\n');
+    return unwrapped;
   }
   if (item.role !== 'user') return item.content;
   const trimmed = item.content.trim();
@@ -1439,11 +1440,12 @@ function buildHistoryItemElement(
   elementId: string,
 ): Record<string, unknown> | null {
   const formatted = formatHistoryMarkdownContent(item);
-  if (item.collapseTitle) {
+  const collapseTitle = item.collapseTitle || (item.variant === 'thinking_summary' ? '思考摘要' : undefined);
+  if (collapseTitle) {
     return {
       tag: 'collapsible_panel', expanded: false,
-      header: { title: { tag: 'markdown', content: item.collapseTitle } },
-      elements: [buildHistoryMarkdownElement(formatted)], element_id: elementId,
+      header: { title: { tag: 'markdown', content: collapseTitle } },
+      elements: [buildHistoryMarkdownElement(formatted, `sb_${createHash('sha256').update(elementId).digest('hex').slice(0, 16)}`)], element_id: elementId,
     };
   }
   if (

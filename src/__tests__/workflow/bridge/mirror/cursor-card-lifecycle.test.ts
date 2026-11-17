@@ -125,6 +125,9 @@ it('keeps one Feishu message through separate native tool polls and finalizes on
     assert.equal(calls.filter((c) => c.kind === 'settings').length, 1);
     assert.equal(calls.filter((c) => c.kind === 'update').length, initialRefreshes + 1, 'only finalization updates the whole card after the user boundary');
     assert.equal(calls.filter((c) => c.kind === 'batch').length, 0, 'tool children use explicit element endpoints before content updates');
+    const summaryUpdate = calls.find((c) => c.kind === 'content' && c.payload.path.element_id.startsWith('sb_'));
+    assert.ok(summaryUpdate, 'native summary revisions must update the existing collapsed body');
+    assert.equal(summaryUpdate.payload.data.content, '检查第 5 个工具');
     for (const call of calls) {
       const patches = call.kind === 'patch' ? [JSON.parse(call.payload.data.partial_element)]
         : call.kind === 'batch' ? JSON.parse(call.payload.data.actions).filter((a: any) => a.action === 'partial_update_element').map((a: any) => JSON.parse(a.partial_element)) : [];

@@ -8,7 +8,7 @@ Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `d
 
 ## 进程恢复与手动同步
 
-普通群消息提交前检查 tmux 的 `pane_dead`。窗口存在但 Cursor 已退出时，使用原 `--resume <chatId>` 自动拉起；存活进程继续复用，原生接收确认前不报告输入成功。输入进入 follow-ups 后，即使旧编辑框文字仍可见，也不能重试提交；仅在原生界面明确提供 `enter steer` 时推进一次。只有从未观察到运行态、且未进入队列的草稿才允许补一次 Enter；一旦观察到运行态，即使持久化确认延迟或之后又显示旧草稿，也不再补交普通 Enter。停止请求立即取消输入确认循环。
+普通群消息提交前检查 tmux 的 `pane_dead`。窗口存在但 Cursor 已退出时，使用原 `--resume <chatId>` 自动拉起；存活进程继续复用，原生接收确认前不报告输入成功。输入进入 follow-ups 后，即使旧编辑框文字仍可见，也不能重试提交；仅在原生界面明确提供 `enter steer` 时推进一次。粘贴后先等本条内容出现在原生编辑框，再发送一次 Enter；确认阶段不依据残留草稿或缺失的运行提示补交普通 Enter。原生记录若增加了其他输入，则报告内容不一致并保留会话。停止请求立即取消输入确认循环。收到本条输入的原生确认前，旧轮次的外部终态不能结束本条请求。
 
 CodeLark 管理的普通消息提交前先检查编辑框：空闲时先通过 Backspace/Delete 让编辑器与父层输入状态一致，若仍有内容再用一次 Ctrl+C 清除完整草稿，并回读确认空输入框。长驻 CLI 可能显示残留文字而父层已为空，此时只按 Ctrl+C 不生效；Ctrl+U 又只能删除一行。单字符草稿经编辑键清空后不再发 Ctrl+C。运行中或 follow-ups 队列存在时若编辑框另有草稿，保留现场并报告本条未发送，不能中断当前轮或把新问题拼在旧稿后。手动 `/tmux-key` 控制键不走此替换流程。`cursor-idle-submit.e2e.test.ts` 覆盖中文、多行来源标记残留后的连续独立输入，fake 模型校验请求内容和次数。
 
@@ -81,7 +81,7 @@ Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 
 - `text` 与 `tool_use` content block；
 - `{type:"turn_ended", status:"success|error|aborted"}` 终态。
 
-CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。Cursor 会用原子替换重写 transcript snapshot，因此 mirror watch transcript 所在目录而不是文件 inode；否则第一次 replace 后 watcher 可能失效，只能等 hot 2.5 秒或 cold 60 秒轮询兜底。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 先写一份 assistant state、稍后再写内容不同的最终 revision；后一个 revision 不是新的回答。对 `2026.07.23-e383d2b` 真实样本的 `store.db` 取证表明，同一 assistant message 具有 `reasoning` 与 `text` 两个 block：前者的签名载荷明确是 OpenAI `summary_text`，后者标记为 `openaiPhase=final_answer`。transcript writer 会丢失 block 类型，把正文放在前面、加粗的 thinking summary 放在后面并用空行连接；正文与 summary 都可能在下一版 snapshot 中同时改写。parser 优先比较相邻 revision 的最后一个空行边界；如果只有一版带摘要，或下一版同时改写正文并移除摘要，则只在 `turn_ended` 前后用当前 chat 的 `store.db` 核验独立 text/reasoning blocks，并要求重新扁平化后与 transcript snapshot 精确相等。核验成功后恢复 `reasoningKind=summary`，同时给正文 revision 分配稳定 `replacementKey`；没有结构化证据时不把任意末尾粗体正文猜成摘要。direct provider 通过通用 `history_item` 交付 `thinking_summary`，mirror turn 使用同一中间语义；公共历史 renderer 把它作为弱化引用插在最终回答之前，不混入正文，也不占外层卡片标题。不能匹配 `Responding...` 等具体文案，也不能让 Feishu renderer 解析 Cursor 私有文本。真实 TUI 取样表明 Cursor 完成态不显示该 summary，等待期只显示淡化的 `Working`；CodeLark 保留摘要属于自身的可观察性设计，而不是复刻一个并不存在的 Cursor title。
+CodeLark 把这些行归一化为公共 message/tool/task mirror record 和 SSE 事件。Cursor 会用原子替换重写 transcript snapshot，因此 mirror watch transcript 所在目录而不是文件 inode；否则第一次 replace 后 watcher 可能失效，只能等 hot 2.5 秒或 cold 60 秒轮询兜底。官方 writer 还会在 assistant 回答后写入仅包含 `<|eos|>` 的内部边界块，并可能在同一 turn 先写一份 assistant state、稍后再写内容不同的最终 revision；后一个 revision 不是新的回答。对 `2026.07.23-e383d2b` 真实样本的 `store.db` 取证表明，同一 assistant message 具有 `reasoning` 与 `text` 两个 block：前者的签名载荷明确是 OpenAI `summary_text`，后者标记为 `openaiPhase=final_answer`。transcript writer 会丢失 block 类型，把正文放在前面、加粗的 thinking summary 放在后面并用空行连接；正文与 summary 都可能在下一版 snapshot 中同时改写。parser 优先比较相邻 revision 的最后一个空行边界；如果只有一版带摘要，或下一版同时改写正文并移除摘要，则只在 `turn_ended` 前后用当前 chat 的 `store.db` 核验独立 text/reasoning blocks，并要求重新扁平化后与 transcript snapshot 精确相等。核验成功后恢复 `reasoningKind=summary`，同时给正文 revision 分配稳定 `replacementKey`；没有结构化证据时不把任意末尾粗体正文猜成摘要。direct provider 通过通用 `history_item` 交付 `thinking_summary`，mirror turn 使用同一中间语义；公共历史 renderer 把它放进默认折叠的“思考摘要”，保留原生段落；最终回答独立展示，不占外层卡片标题。摘要修订通过稳定子元素更新正文，不重置用户的展开状态。不能匹配 `Responding...` 等具体文案，也不能让 Feishu renderer 解析 Cursor 私有文本。真实 TUI 取样表明 Cursor 完成态不显示该 summary，等待期只显示淡化的 `Working`；CodeLark 保留摘要属于自身的可观察性设计，而不是复刻一个并不存在的 Cursor title。
 
 Cursor 不调用名为 `completed` 的工具结束一轮。assistant message 后由客户端独立追加 `{"type":"turn_ended","status":"success"}`；失败或中断也由该 terminal record 的状态表达。CLI 与旧版 transcript 路径必须以 `turn_ended` 驱动终态，不能用工具名、正文停止增长或 TUI 光标位置猜测完成。同一读取批次只保留最新版正文，跨增量批次则把后续 revision 作为替换事件继续交付。多轮时 Cursor 还会重写整份 transcript、删除上一轮位于 EOF 的 `turn_ended`；旧 byte offset 可能因此落入新 user JSON 中部。增量 parser 跳过残行后若先看到完整 assistant row，必须以它建立隐式 turn 并恢复正文，不能只交付后面的成功终态。多轮后的最终 transcript snapshot 可能只保留文件末尾一个 `turn_ended`；测试应以 user/归一化后的可见 assistant record 确认轮次，以文件末尾终态确认整体完成，不能把物理 assistant/终态行数当成轮数。
 
@@ -246,3 +246,11 @@ codelark cursor-desktop-patch uninstall
 2026-10-09 的真实 v3 部署虽可启动并列举 thread，但 Stop/事件 action 在 await 后取 ServicesAccessor 导致 Illegal state。事件失败又被吞为空结果，使每秒轮询反复弹错。v4 在首次 await 前同步取得全部服务，向客户端返回事件错误；新 bridge 也不调用已知有缺陷的 v2/v3 事件 action。v4 模型切换仅完成隔离协议、原生服务模拟和安装包副本检查，尚未安装验证；不能将测试或安装成功表述为生产功能已可用。普通断开输出订阅或 bridge 退出不应自动终止用户的 Desktop 任务。
 
 用户另反馈实际已 steer 却报告 queued：投递现在先检查 queue item 的 delivery，已有 steer 不重复提升；提升后重新读取状态，避免将重复调用的 false 当作仍排队。进行中和条目消失只报告尚不能确认；只有明确的普通队列状态才报 queued。相应测试模拟原生访问器同步失效、自动 steer 和提升返回 false 的竞态。
+
+### 普通回复、思考摘要与公式
+
+Cursor 当前群的普通回答由对话卡片自动同步。公共 CLI 通过调用方 tmux 会话核对当前群，默认拒绝向自己的 Cursor 群额外发送 text/post；跨群消息、附件和专用卡片仍按原协议发送。用户明确要求独立通知时可传 `--separate-message`。这防止长驻会话仍使用旧 skill 内容时继续补发普通回答。
+
+思考摘要取自 Cursor 原生 reasoning 字段，卡片以默认折叠的“思考摘要”展示，保留原有标题与段落；不再把长摘要改成展开的 Markdown 引用。最终回答独立展示，桥接不额外调用模型重写摘要。
+
+飞书普通消息与 JSON 2.0 卡片使用不同的 Markdown 渲染器。官方卡片富文本文档列出 CommonMark 与部分 HTML，未列出 LaTeX 数学公式能力；当前桥接没有公式渲染转换，不能把代码块语言 `latex` 当作数学排版支持。公式渲染仍需独立的客户端验收，当前输入和摘要修复不宣称已补齐数学排版。

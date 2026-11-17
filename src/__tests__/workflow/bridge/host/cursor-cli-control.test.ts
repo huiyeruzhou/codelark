@@ -57,21 +57,24 @@ it('Cursor CLI acknowledges accepted input and appends in order through the adap
     getSessionLane: manager.adapterSessionLane,
     resolveSessionIdForMessage: () => session.id,
   });
-  const originals = { hasSession: tmuxCore.hasSession, sendActions: tmuxCore.sendActions, capturePane: tmuxCore.capturePane, readPaneDead: tmuxCore.readPaneDead };
+  const originals = { hasSession: tmuxCore.hasSession, sendActions: tmuxCore.sendActions, capturePane: tmuxCore.capturePane, readPaneDead: tmuxCore.readPaneDead, injectPromptIntoPane: tmuxCore.injectPromptIntoPane };
   let release!: () => void;
   const sending = new Promise<void>(resolve => { release = resolve; });
   const sent: string[] = [];
   tmuxCore.hasSession = async (name) => { assert.equal(name, target); return { exists: true, command: '' }; };
   tmuxCore.readPaneDead = async () => false;
   let acceptedHistory = '';
-  tmuxCore.capturePane = async () => ({ screen: acceptedHistory + '\n→ Add a follow-up    ctrl+c to stop', command: '' });
-  tmuxCore.sendActions = async (name, actions) => {
-    assert.equal(name, target);
-    sent.push(actions.filter(a => a.type === 'literal').map(a => a.text).join(''));
-    assert.ok(actions.some(a => a.type === 'key' && a.key === 'Enter'));
+  let draft = '';
+  tmuxCore.capturePane = async () => ({ screen: acceptedHistory + `\n→ ${draft || 'Add a follow-up'}\nctrl+c to stop`, command: '' });
+  tmuxCore.injectPromptIntoPane = async (pane, prompt, options) => {
+    assert.equal(pane, `${target}:0.0`);
+    draft = prompt;
+    await options?.beforeSubmit?.();
+    sent.push(prompt);
     if (sent.length === 1) await sending;
-    if (sent.at(-1) === 'failed input') throw new Error('test input failure');
-    acceptedHistory += '\n' + sent.at(-1);
+    if (prompt === 'failed input') throw new Error('test input failure');
+    acceptedHistory += '\n' + prompt;
+    draft = '';
     return { commands: [] };
   };
   t.after(async () => {

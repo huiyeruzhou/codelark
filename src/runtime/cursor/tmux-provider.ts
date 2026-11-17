@@ -280,6 +280,7 @@ interface CursorInputConfirmation {
   nativeCount?: number;
   screenCount: number;
   running: boolean;
+  nativeTotal?: number;
 }
 
 const compactInput = (text: string) => normalizeScreen(text).replace(/[│\s]/gu, '');
@@ -338,7 +339,39 @@ export async function prepareCursorInputConfirmation(targetPane: string, prompt:
       throw new CursorInputReadinessTimeoutError('Cursor 输入框仍有旧草稿，本条消息尚未发送；已保留会话，请用 `/tmux-screen` 查看。');
     }
   }
-  return { prompt, storePath, nativeCount: nativePromptCount(storePath, prompt), screenCount: screenPromptCount(screen, prompt), running: /ctrl\+c\s+to\s+stop/i.test(screen) };
+  return { prompt, storePath, nativeCount: nativePromptCount(storePath, prompt), nativeTotal: storePath ? readCursorNativeUserPrompts(storePath)?.length : undefined, screenCount: screenPromptCount(screen, prompt), running: /ctrl\+c\s+to\s+stop/i.test(screen) };
+}
+
+/** tmux accepting bytes does not mean Cursor has consumed the paste. */
+export async function pasteCursorPromptAndSubmit(targetPane: string, prompt: string, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  await tmuxCore.injectPromptIntoPane(targetPane, prompt, { bracketedPaste: true, beforeSubmit: async () => {
+    const expected = compactInput(prompt);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      signal?.throwIfAborted();
+      const { screen } = await tmuxCore.capturePane(targetPane, 160);
+      assertCursorPaneAlive(screen);
+      assertCursorPromptAvailable(screen);
+      const lines = normalizeScreen(screen).split('\n');
+      const arrow = lines.findLastIndex(line => /^\s*[>›❯→]\s*/u.test(line));
+      const editorLines = lines.slice(arrow >= 0 ? arrow : -12);
+      const indent = lines[arrow]?.search(/\S/u) ?? 0;
+      const end = editorLines.findIndex((line, i) => i > 0 && line.trim() && line.search(/\S/u) <= indent);
+      const editor = editorLines.slice(0, end < 0 ? undefined : end).join('\n').replace(/^\s*[>›❯→]\s*/u, '');
+      // Long pastes are replaced by Cursor's native pasted-text token. Short
+      // input must be visible in the editor itself, never just in scrollback.
+      const observed = compactInput(editor);
+      const visible = observed === expected
+        || (observed.length >= Math.min(32, expected.length) && expected.includes(observed))
+        || (prompt.length > 800 && /\[Pasted text #\d+(?: \+\d+ lines)?\]/u.test(editor));
+      if (visible) {
+        signal?.throwIfAborted();
+        return;
+      }
+      await sleep(100);
+    }
+    throw new CursorInputReadinessTimeoutError('Cursor 尚未显示本条输入，未发送提交键；已保留会话和草稿。');
+  } });
 }
 
 export async function waitForCursorInputSubmitted(
@@ -354,9 +387,7 @@ export async function waitForCursorInputSubmitted(
   );
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
-  let lastRetryAt = 0;
   let steerSent = false;
-  let observedRunning = confirmation?.running || false;
   await sleep(INPUT_SUBMISSION_CONFIRMATION_GRACE_MS);
   // Receipt is checkpoint-backed, not a deadline: a live Cursor may accept
   // input long before persisting its first checkpoint. Keep the same turn
@@ -371,14 +402,16 @@ export async function waitForCursorInputSubmitted(
     const accepted = confirmation && (confirmation.nativeCount !== undefined
       ? (nativePromptCount(confirmation.storePath, confirmation.prompt) || 0) > confirmation.nativeCount
       : screenPromptCount(capture.screen, confirmation.prompt) > confirmation.screenCount);
+    if (!accepted && confirmation?.nativeTotal !== undefined && confirmation.storePath
+      && (readCursorNativeUserPrompts(confirmation.storePath)?.length || 0) > confirmation.nativeTotal) {
+      throw new CursorInputReadinessTimeoutError('Cursor 接收的输入与本条消息不一致；已停止自动补交，保留会话和草稿。');
+    }
     const screen = normalizeScreen(capture.screen);
-    observedRunning ||= /ctrl\+c\s+to\s+stop/i.test(screen);
     const queued = /^\s*┌─ follow-ups\b/im.test(screen);
     // Cursor can retain the submitted text below a queue while repainting.
     // A queued input is never an unsubmitted draft.
     const inputDraft = !queued && isCursorInputDraftScreen(screen);
     if (accepted && (confirmation?.nativeCount !== undefined || !inputDraft)) return;
-    let retryInitialSubmit = false;
     if (isCursorQuestionScreen(capture.screen)) {
       if (confirmation?.running) throw new Error('Cursor 正在等待问卷回答，尚未确认这条补充消息已进入当前轮。');
       return;
@@ -397,22 +430,15 @@ export async function waitForCursorInputSubmitted(
         // empty editor can survive the paste/Enter redraw, so readiness alone
         // cannot acknowledge this input. Wait for the new native user record.
         if (confirmation.nativeCount === undefined && inputReady) return;
-        // Cursor 2026.11 can collapse an initial multiline draft so completely
-        // that no stable input marker remains visible. One delayed Enter is
-        // safe for an initially idle editor; never apply this fallback to an
-        // active turn, where Enter could interrupt or promote a follow-up.
-        retryInitialSubmit = !inputReady && lastRetryAt === 0;
       } else if (queued && /enter\s+interrupt and send/i.test(screen)) {
         // Cursor has queued the follow-up but is not at a safe in-turn steer
         // boundary yet. Leave it queued and keep polling; pressing Enter here
         // would abort the active turn instead of injecting context into it.
       }
     }
-    if (!observedRunning && !steerSent && (retryInitialSubmit
-      || (inputDraft && lastRetryAt === 0))) {
-      await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'Enter' }]);
-      lastRetryAt = Date.now();
-    }
+    // The submission key was sent only after the editor acknowledged this
+    // paste. A retained draft or missing footer cannot prove it was lost;
+    // retries can submit the same prompt again when checkpoints are delayed.
     const now = Date.now();
     if (onProgress && now - lastProgressAt >= INPUT_READY_PROGRESS_INTERVAL_MS) {
       lastProgressAt = now;
@@ -766,13 +792,12 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
             send: async () => {
               const prompt = prepareTextAttachmentPrompt(params);
               const confirmation = await prepareCursorInputConfirmation(targetPane, prompt, context.sessionStorePath);
-              const result = await tmuxCore.injectPromptIntoPane(targetPane, prompt, { bracketedPaste: true });
+              await pasteCursorPromptAndSubmit(targetPane, prompt, params.abortController?.signal);
               await waitForCursorInputSubmitted(targetPane, (elapsedMs) => {
                 controller.enqueue(sseEvent('status', {
                   reasoning: `输入已发送，正在等待 Cursor 确认接收；已等待 ${Math.floor(elapsedMs / 1_000)}s，可使用停止按钮取消。`,
                 }));
               }, confirmation, params.abortController?.signal);
-              return result;
             },
           });
           params.onInputAccepted?.();

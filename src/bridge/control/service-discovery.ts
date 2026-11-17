@@ -580,8 +580,14 @@ export async function deliverPlatformMessageToSession(options: {
   platformMessage: OutboundPlatformMessage;
   idempotencyKey?: string;
   discoveryDirectory?: string;
+  callerTmuxSession?: string;
+  separateMessage?: boolean;
 }): Promise<DiscoveredBridgeSession> {
   const target = await resolveBridgeSessionTarget(options);
+  if (!options.separateMessage && ['text', 'post'].includes(options.platformMessage.msgType)
+    && options.callerTmuxSession === `clk-cursor-${target.bridgeSessionId}`) {
+    throw new Error('当前群的普通回答已由 CodeLark 自动同步到对话卡片，请直接回复正文，不要调用 send message 补发。仅当用户明确要求独立消息时才使用 --separate-message；读取群历史失败不代表卡片发送失败。');
+  }
   const descriptor = descriptorForSession(target, options.discoveryDirectory);
   await requestDescriptor(descriptor, '/v1/platform-message', {
     method: 'POST',

@@ -755,20 +755,23 @@ describe('buildStreamingHistoryElements', () => {
     assert.equal(historyChildren[1]?.content, '训练仍在推进。');
   });
 
-  it('renders thinking summaries as understated Markdown quotes', () => {
+  it('keeps native thinking summaries collapsed and distinct from the final answer', () => {
+    const summary = '**Preparing concise comparative analysis**\n\nFirst paragraph.\n\n**Checking evidence**\n\nSecond paragraph.';
     const elements = buildStreamingHistoryElementsFromItems('', [
       {
         type: 'markdown',
         role: 'thinking',
         variant: 'thinking_summary',
-        content: '**Preparing concise comparative analysis**',
+        content: summary,
       },
       { type: 'markdown', role: 'assistant', content: '最终回答' },
     ]);
     const historyChildren = (elements[0] as any).elements as any[];
 
-    assert.equal(historyChildren[0]?.tag, 'markdown');
-    assert.equal(historyChildren[0]?.content, '> Preparing concise comparative analysis');
+    assert.equal(historyChildren[0]?.tag, 'collapsible_panel');
+    assert.equal(historyChildren[0]?.expanded, false);
+    assert.equal(historyChildren[0]?.header.title.content, '思考摘要');
+    assert.equal(historyChildren[0]?.elements[0].content, summary);
     assert.equal(historyChildren[1]?.content, '最终回答');
   });
 
