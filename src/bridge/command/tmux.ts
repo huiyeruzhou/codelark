@@ -1143,6 +1143,9 @@ async function ensureRuntimeTmuxSessionForProvider(
       cursorForce: cursorConfig.force,
       workingDirectory: getSessionWorkingDirectory(session),
       model: resolveCursorInvocationModel(binding, session, { resuming: Boolean(cursorSessionId) }),
+    }, {
+      onAuthentication: params.notifyBackgroundOperation
+        ? message => { void params.notifyBackgroundOperation!(message, { force: true }); } : undefined,
     });
     const identityUpdate = setSessionCursorIdentityUpdate(prepared.sessionId, prepared.cwd);
     store.updateSession(session.id, {

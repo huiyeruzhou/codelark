@@ -615,6 +615,9 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
         model: resolveCursorInvocationModel(binding, session, {
           resuming: Boolean(getSessionCursorSessionId(session)),
         }),
+      }, {
+        onAuthentication: options.deps.notifyBackgroundOperation
+          ? message => { void options.deps.notifyBackgroundOperation!(message, { force: true }); } : undefined,
       });
     } catch (error) {
       const staleStart = await cancelStaleTmuxProviderStart({

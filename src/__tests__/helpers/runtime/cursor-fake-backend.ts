@@ -33,6 +33,7 @@ function fields(bytes: Uint8Array): Map<number, Buffer[]> {
 const get = (bytes: Uint8Array, no: number) => fields(bytes).get(no)?.[0] || Buffer.alloc(0);
 export interface FakeCursorAnswer { questionId: string; selectedOptionIds: string[]; freeformText: string }
 export interface FakeCursorModel {
+  authenticated?(): boolean;
   call(prompt: string): CursorPendingQuestion | { waitingForSteer: true; beforeCheckpoint?: Promise<void> } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean; toolProgress?: Promise<void> };
   continue?(answers: FakeCursorAnswer[]): string;
   steer?(text: string): string | { waitingForSteer: true };
@@ -47,6 +48,11 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
   const sessions = new Set<http2.ServerHttp2Session>();
   const unary = http.createServer((req, res) => {
     req.resume(); let out: Buffer = Buffer.alloc(0);
+    if (model.authenticated?.() === false) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ code: 'unauthenticated', message: 'Authentication failed: credentials are invalid or expired.' }));
+      return;
+    }
     if (/\/(GetUsableModels|GetDefaultModelForCli)$/.test(req.url || '')) out = field(1, join(field(1, 'regression-fake'), field(3, 'regression-fake'), field(4, 'Regression Fake')));
     if (req.url?.endsWith('/AvailableModels')) out = join(field(1, 'regression-fake'), field(2, join(field(1, 'regression-fake'), field(2, 1), field(5, 1), field(17, 'Regression Fake'))));
     res.writeHead(200, { 'content-type': 'application/proto' }); res.end(out);

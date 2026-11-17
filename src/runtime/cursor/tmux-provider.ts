@@ -1,5 +1,6 @@
 import { isCursorQuestionScreen, assertCursorPromptAvailable } from './questions.js';
 import { readCursorNativeUserPrompts } from './cli-store.js';
+import { CURSOR_AUTH_FAILURE, CursorLoginError, cursorLoginManager } from './login.js';
 import { prepareTextAttachmentPrompt } from '../local-attachments.js';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -38,6 +39,9 @@ const INPUT_READY_PROGRESS_INTERVAL_MS = 10_000;
 const INPUT_SUBMISSION_CONFIRMATION_GRACE_MS = 300;
 
 class CursorInputReadinessTimeoutError extends Error {}
+class CursorAuthenticationError extends Error {}
+class CursorModelUnavailableError extends Error {}
+class CursorPaneExitedError extends Error {}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -177,13 +181,15 @@ export function isCursorInputDraftScreen(screen: string): boolean {
   return !/^(?:Plan, search, build anything|Add a follow-up|Ask anything)[.!]?$/i.test(promptText);
 }
 
-function assertCursorPaneAlive(screen: string): void {
+function assertCursorPaneAlive(screen: string, exited = false): void {
   const authenticationError = cursorAuthenticationScreenError(screen);
-  if (authenticationError) throw new Error(authenticationError);
+  if (authenticationError) throw new CursorAuthenticationError(authenticationError);
   const paneDead = detectRuntimeTmuxPaneDead(screen);
-  if (!paneDead) return;
-  const status = paneDead.status === undefined ? '' : ` (exit ${paneDead.status})`;
-  throw new Error(`Cursor Agent exited${status}.`);
+  if (!paneDead && !exited) return;
+  const modelError = normalizeScreen(screen).split('\n').find(line => /^Cannot use this model:/i.test(line.trim()));
+  if (modelError) throw new CursorModelUnavailableError(`${modelError.trim()} 请检查 Cursor 登录及可用模型；本条消息尚未发送。`);
+  const status = paneDead?.status === undefined ? '' : ` (exit ${paneDead.status})`;
+  throw new CursorPaneExitedError(`Cursor Agent exited${status}.`);
 }
 
 export function withCursorReasoningEffort(model: string, effort?: string): string {
@@ -227,6 +233,7 @@ async function launchCursorTmuxSession(sessionName: string, params: StreamChatPa
     cwd: params.workingDirectory,
     command,
     recreate: true,
+    remainOnExit: true,
   }));
 }
 
@@ -234,6 +241,7 @@ async function waitForCursorInputReady(
   sessionName: string,
   targetPane: string,
   onProgress?: (elapsedMs: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const timeoutMs = positiveIntEnv(
     'CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS',
@@ -249,9 +257,10 @@ async function waitForCursorInputReady(
   let lastProgressAt = startedAt;
   let lastScreen = '';
   while (Date.now() - startedAt <= timeoutMs) {
+    signal?.throwIfAborted();
     const capture = await tmuxCore.capturePane(targetPane, 160);
     lastScreen = capture.screen;
-    assertCursorPaneAlive(lastScreen);
+    assertCursorPaneAlive(lastScreen, await tmuxCore.readPaneDead?.(targetPane));
     assertCursorPromptAvailable(lastScreen);
     if (isCursorInputReadyScreen(lastScreen)) return;
     const now = Date.now();
@@ -475,6 +484,7 @@ export async function ensureCursorTmuxInputSession(
   options: {
     recreate?: boolean;
     onReadinessProgress?: (elapsedMs: number) => void;
+    onAuthentication?: (message: string) => void;
   } = {},
 ): Promise<CursorTmuxInputSession> {
   const sessionName = cursorTmuxSessionName(params.sessionId);
@@ -492,7 +502,28 @@ export async function ensureCursorTmuxInputSession(
   if (launched) await launchCursorTmuxSession(sessionName, params);
   if (launched || inspection.needsReadiness) {
     await tmuxCore.ensureExtendedKeys?.();
-    await waitForCursorInputReady(sessionName, targetPane, options.onReadinessProgress);
+    try {
+      await waitForCursorInputReady(sessionName, targetPane, options.onReadinessProgress, params.abortController?.signal);
+    } catch (error) {
+      let authenticationFailed = error instanceof CursorAuthenticationError;
+      if (error instanceof CursorModelUnavailableError) {
+        // Cursor can hide an expired login behind an empty model list. Probe
+        // only this failure; ordinary starts must not pay another network call.
+        try { await (await import('./models.js')).listCursorAvailableModels(); }
+        catch (probeError) { authenticationFailed = CURSOR_AUTH_FAILURE.test(String(probeError)); }
+      }
+      if (!authenticationFailed || !options.onAuthentication) throw error;
+      const notify = options.onAuthentication;
+      notify('Cursor 登录已失效，正在发起官方登录。本条消息尚未发送，授权后会恢复原会话并提交一次。');
+      await cursorLoginManager.wait(resolveCursorCliExecutable(), url => {
+        notify(`Cursor 登录已失效：[点击登录 Cursor](${url})。完成网页授权后会自动继续；停止按钮可取消等待。`);
+      }, params.abortController?.signal);
+      params.abortController?.signal.throwIfAborted();
+      notify('Cursor 登录完成，正在恢复原会话。');
+      await launchCursorTmuxSession(sessionName, params);
+      // One recovery only. A still-invalid model/login is a real failure.
+      await waitForCursorInputReady(sessionName, targetPane, options.onReadinessProgress, params.abortController?.signal);
+    }
   }
   const discovered = known || (!params.cursorSessionId && !launched ? latestCursorSession(params.workingDirectory) : null);
   transitionRuntimeTmuxInputState(
@@ -513,9 +544,9 @@ export async function ensureCursorTmuxInputSession(
   };
 }
 
-export async function restartCursorTmuxInputSession(params: StreamChatParams): Promise<CursorTmuxInputSession> {
+export async function restartCursorTmuxInputSession(params: StreamChatParams, options: Parameters<typeof ensureCursorTmuxInputSession>[1] = {}): Promise<CursorTmuxInputSession> {
   return withRuntimeTmuxInputOwner('cursor', cursorTmuxSessionName(params.sessionId),
-    () => ensureCursorTmuxInputSession(params, { recreate: true }), { restart: true });
+    () => ensureCursorTmuxInputSession(params, { ...options, recreate: true }), { restart: true });
 }
 
 export interface CursorTurnContext {
@@ -676,7 +707,7 @@ async function waitForCursorTranscript(
       return;
     }
     const capture = await tmuxCore.capturePane(targetPane, 160);
-    assertCursorPaneAlive(capture.screen);
+    assertCursorPaneAlive(capture.screen, await tmuxCore.readPaneDead?.(targetPane));
     await sleep(pollIntervalMs);
   }
 }
@@ -725,7 +756,7 @@ async function pollCursorTranscript(
     // Like the other TUI providers, wait for the native terminal event while
     // the process is alive. Cursor may defer JSONL writes until a checkpoint.
     const capture = await tmuxCore.capturePane(targetPane, 160);
-    assertCursorPaneAlive(capture.screen);
+    assertCursorPaneAlive(capture.screen, await tmuxCore.readPaneDead?.(targetPane));
     await sleep(pollIntervalMs);
   }
 }
@@ -752,6 +783,7 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
           terminalSeen: false,
         };
         let failed = false;
+        let preparedForInput = false;
         let preserveTmuxAfterFailure = false;
         try {
           controller.enqueue(sseEvent('status', {
@@ -760,12 +792,14 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
               : '正在初始化 Cursor tmux 和 Cursor chat；首次打开工作区时可能需要先建立索引。',
           }));
           const prepared = await ensureCursorTmuxInputSession(params, {
+            onAuthentication: content => controller.enqueue(sseEvent('history_item', { type: 'markdown', role: 'system', content })),
             onReadinessProgress: (elapsedMs) => {
               controller.enqueue(sseEvent('status', {
                 reasoning: `Cursor Agent 正在准备工作区；首次打开时通常会建立索引，已等待 ${Math.floor(elapsedMs / 1_000)}s。`,
               }));
             },
           });
+          preparedForInput = true;
           context.sessionId = prepared.sessionId;
           context.cwd = prepared.cwd;
           context.sessionFilePath = prepared.sessionFilePath;
@@ -820,7 +854,10 @@ export function streamCursorTmuxTui(params: StreamChatParams): ReadableStream<st
             return;
           }
           failed = true;
-          preserveTmuxAfterFailure = error instanceof CursorInputReadinessTimeoutError
+          preserveTmuxAfterFailure = (!preparedForInput && (
+            error instanceof CursorAuthenticationError || error instanceof CursorModelUnavailableError
+            || error instanceof CursorPaneExitedError || error instanceof CursorLoginError
+          )) || error instanceof CursorInputReadinessTimeoutError
             || params.abortController?.signal.reason === BRIDGE_SHUTDOWN_REASON;
           const message = error instanceof Error ? error.message : String(error);
           transitionRuntimeTmuxInputState('cursor', sessionName, 'failed', 'Cursor tmux lifecycle failed', { error: message });

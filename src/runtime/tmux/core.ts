@@ -61,6 +61,7 @@ export interface TmuxStartDetachedSessionParams {
   cwd?: string;
   command?: string | string[];
   recreate?: boolean;
+  remainOnExit?: boolean;
 }
 
 export interface TmuxCore {
@@ -135,6 +136,7 @@ function buildNewSessionArgs(params: TmuxStartDetachedSessionParams): string[] {
   if (params.command) {
     args.push('--', ...(Array.isArray(params.command) ? params.command : [params.command]));
   }
+  if (params.remainOnExit) args.push(';', 'set-option', '-w', '-t', `${params.name}:0.0`, 'remain-on-exit', 'on');
   return args;
 }
 
