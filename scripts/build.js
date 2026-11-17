@@ -29,6 +29,8 @@ const common = {
     // Keep large IM SDKs external so global/local npm installs resolve them
     // from node_modules instead of inflating daemon.mjs.
     '@larksuiteoapi/node-sdk',
+    // MathJax carries font data; resvg resolves its platform-specific native binary.
+    'mathjax-full', '@resvg/resvg-js',
     // ws optional native deps
     'bufferutil', 'utf-8-validate',
     // Node.js built-ins

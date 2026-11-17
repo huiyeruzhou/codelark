@@ -49,6 +49,7 @@ import {
 } from './site.js';
 import { fetchFeishuBotIdentity, readFeishuAppCreator, buildFeishuChatOpenLink } from './bot-identity.js';
 import groupAuthorizationImageDataUrl from './assets/group-authorization-image.js';
+import { FeishuCardMath, findMarkdownFormulas, renderedElementHasFormula } from './math.js';
 import {
   BaseChannelAdapter,
   registerAdapterFactory,
@@ -1304,6 +1305,10 @@ function countFeishuCardComponents(value: unknown): number {
   }
   const record = value as Record<string, unknown>;
   let count = typeof record.tag === 'string' && record.tag.trim() ? 1 : 0;
+  if (record.tag === 'markdown' && typeof record.content === 'string') {
+    const formulas = findMarkdownFormulas(record.content).length;
+    if (formulas) count += 3 * formulas + 2; // Reserve the image, alt, text slices and wrapper before pagination.
+  }
   for (const child of Object.values(record)) {
     count += countFeishuCardComponents(child);
   }
@@ -2437,6 +2442,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private running = false;
   private wsClient: lark.WSClient | null = null;
   private restClient: lark.Client | null = null;
+  private readonly cardMath = new FeishuCardMath(async (png) => {
+    const response = await this.withFeishuRequestTimeout<any>('formula', 'im.image.create:formula',
+      () => this.restClient!.im.image.create({ data: { image_type: 'message', image: png } }));
+    assertFeishuApiOk(response, 'im.image.create:formula');
+    const key = response?.data?.image_key || response?.image_key;
+    if (!key) throw new Error('Formula image upload returned no image key');
+    return String(key);
+  });
   private seenMessageIds = new Map<string, boolean>();
   private botOpenId: string | null = null;
   private botId: string | null = null;
@@ -3712,7 +3725,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         toolCallOffset: initialState?.toolCallOffset,
       });
       const cardBody = render.body;
-      const initialCardJson = JSON.stringify(cardBody);
+      const initialCardJson = await this.cardMath.json(JSON.stringify(cardBody));
       const initialPayloadBytes = Buffer.byteLength(initialCardJson, 'utf8');
       console.log('[feishu-adapter] Streaming card create payload:', {
         stream_key: cardKey,
@@ -4298,7 +4311,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           .map((id) => JSON.parse(state.renderedHistoryElementJson[id]!));
       }
       staticCard.config = { wide_screen_mode: true };
-      const staticCardJson = JSON.stringify(staticCard);
+      const staticCardJson = await this.cardMath.json(JSON.stringify(staticCard));
       if (describeStreamingCardPayloadPressure(measureStreamingCardPayload(staticCard))) {
         throw new Error('Rollover source card exceeds payload budget');
       }
@@ -4769,24 +4782,24 @@ export class FeishuAdapter extends BaseChannelAdapter {
           && (batchableUpdates.length > 1 || batchableUpdates.some((item) => item.kind === 'patch'))
           && typeof cardkit.card?.batchUpdate === 'function'
         ) {
-          const actions = batchableUpdates.map((item) => {
+          const actions = await Promise.all(batchableUpdates.map(async (item) => {
             if (item.kind === 'patch') {
               if (!item.partialElement) throw new Error('batch patch partialElement is unavailable');
               return {
                 action: 'partial_update_element',
                 element_id: item.elementId,
-                partial_element: JSON.stringify(item.partialElement),
+                partial_element: await this.cardMath.json(JSON.stringify(item.partialElement)),
               };
             }
             if (!item.element) throw new Error('batch create element is unavailable');
             const action: Record<string, unknown> = {
               action: 'add_elements',
               type: 'append',
-              elements: JSON.stringify([item.element]),
+              elements: await this.cardMath.json(JSON.stringify([item.element])),
             };
             if (item.targetElementId) action.target_element_id = item.targetElementId;
             return action;
-          });
+          }));
           const batchStartedAt = Date.now();
           const result = await this.withFeishuRequestTimeout(streamKey, `card.batchUpdate:${batchableUpdates.map((item) => item.elementId).join(',')}`, () => cardkit.card.batchUpdate({
             path: { card_id: cardId },
@@ -4841,13 +4854,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
         if (update.kind === 'content') {
           const sequence = state.sequence;
+          const previousJson = Object.values(state.renderedHistoryElementJson).find(json => json.includes(`"${update.elementId}"`));
+          const replaceMathElement = findMarkdownFormulas(update.content || '').length > 0
+            || (previousJson && renderedElementHasFormula(JSON.parse(previousJson), update.elementId));
           const backgroundPromise = this.dispatchFeishuRequestInBackground(
             streamKey,
-            `cardElement.content:${update.elementId}`,
-            () => cardkit.cardElement.content({
-              path: { card_id: cardId, element_id: update.elementId },
-              data: { content: update.content || '', sequence },
-            }),
+            `cardElement.${replaceMathElement ? 'update' : 'content'}:${update.elementId}`,
+            async () => replaceMathElement
+              ? cardkit.cardElement.update({
+                path: { card_id: cardId, element_id: update.elementId },
+                data: { element: JSON.stringify(await this.cardMath.element({ tag: 'markdown',
+                  element_id: update.elementId, content: update.content || '', text_align: 'left', text_size: 'normal' })), sequence },
+              })
+              : cardkit.cardElement.content({
+                path: { card_id: cardId, element_id: update.elementId },
+                data: { content: update.content || '', sequence },
+              }),
             {
               onSuccess: () => {
                 const current = this.activeCards.get(streamKey);
@@ -4927,12 +4949,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
           if (!cardkit.cardElement?.create || !update.element) {
             throw new Error('cardElement.create is unavailable');
           }
-          const result = await this.withFeishuRequestTimeout(streamKey, `cardElement.create:${update.elementId}`, () => cardkit.cardElement.create({
+          const result = await this.withFeishuRequestTimeout(streamKey, `cardElement.create:${update.elementId}`, async () => cardkit.cardElement.create({
             path: { card_id: cardId },
             data: {
               type: 'append',
               ...(update.targetElementId ? { target_element_id: update.targetElementId } : {}),
-              elements: JSON.stringify([update.element]),
+              elements: await this.cardMath.json(JSON.stringify([update.element])),
               sequence: state.sequence,
             },
           }));
@@ -4941,10 +4963,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
           if (!cardkit.cardElement?.patch || !update.partialElement) {
             throw new Error('cardElement.patch is unavailable');
           }
-          const result = await this.withFeishuRequestTimeout(streamKey, `cardElement.patch:${update.elementId}`, () => cardkit.cardElement.patch({
+          const result = await this.withFeishuRequestTimeout(streamKey, `cardElement.patch:${update.elementId}`, async () => cardkit.cardElement.patch({
             path: { card_id: cardId, element_id: update.elementId },
             data: {
-              partial_element: JSON.stringify(update.partialElement),
+              partial_element: await this.cardMath.json(JSON.stringify(update.partialElement)),
               sequence: state.sequence,
             },
           }));
@@ -5222,8 +5244,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       const finalRender = this.currentStreamingCardRender(state, finalText,
         state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
-      const finalCardJson = buildFinalCardJson(finalText, state.taskItems, finalRender.tools,
-        footer, status, state.actionRows, state.chatId, state.metadata, finalRender.historyItems);
+      const finalCardJson = await this.cardMath.json(buildFinalCardJson(finalText, state.taskItems, finalRender.tools,
+        footer, status, state.actionRows, state.chatId, state.metadata, finalRender.historyItems));
       const finalBody = JSON.parse(finalCardJson);
       const finalComponentCount = countFeishuCardComponents(finalBody);
       if (finalComponentCount > STREAMING_CARD_COMPONENT_LIMIT
@@ -5698,7 +5720,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         render.historyItems,
       );
       if (state.streamingModeExpired) (render.body.config as Record<string, unknown>).streaming_mode = false;
-      const refreshCardJson = JSON.stringify(render.body);
+      const refreshCardJson = await this.cardMath.json(JSON.stringify(render.body));
       const payloadBytes = Buffer.byteLength(refreshCardJson, 'utf8');
       recordFeishuCardPayloadPerf(state.perf, payloadBytes, render.componentCount);
       console.log('[feishu-adapter] Streaming card full refresh payload:', {
@@ -6750,6 +6772,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   /** All IM output (including streaming and permission cards) shares topic routing. */
   private async createImMessage(chatId: string, msgType: string, content: string, replyToMessageId?: string, uuid?: string) {
+    if (msgType === 'interactive') content = await this.cardMath.json(content);
     const topic = parseTopicConversationId(chatId);
     const targetMessageId = topic?.rootMessageId || replyToMessageId;
     const data = { msg_type: msgType, content, ...(uuid ? { uuid } : {}) };
@@ -6797,7 +6820,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     replyToMessageId?: string,
     updateMessageId?: string,
   ): Promise<SendResult> {
-    const cardContent = buildRichCardContent(card, chatId);
+    const cardContent = await this.cardMath.json(buildRichCardContent(card, chatId));
     console.log('[feishu-adapter] Rich card payload:', {
       chat: chatId,
       title: card.title,
