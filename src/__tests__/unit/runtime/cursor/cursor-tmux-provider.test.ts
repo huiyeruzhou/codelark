@@ -1348,6 +1348,27 @@ describe('Cursor tmux provider helpers', () => {
     assert.deepEqual(sends, [], 'an empty editor waiting for native acceptance must not cause extra Enter presses');
   });
 
+  for (const singleCharacter of [false, true]) it(`clears a retained editor whose parent already considers it empty (${singleCharacter ? 'one character' : 'multiline'})`, async (t) => {
+    let text = singleCharacter ? '字' : '旧提醒\n旧问题';
+    let edited = false;
+    const keys: string[] = [];
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: `→ ${text || 'Add a follow-up'}\nGemini 4 Carbon High`, command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => {
+      for (const action of actions) {
+        assert.equal(action.type, 'key');
+        const key = (action as { key: string }).key; keys.push(key);
+        if (key === 'BSpace' || key === 'Delete') { edited = true; text = text.slice(0, -1); }
+        if (key === 'C-c') { assert.ok(text, 'Ctrl+C must not reach an empty editor'); if (edited) text = ''; }
+        assert.notEqual(key, 'Enter');
+      }
+      return { commands: [] };
+    });
+    await prepareCursorInputConfirmation('isolated-pane', 'new message');
+    assert.equal(text, '');
+    assert.ok(edited);
+    assert.equal(keys.includes('C-c'), !singleCharacter);
+  });
+
   for (const queued of [false, true]) it(`preserves another draft while Cursor is ${queued ? 'queued' : 'running'}`, async (t) => {
     t.mock.method(tmuxCore, 'capturePane', async () => ({ screen:
       `${queued ? '┌─ follow-ups ──┐\n│ earlier input │\n└────┘\n' : ''}→ existing draft    ctrl+c to stop`, command: '' }));

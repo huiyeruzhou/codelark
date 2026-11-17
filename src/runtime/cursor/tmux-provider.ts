@@ -310,11 +310,23 @@ export async function prepareCursorInputConfirmation(targetPane: string, prompt:
   }
   // An IM message replaces the managed editor's idle draft. Pasting into a
   // retained draft concatenates previously submitted instructions with it.
-  // Ctrl+U only deletes one visual line in Cursor; Ctrl+C clears the whole
-  // idle editor. Never use it while running or while follow-ups are queued.
+  // Cursor can retain editor text while its parent input state is already
+  // empty; Ctrl+C alone then does nothing. An editing key synchronizes that
+  // state first. Backspace/Delete cover both ends of the cursor without ever
+  // submitting input. Never use Ctrl+C while running or follow-ups are queued.
   if (draft) {
     assertCursorPaneAlive(screen);
-    await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-c' }]);
+    await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'BSpace' }, { type: 'key', key: 'Delete' }], { delayMs: 100 });
+    await sleep(100);
+    ({ screen } = await tmuxCore.capturePane(targetPane, 160));
+    assertCursorPaneAlive(screen);
+    assertCursorPromptAvailable(screen);
+    if (/ctrl\+c\s+to\s+stop|^\s*┌─ follow-ups\b/im.test(screen)) {
+      throw new CursorInputReadinessTimeoutError('Cursor 已开始运行，本条消息尚未发送；已保留会话。');
+    }
+    if (isCursorInputDraftScreen(screen)) {
+      await tmuxCore.sendActions(targetPane, [{ type: 'key', key: 'C-c' }]);
+    }
     for (let attempt = 0; attempt < 20; attempt++) {
       await sleep(100);
       ({ screen } = await tmuxCore.capturePane(targetPane, 160));
