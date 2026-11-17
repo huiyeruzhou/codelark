@@ -37,6 +37,7 @@ import { tmuxCore, type TmuxSendAction } from '../../../../runtime/tmux/core.js'
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import { readMirrorDeliverableRecords } from '../../../../bridge/mirror/reconcile-core.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
+import { cursorNativeStore } from '../../../helpers/runtime/cursor-native-store.js';
 
 describe('Cursor tmux provider helpers', () => {
   let root: string;
@@ -1318,6 +1319,37 @@ describe('Cursor tmux provider helpers', () => {
 
     assert.ok(interruptOnlyFrames >= 3, 'the test must observe interrupt-only frames before steer becomes safe');
     assert.deepEqual(sends, [[{ type: 'key', key: 'Enter' }]], 'only the safe enter-steer action may be sent');
+  });
+
+  for (const receiveCurrent of [true, false]) it(`waits through a delayed earlier input checkpoint (${receiveCurrent ? 'then confirms current input' : 'cancel without receipt'})`, { timeout: 5_000 }, async (t) => {
+    const prompt = '写个网站，可以选择各个实验';
+    const storePath = path.join(root, 'delayed-receipt.db');
+    const native = cursorNativeStore(storePath);
+    t.after(() => native.close());
+    native.checkpoint([], [], ['historical input']);
+    const sends: TmuxSendAction[][] = [];
+    t.mock.method(tmuxCore, 'capturePane', async () => ({ screen: 'Working\n→ Add a follow-up    ctrl+c to stop', command: '' }));
+    t.mock.method(tmuxCore, 'sendActions', async (_target: string, actions: TmuxSendAction[]) => { sends.push(actions); return { commands: [] }; });
+    const confirmation = await prepareCursorInputConfirmation('isolated-pane', prompt, storePath);
+    assert.equal(confirmation.nativeCount, 0);
+    native.checkpoint([], [], ['historical input', '先找之前的对照组']);
+    const abort = new AbortController();
+    let settled = false;
+    const waiting = waitForCursorInputSubmitted('isolated-pane', undefined, confirmation, abort.signal)
+      .then(() => { settled = true; return undefined; }, error => { settled = true; return error as Error; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 700));
+      assert.equal(settled, false, 'another input receipt must neither reject nor acknowledge this input');
+      if (receiveCurrent) native.checkpoint([], [], ['historical input', '先找之前的对照组', prompt]);
+      else abort.abort();
+      const result = await waiting;
+      if (receiveCurrent) assert.equal(result, undefined);
+      else assert.equal(result?.name, 'AbortError');
+      assert.deepEqual(sends, [], 'a delayed receipt must never trigger resubmission');
+    } finally {
+      abort.abort();
+      await waiting;
+    }
   });
 
   it('does not acknowledge an idle input from an old empty editor or an identical historical message', async (t) => {

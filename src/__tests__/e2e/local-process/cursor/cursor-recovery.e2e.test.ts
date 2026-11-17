@@ -35,7 +35,7 @@ class RecoveryAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'external-terminal'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
+for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'bridge-restart-with-history', 'external-terminal'] as const) it(`real Cursor recovers ${scenario} through the bridge`, { timeout: 75_000 }, async (t) => {
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
     ...(process.env.PATH || '').split(path.delimiter).map(dir => path.join(dir, 'agent')),
@@ -140,7 +140,16 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'externa
       assert.equal(execFileSync(tmux, ['display-message', '-p', '-t', pane, '#{pane_pid}'], { encoding: 'utf8' }).trim(), panePid);
       assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('RECOVERED_DONE')));
       assert.equal(adapter.events.some(e => e.type === 'end' && e.status === 'error'), false);
-    } else if (scenario === 'bridge-restart') {
+    } else if (scenario === 'bridge-restart' || scenario === 'bridge-restart-with-history') {
+      if (scenario === 'bridge-restart-with-history') {
+        const binding = store.listChannelChats().find(b => b.bridgeSessionId === session.id)!;
+        store.updateSession(session.id, { mirror_history_sync: {
+          id: 'old-unanswered-choice', bindingId: binding.id, threadId: nativeSessionId,
+          channelType: binding.channelType, chatId: binding.chatId, status: 'pending',
+          createdAt: new Date(Date.now() - 3 * 24 * 60 * 60_000).toISOString(), noticeAttempted: true,
+          previews: [{ key: 'old-answer', text: 'OLD_HISTORY_MUST_NOT_REPLAY', timestamp: new Date(Date.now() - 4 * 24 * 60 * 60_000).toISOString() }],
+        } });
+      }
       // Production has no debug escape hatch: shutdown must preserve native work.
       delete process.env.CODELARK_DEBUG;
       adapter.enqueueManualInboundMessage(inboundMessage(address, followup, 'running-before-restart'));
@@ -158,6 +167,7 @@ for (const scenario of ['dead-pane', 'manual-mirror', 'bridge-restart', 'externa
       releaseFinal();
       await until(() => adapter.events.some(e => e.streamKey?.startsWith('mirror:') && e.type === 'end'
         && e.status === 'completed' && e.text.includes('RECOVERED_DONE')), 'restarted bridge must mirror the original turn final without resending its input');
+      assert.equal(adapter.events.some(e => e.text.includes('OLD_HISTORY_MUST_NOT_REPLAY')), false);
     } else {
       tmuxCore.injectPromptIntoPane = async (target, prompt, options) => {
         if (prompt === rejected) throw new Error('test: input failed before native acceptance');

@@ -36,6 +36,7 @@ for (const scenario of [
   { name: 'queued input with retained editor text', redrawDelay: 0, interruptOnlyFrames: 0, retainedDraft: true },
   { name: 'two rapid follow-ups', redrawDelay: 0, interruptOnlyFrames: 0, count: 2 },
   { name: 'three rapid identical follow-ups', redrawDelay: 0, interruptOnlyFrames: 0, count: 3 },
+  { name: 'delayed earlier input checkpoint', redrawDelay: 0, interruptOnlyFrames: 0, delayedReceipt: true, count: 2 },
 ]) it(`real Cursor steers into the active fake model run (${scenario.name})`, { timeout: 75_000 }, async (t) => {
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
@@ -47,8 +48,16 @@ for (const scenario of [
   const initial = '先分析当前实现', followup = '<codelark_source>\n来源群聊："回归原群"\n</codelark_source>\n\n加一个 argmax 和 remask 开关，沿用原来的着色逻辑\n保留中文、多行和代码 `x < 2`。';
   const count = 'count' in scenario ? scenario.count! : 1;
   const followups = Array.from({ length: count }, (_, i) => count === 2 ? `${followup}\n第 ${i + 1} 次补充` : followup);
+  const delayedReceipt = 'delayedReceipt' in scenario;
+  let releaseCheckpoint!: () => void;
+  const beforeCheckpoint = new Promise<void>(resolve => { releaseCheckpoint = resolve; });
+  let delayedQueueObserved = false;
   const backend = await startFakeCursorBackend({
-    call(prompt) { assert.equal(prompt, initial); return { waitingForSteer: true }; },
+    call(prompt) {
+      if (delayedReceipt && prompt === '建立已有会话') return { final: 'READY' };
+      assert.equal(prompt, initial);
+      return { waitingForSteer: true, ...(delayedReceipt ? { beforeCheckpoint } : {}) };
+    },
     steer(text) {
       assert.equal(text, followups[backend.steers.length - 1]);
       return backend.steers.length < count ? { waitingForSteer: true } : 'STEER_DONE：同一轮已按补充要求完成';
@@ -87,6 +96,13 @@ for (const scenario of [
   let staleUntil = 0, staleFrames = 0, interruptOnlyFrames = scenario.interruptOnlyFrames, observedInterruptOnlyFrames = 0, passed = false;
   tmuxCore.capturePane = async (...args) => {
     const capture = await originalCapture(...args);
+    if (delayedReceipt && args[0] === pane && /┌─ follow-ups/.test(capture.screen) && !adapter.reactions.includes('initial')) {
+      // Release the earlier receipt only after the follow-up has taken its
+      // native baseline and entered the queue. It is not this input's receipt.
+      delayedQueueObserved = true;
+      releaseCheckpoint();
+      return { ...capture, screen: capture.screen.replace(/enter\s+steer/i, 'enter interrupt and send') };
+    }
     if (args[0] === pane && Date.now() < staleUntil) {
       staleFrames++; return { ...capture, screen: 'Thinking\n→ Add a follow-up    ctrl+c to stop' };
     }
@@ -108,19 +124,26 @@ for (const scenario of [
   };
   try {
     runtime.runAdapterLoop(adapter);
+    if (delayedReceipt) {
+      adapter.enqueueManualInboundMessage(inboundMessage(address, '建立已有会话', 'warmup'));
+      await until(() => finished.includes('warmup'), 'warmup must persist an existing native input baseline');
+    }
     adapter.enqueueManualInboundMessage(inboundMessage(address, initial, 'initial'));
-    await until(() => backend.prompts.length === 1 && adapter.reactions.includes('initial'), 'first model run must be active');
+    await until(() => backend.prompts.length === (delayedReceipt ? 2 : 1) && (delayedReceipt || adapter.reactions.includes('initial')), 'first model run must be active');
+    if (delayedReceipt) assert.ok(!adapter.reactions.includes('initial'), 'earlier input must still await its receipt');
     assert.ok(!finished.includes('initial'));
     staleUntil = Date.now() + scenario.redrawDelay;
     for (const [i, text] of followups.entries()) adapter.enqueueManualInboundMessage(inboundMessage(address, text, `steer-${i}`));
     await until(() => backend.steers.length === count, 'fake model must receive each InjectContextAction during the original run');
     await until(() => finished.includes('initial') && followups.every((_, i) => finished.includes(`steer-${i}`)), 'steered original run and input delivery must complete');
-    assert.equal(backend.prompts.length, 1, 'steer must not create a second model run');
+    assert.equal(backend.prompts.length, delayedReceipt ? 2 : 1, 'steer must not create another model run');
+    if (delayedReceipt) assert.ok(delayedQueueObserved, 'follow-up must precede the earlier checkpoint');
     assert.deepEqual(backend.steers.map(s => s.text), followups);
     assert.equal(new Set(backend.steers.map(s => s.injectionId)).size, count);
     assert.equal(new Set(backend.steers.map(s => s.expectedRunId)).size, 1);
     assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('STEER_DONE')));
     assert.ok(followups.every((_, i) => adapter.reactions.includes(`steer-${i}`)));
+    assert.ok(!adapter.sent.some(message => message.text.includes('tmux 执行失败')), 'input receipt delays must not produce a false failure notice');
     if (scenario.redrawDelay) assert.ok(staleFrames > 0, 'test must exercise stale frames before the queue becomes visible');
     if (scenario.interruptOnlyFrames) {
       assert.equal(observedInterruptOnlyFrames, scenario.interruptOnlyFrames,

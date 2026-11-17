@@ -111,7 +111,7 @@ export interface CreateMirrorRuntimeDeps {
     lifecycle: Pick<CodexAppServerLifecycle, 'recordsAfter' | 'onChange' | 'snapshot'>;
   } | undefined;
   mirrorSource?: MirrorJsonlSource;
-  filterHistorySync?(subscription: BridgeMirrorSubscription, records: BridgeMirrorRecord[], checkpointAt?: string, recovering?: boolean): Promise<{ records: BridgeMirrorRecord[]; hold: boolean; notify?: () => Promise<void> }>;
+  filterHistorySync?(subscription: BridgeMirrorSubscription, records: BridgeMirrorRecord[], checkpointAt?: string, recovering?: boolean): Promise<{ records: BridgeMirrorRecord[]; hold: boolean; discardBefore?: string; notify?: () => Promise<void> }>;
   runtimeLabel?: string;
   nowIso(): string;
   describeUnknownError(error: unknown): string;
@@ -575,6 +575,19 @@ export function createMirrorRuntime(
     if (deps.filterHistorySync) {
       const filtered = await deps.filterHistorySync(subscription, mirrorRecords, checkpointAt, recovering);
       mirrorRecords = filtered.records;
+      if (filtered.discardBefore) {
+        const cutoff = Date.parse(filtered.discardBefore);
+        const keep = (record: { timestamp: string }) => {
+          const timestamp = Date.parse(record.timestamp);
+          return !Number.isFinite(timestamp) || timestamp > cutoff;
+        };
+        if (subscription.pendingTurn && !keep({ timestamp: subscription.pendingTurn.startedAt })) {
+          deps.stopMirrorStreaming(subscription, 'interrupted');
+          subscription.pendingTurn = null;
+        }
+        subscription.pendingDeliveries = subscription.pendingDeliveries.filter(keep);
+        subscription.bufferedRecords = subscription.bufferedRecords.filter(keep);
+      }
       if (filtered.hold) {
         if (subscription.pendingTurn) deps.stopMirrorStreaming(subscription, 'interrupted');
         subscription.pendingTurn = null;
@@ -584,6 +597,7 @@ export function createMirrorRuntime(
         await filtered.notify?.();
         return 'processed';
       }
+      await filtered.notify?.();
     }
     if (mirrorRecords.length > 0) {
       deps.observeSessionHealthRecords(subscription.sessionId, subscription.threadId, mirrorRecords);

@@ -184,11 +184,13 @@ Cursor 的 Beta 设置必须启用 `Allow CLI to access desktop agents`。该能
 
 接收确认不设固定截止时间：已发送的输入在首次 checkpoint 迟到时仍保持原卡等待，定期显示待确认状态；晚到记录确认后点 Get，继续读取同一任务的工具和结果。`CODELARK_CURSOR_TMUX_INPUT_READY_TIMEOUT_MS` 只控制发送前的冷启动 readiness，不再把发送后的慢回执变成任务失败。进程退出、认证失败或用户取消仍结束等待，不能依靠延长超时或重复发送掩盖问题。
 
-草稿确实还在编辑框时最多补一次 Enter；出现 follow-ups 就不能再把残留文字视作未提交草稿。等待确认接受当前任务的 AbortSignal，停止后不继续发键。输入接收与模型完成分别确认，不能要求模型先输出或完成才添加 Get。
+接收确认只比较当前输入正文在提交前后的记录次数。前一条消息可能在后一条等待期间才写入 checkpoint；其他正文的记录增加，既不证明本条已经接收，也不证明收错内容，必须继续等待本条自己的记录。没有本条回执时不能提前点 Get，不能因为总记录数增加就报“输入不一致”。
+
+提交前先确认粘贴内容已显示在编辑框，再按一次 Enter。提交后即使残留草稿，也不能猜测提交键丢失并补交；出现 follow-ups 同样不能把残留文字视作未提交草稿。等待确认接受当前任务的 AbortSignal，停止后不继续发键。输入接收与模型完成分别确认，不能要求模型先输出或完成才添加 Get。
 运行中追加通过独立、按聊天串行的即时输入队列发送，不等待上一轮的 session lock 或 conversation barrier；Cursor CLI 复用已有 TUI 和输出流，Desktop 复用原 observer。首条消息与追加消息都在确认输入提交后添加 Get 表情，未提交或失败时不提前确认。当前 Cursor CLI 的第一次 Enter 会先将运行中输入放入 follow-ups；运行中追加会先记录原生消息基线，输入框清空只是中间状态；等待界面明确出现 `enter steer` 后，只再按一次 Enter 请求加入当前轮，并等待原生会话新增这条用户消息才确认接收。终端重绘延迟时继续观察，不能用一次空输入框快照报告成功。已显示 steering 时等待确认，不重复按键；仅提供 interrupt and send 时明确说明消息还在队列，不主动中断任务。
 
 
-空闲的已知会话同样必须比较提交前后的原生用户消息，不能因为屏幕仍显示空的 `Add a follow-up` 就确认成功：输入框重绘可能落后于粘贴和 Enter。等待原生确认期间，空输入框不触发重复 Enter；确切草稿重新出现时才按既有规则补交。历史中已有相同文字也不能当作这次接收，必须看到新增记录。
+空闲的已知会话同样必须比较提交前后的原生用户消息，不能因为屏幕仍显示空的 `Add a follow-up` 就确认成功：输入框重绘可能落后于粘贴和 Enter。等待原生确认期间，空输入框或重新出现的草稿都不触发重复 Enter。历史中已有相同文字也不能当作这次接收，必须看到新增记录。
 
 配置入口为 Cursor TUI 的 `/config` → General → Steering，对应 `~/.cursor/cli-config.json` 的 `steering: true`；若设置 `CURSOR_CONFIG_DIR`，则读取该目录，其他情况下也尊重 `XDG_CONFIG_HOME/cursor`。配置开启后，还需 Cursor 原生 `agent_context_injection` feature gate、活动 run 和远端 agent 同时可用，界面才会显示 `enter steer`。这时额外 Enter 提交的是带当前 run ID 的 `injectContextAction`，不会主动终止正在执行的回合；仅输入框清空或出现 Get 表情只能证明 Cursor 接收了输入，不能证明模型已经消费。
 
@@ -201,10 +203,10 @@ Cursor 后台 mirror 同样等待正式原生终态，不使用通用的 10 分�
 
 ## 验收用户故事
 
-- **连续追加与延迟上下文**：真实 CLI + fake 模型在同一 native run 接收两条快速不同补充、三条快速相同补充；逐条核对输入、唯一 injection ID 和 Get，不重开 run、不按 Enter 复制队列。空闲续聊用 gate 阻止模型终态与上下文更新，仍须在输入已保存到 turns 时确认接收。
+- **连续追加与延迟上下文**：真实 CLI + fake 模型在同一 native run 接收两条快速不同补充、三条快速相同补充；逐条核对输入、唯一 injection ID 和 Get，不重开 run、不按 Enter 复制队列。另在已有会话中延迟首条输入的 checkpoint，等下一条已进入 follow-ups 后才释放，验证不同消息的晚到回执不导致误报或重复提交。空闲续聊用 gate 阻止模型终态与上下文更新，仍须在输入已保存到 turns 时确认接收。
 
 - **本地 workflow**：Cursor direct transcript turn 与后台 mirror 之间只有一个 terminal owner，不出现空 completed、重复 final 或历史重放。
-- **真实进程**：已登录官方 `agent` 首次启动前注入一次超过旧 30 秒门限的确定性延迟，证明等待期间有可见进度且不会误杀；若首次 Enter 被冷索引阶段吞掉，抓屏确认会在原文仍留在输入框时补发提交。输入被真实 TUI 接收后、第一个 transcript 输出或终态前，必须出现用户可见的“正在运行”状态。随后冷启动一个 UUID，第二轮在清空 bridge 输入状态后复用同一 tmux/UUID，杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。延迟 wrapper 只控制启动时序，实际 TUI、tmux、backend 和 transcript 仍全部来自官方 Cursor Agent。
+- **真实进程**：已登录官方 `agent` 首次启动前注入一次超过旧 30 秒门限的确定性延迟，证明等待期间有可见进度且不会误杀；提交前必须确认粘贴文本已在编辑框显示，不能仅凭 tmux 已接收字节就按 Enter；提交后的旧画面不能触发重发。输入被真实 TUI 接收后、第一个 transcript 输出或终态前，必须出现用户可见的“正在运行”状态。随后冷启动一个 UUID，第二轮在清空 bridge 输入状态后复用同一 tmux/UUID，杀掉 tmux 后仍恢复同一 UUID；三轮都只有一个 completed 且不重放旧文本。延迟 wrapper 只控制启动时序，实际 TUI、tmux、backend 和 transcript 仍全部来自官方 Cursor Agent。
 - **真实飞书**：隔离 bridge 创建或复用测试群并邀请当前用户；用户身份发送 `/runtime cursor`、`/p tmux` 和普通消息。冷启动场景还要在 `/p tmux` 完成前读到索引原因提示；随后用户身份回读最终卡片、Cursor UUID/transcript/provider output path，测试群保留到用户确认。`runtime-message::cursor-tmux` 还会读取隔离 bridge 输出的最终 CardKit checkpoint，要求卡片具有共享会话标题、`tmux` header tag、`cursor`/model metadata 区域和统一 history 区域；thinking summary 必须作为独立的引用样式历史项出现在最终正文之前，不能丢失、混入正文或误占卡片标题。只在历史回显中找到 prompt，或者只看到正确回答文本，都不算 UI 验收通过。
 
 ## Slash 命令

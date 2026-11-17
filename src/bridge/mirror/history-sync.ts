@@ -115,8 +115,22 @@ export function createMirrorHistorySyncController(deps: {
       channelType: subscription.channelType, chatId: subscription.chatId,
       status: 'pending', createdAt: new Date(nowMs).toISOString(), noticeAttempted: false, previews: [],
     };
+    // A history decision owns only the backlog present when it was created.
+    // New native turns must keep flowing, including after a Bridge restart.
+    // Match the same fresh-output window used by needsMirrorHistoryChoice;
+    // CLI turn timestamps have only minute precision.
+    const cutoff = Date.parse(pending.createdAt) - RECENT_GRACE_MS;
+    const isNew = (record: { timestamp: string }) => {
+      const timestamp = Date.parse(record.timestamp);
+      // Missing time cannot prove an already-checkpointed delta is old history.
+      return !Number.isFinite(timestamp) || timestamp > cutoff;
+    };
+    const history = backlog.filter(record => !isNew(record));
+    const liveRecords = records.filter(isNew);
+    const livePending = subscription.bufferedRecords.some(isNew) || subscription.pendingDeliveries.some(isNew)
+      || Boolean(subscription.pendingTurn && isNew({ timestamp: subscription.pendingTurn.startedAt }));
     const shouldNotify = !pending.noticeAttempted;
-    const next = { ...pending, previews: updatePreviews(pending.previews, backlog), noticeAttempted: true };
+    const next = { ...pending, previews: updatePreviews(pending.previews.filter(preview => !isNew(preview)), history), noticeAttempted: true };
     if (JSON.stringify(session.mirror_history_sync) !== JSON.stringify(next)) {
       store.updateSession(subscription.sessionId, { mirror_history_sync: next }, { touch: false });
     }
@@ -124,8 +138,8 @@ export function createMirrorHistorySyncController(deps: {
     // restart or an ambiguous send timeout must not replay the backlog/card.
     deps.checkpoint(subscription);
     return {
-      records: [], hold: true,
-      // The runtime stops any old stream and clears its queue before sending.
+      records: liveRecords, hold: !liveRecords.length && !livePending, discardBefore: new Date(cutoff).toISOString(),
+      // The runtime removes only historical streams/queues before sending the notice.
       notify: shouldNotify ? async () => {
         try { await deps.notify(subscription, buildMirrorHistoryChoice(next, session.id)); }
         catch (error) { console.warn('[mirror-history-sync] Choice delivery failed; /sync-history can reopen it:', error); }

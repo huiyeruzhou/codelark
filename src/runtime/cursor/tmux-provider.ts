@@ -280,7 +280,6 @@ interface CursorInputConfirmation {
   nativeCount?: number;
   screenCount: number;
   running: boolean;
-  nativeTotal?: number;
 }
 
 const compactInput = (text: string) => normalizeScreen(text).replace(/[│\s]/gu, '');
@@ -339,7 +338,7 @@ export async function prepareCursorInputConfirmation(targetPane: string, prompt:
       throw new CursorInputReadinessTimeoutError('Cursor 输入框仍有旧草稿，本条消息尚未发送；已保留会话，请用 `/tmux-screen` 查看。');
     }
   }
-  return { prompt, storePath, nativeCount: nativePromptCount(storePath, prompt), nativeTotal: storePath ? readCursorNativeUserPrompts(storePath)?.length : undefined, screenCount: screenPromptCount(screen, prompt), running: /ctrl\+c\s+to\s+stop/i.test(screen) };
+  return { prompt, storePath, nativeCount: nativePromptCount(storePath, prompt), screenCount: screenPromptCount(screen, prompt), running: /ctrl\+c\s+to\s+stop/i.test(screen) };
 }
 
 /** tmux accepting bytes does not mean Cursor has consumed the paste. */
@@ -402,10 +401,9 @@ export async function waitForCursorInputSubmitted(
     const accepted = confirmation && (confirmation.nativeCount !== undefined
       ? (nativePromptCount(confirmation.storePath, confirmation.prompt) || 0) > confirmation.nativeCount
       : screenPromptCount(capture.screen, confirmation.prompt) > confirmation.screenCount);
-    if (!accepted && confirmation?.nativeTotal !== undefined && confirmation.storePath
-      && (readCursorNativeUserPrompts(confirmation.storePath)?.length || 0) > confirmation.nativeTotal) {
-      throw new CursorInputReadinessTimeoutError('Cursor 接收的输入与本条消息不一致；已停止自动补交，保留会话和草稿。');
-    }
+    // Another input can checkpoint while this follow-up still waits in the
+    // queue. Only this prompt's new receipt confirms it; a global count change
+    // proves neither a mismatch nor acceptance and never authorizes a retry.
     const screen = normalizeScreen(capture.screen);
     const queued = /^\s*┌─ follow-ups\b/im.test(screen);
     // Cursor can retain the submitted text below a queue while repainting.

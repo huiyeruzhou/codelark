@@ -33,7 +33,7 @@ function fields(bytes: Uint8Array): Map<number, Buffer[]> {
 const get = (bytes: Uint8Array, no: number) => fields(bytes).get(no)?.[0] || Buffer.alloc(0);
 export interface FakeCursorAnswer { questionId: string; selectedOptionIds: string[]; freeformText: string }
 export interface FakeCursorModel {
-  call(prompt: string): CursorPendingQuestion | { waitingForSteer: true } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean };
+  call(prompt: string): CursorPendingQuestion | { waitingForSteer: true; beforeCheckpoint?: Promise<void> } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean };
   continue?(answers: FakeCursorAnswer[]): string;
   steer?(text: string): string | { waitingForSteer: true };
 }
@@ -117,9 +117,11 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
               continue;
             }
             if ('waitingForSteer' in response) {
-              persist([{ role: 'user', content: [{ type: 'text', text: prompt }] }], [], () => {
+              const start = () => persist([{ role: 'user', content: [{ type: 'text', text: prompt }] }], [], () => {
                 send(field(1, field(4, field(1, 'FIRST_STEP_RUNNING'))));
               });
+              if (response.beforeCheckpoint) void response.beforeCheckpoint.then(start).catch(error => errors.push(String(error)));
+              else start();
               continue;
             }
             request = response;

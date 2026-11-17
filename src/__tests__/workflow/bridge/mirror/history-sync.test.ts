@@ -75,6 +75,34 @@ it('persists the cursor before notifying; restart and duplicate polls cannot rep
   assert.ok(f.command('').richCard, 'manual /sync-history can reopen the choice');
 });
 
+it('keeps an unanswered history choice scoped to old turns across restart while new output and retries continue', async () => {
+  const f = fixture();
+  await (await f.gate(f.subscription, [reply(1)])).notify?.();
+  f.restart();
+  f.setNow(NOW + 3 * 24 * 60 * 60_000);
+  const fresh = reply(2, 3 * 24 * 60 * 60_000 - 60_000);
+  const mixed = await f.gate(f.subscription, [reply(1), fresh], stamp(0), true);
+  assert.equal(mixed.hold, false, 'an old unanswered choice must not swallow the recovered current reply');
+  assert.deepEqual(mixed.records, [fresh]);
+  assert.equal(f.state().status, 'pending', 'do not choose a history option on the user’s behalf');
+  assert.deepEqual(f.state().previews.map(p => p.text), ['回答 1']);
+  f.subscription.pendingDeliveries = [{ streamKey: 'new-turn', signature: fresh.signature,
+    text: fresh.content, timestamp: fresh.timestamp, status: 'completed', userText: null }];
+  assert.equal((await f.gate(f.subscription, [], stamp(0))).hold, false, 'a failed fresh delivery must remain retryable');
+  assert.equal(f.notices.length, 1);
+});
+
+it('separates fresh minute-precision output from an old backlog in the same poll', async () => {
+  const f = fixture();
+  const fresh = reply(2, -30_000);
+  const mixed = await f.gate(f.subscription, [reply(1), fresh]);
+  assert.equal(mixed.hold, false);
+  assert.deepEqual(mixed.records, [fresh]);
+  assert.deepEqual(f.state().previews.map(p => p.text), ['回答 1']);
+  await mixed.notify?.();
+  assert.equal(f.notices.length, 1);
+});
+
 for (const count of [1, 3, 20]) {
   it(`returns only ${count} bounded replies, deduplicates revisions, and makes callback retries idempotent`, async () => {
     const f = fixture();
@@ -292,13 +320,14 @@ for (const sourceKind of ['snapshot', 'buffer', 'retry'] as const) {
       assert.equal(noticeCount, 1);
       assert.deepEqual(deliveries, []);
       assert.deepEqual(streamed, []);
-      f.command('skip');
+      // Leaving the historical choice unanswered must not pause future turns.
       const fresh = reply(61, 1000);
       records = [...records, { ...fresh, signature: 'new-start', type: 'task_started', content: '' }, fresh,
         { ...fresh, signature: 'new-end', type: 'task_complete' }];
       fs.appendFileSync(file, 'changed');
       await runtime.reconcileMirrorSubscriptions();
       assert.deepEqual(deliveries, ['回答 61']);
+      assert.equal(f.state().status, 'pending');
       assert.equal(noticeCount, 1);
       assert.ok(streamed.length > 0);
     } finally {
