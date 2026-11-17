@@ -5,6 +5,56 @@ import { FeishuCardMath, findMarkdownFormulas } from '../../../../channels/feish
 import { renderMathPng } from '../../../../channels/feishu/math-renderer.js';
 import { inlineMathMarkdown } from '../../../../channels/feishu/math-inline.js';
 import MarkdownIt from 'markdown-it';
+import { splitMathMarkdown } from '../../../../channels/feishu/math-emphasis.js';
+
+it('closes and reopens real emphasis at image boundaries without leaving empty markers', () => {
+  const formula = String.raw`$\frac{a}{b}$`;
+  const markdown = new MarkdownIt();
+  for (const [source, expected] of [
+    [`**前 ${formula} 后**`, ['<strong>前</strong>', '<strong>后</strong>']],
+    [`*前 ${formula} 后*`, ['<em>前</em>', '<em>后</em>']],
+    [`___前 ${formula} 后___`, ['<em><strong>前</strong></em>', '<em><strong>后</strong></em>']],
+    [`**粗 *斜 ${formula} 继续* 尾**`, ['<strong>粗 <em>斜</em></strong>', '<strong><em>继续</em> 尾</strong>']],
+    [`**${formula}**尾`, ['', '尾']],
+    [`**前${formula}**`, ['<strong>前</strong>', '']],
+    [`**${formula} ${formula}**`, ['', '', '']],
+    [`**前 \\*星号 ${formula} 后**`, ['<strong>前 *星号</strong>', '<strong>后</strong>']],
+    [`**前 \`*代码*\` ${formula} 后**`, ['<strong>前 <code>*代码*</code></strong>', '<strong>后</strong>']],
+  ] as Array<[string, string[]]>) {
+    const slices = splitMathMarkdown(source, findMarkdownFormulas(source));
+    assert.deepEqual(slices.map(s => markdown.renderInline(s.trim())), expected, source);
+  }
+});
+
+it('keeps block boundaries, literal markers, links and multiline quote/list emphasis intact', () => {
+  const formula = String.raw`$\frac{a}{b}$`;
+  for (const [source, expected] of [
+    [`* item **前 ${formula} 后**`, ['* item **前** ', ' **后**']],
+    [`> **前\n> 中 ${formula} 后**`, ['> **前\n> 中** ', ' **后**']],
+    [`> **前\r\n> 中 ${formula} 后**`, ['> **前\r\n> 中** ', ' **后**']],
+    [`**前\n\n${formula} 后**`, ['**前\n\n', ' 后**']],
+    [`a_b_c \\*${formula}\\* [链接](https://x.test/a_b)`, ['a_b_c \\*', '\\* [链接](https://x.test/a_b)']],
+    [`**[链接 *标记*](https://x.test/a_b) ${formula} 后**`, ['**[链接 *标记*](https://x.test/a_b)** ', ' **后**']],
+  ] as Array<[string, string[]]>) {
+    assert.deepEqual(splitMathMarkdown(source, findMarkdownFormulas(source)), expected, source);
+  }
+});
+
+it('renders every valid formula beyond the old 32-image cutoff and preserves source text', async () => {
+  const math = new FeishuCardMath(async () => 'img_formula');
+  const source = { tag: 'markdown', content: Array.from({ length: 59 }, (_, i) => `**第${i + 1}项 $\\frac{a}{b}$ 解释**`).join('\n\n') };
+  const original = structuredClone(source);
+  const result = await math.element(source);
+  const elements: any[] = (result.columns as any[])[0].elements;
+  assert.equal(elements.filter(e => e.tag === 'img').length, 59);
+  assert.doesNotMatch(JSON.stringify(result), /```latex/);
+  assert.deepEqual(source, original);
+  for (const element of elements.filter(e => e.tag === 'markdown')) {
+    const tokens = new MarkdownIt().parseInline(element.content, {})[0].children!;
+    assert.ok(tokens.some(t => t.type === 'strong_open'));
+    assert.ok(tokens.every(t => t.type !== 'text' || !t.content.includes('*')), 'no leaked emphasis markers');
+  }
+});
 
 it('keeps simple math readable inline without losing scripts or Greek letter variants', () => {
   const markdown = new MarkdownIt({ html: true });

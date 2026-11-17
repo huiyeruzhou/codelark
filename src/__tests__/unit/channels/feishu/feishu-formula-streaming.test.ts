@@ -47,7 +47,7 @@ for (const mode of ['text', 'history', 'summary'] as const) {
         const element = JSON.parse(c.payload.data.element);
         return element.tag === 'markdown' && element.content.includes('原句 E=mc² 与 xᵢ 继续。');
       }));
-      const complete = String.raw`结果 \[\frac{a}{b}\] 解释仍可复制`;
+      const complete = String.raw`**结果 *\[\frac{a}{b}\] 解释仍可复制***`;
       update(complete); await flush();
       assert.equal(uploads, 1);
       const replacements = calls.filter(c => c.kind === 'element-update').map(c => JSON.parse(c.payload.data.element));
@@ -70,6 +70,8 @@ for (const mode of ['text', 'history', 'summary'] as const) {
       assert.match(JSON.stringify(final), /img_v3_formula/);
       assert.match(JSON.stringify(final), /\d+px \d+px/);
       assert.match(JSON.stringify(final), /解释仍可复制/);
+      assert.match(JSON.stringify(final), /\*\*结果\*\*/);
+      assert.match(JSON.stringify(final), /\*\*\*解释仍可复制\*\*\*/);
       assert.match(JSON.stringify(final), /简单公式：x² x²/);
       assert.doesNotMatch(JSON.stringify(final), /\$x\^2\$/);
     } finally { await adapter.stop(); }

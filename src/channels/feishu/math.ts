@@ -1,6 +1,7 @@
 import { maskMarkdownCode } from '../../shared/markdown/code-mask.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { inlineMathMarkdown } from './math-inline.js';
+import { splitMathMarkdown } from './math-emphasis.js';
 
 export interface MarkdownFormula { start: number; end: number; tex: string; display: boolean }
 
@@ -70,32 +71,38 @@ export class FeishuCardMath {
 
   async element(node: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (node.tag !== 'markdown' || typeof node.content !== 'string') return node;
-    const text = node.content;
-    const formulas = findMarkdownFormulas(text);
-    if (!formulas.length) return node;
+    const source = node.content;
+    const found = findMarkdownFormulas(source);
+    if (!found.length) return node;
+    let text = '', offset = 0;
+    const formulas: MarkdownFormula[] = [];
+    for (const formula of found) {
+      text += source.slice(offset, formula.start);
+      const inline = formulaInlineMarkdown(formula);
+      if (inline !== null) text += inline;
+      else {
+        const start = text.length;
+        text += source.slice(formula.start, formula.end);
+        formulas.push({ ...formula, start, end: text.length });
+      }
+      offset = formula.end;
+    }
+    text += source.slice(offset);
+    if (!formulas.length) return { ...node, content: text };
+    const slices = splitMathMarkdown(text, formulas);
     const elements: Record<string, unknown>[] = [];
     const appendText = (content: string) => {
       if (content.trim()) elements.push({ tag: 'markdown', content: content.trim(), text_size: node.text_size || 'normal' });
     };
-    let offset = 0;
-    let pendingText = '';
-    let imageCount = 0;
-    for (const formula of formulas) {
-      pendingText += text.slice(offset, formula.start);
-      offset = formula.end;
-      const inline = formulaInlineMarkdown(formula);
-      if (inline !== null) { pendingText += inline; continue; }
-      appendText(pendingText);
-      pendingText = '';
-      const image = imageCount++ < 32 ? await this.image(formula.tex, formula.display) : null;
+    for (const [index, formula] of formulas.entries()) {
+      appendText(slices[index]);
+      const image = await this.image(formula.tex, formula.display);
       if (image) elements.push({ tag: 'img', img_key: image.key,
         alt: { tag: 'plain_text', content: formula.tex },
         scale_type: 'crop_center', size: `${image.width}px ${image.height}px`, preview: true });
       else appendText(buildFencedCodeBlock(formula.tex, 'latex'));
     }
-    pendingText += text.slice(offset);
-    if (!imageCount) return { ...node, content: pendingText };
-    appendText(pendingText);
+    appendText(slices.at(-1)!);
     return { tag: 'column_set', flex_mode: 'none', ...(node.element_id ? { element_id: node.element_id } : {}),
       columns: [{ tag: 'column', width: 'weighted', weight: 1, vertical_spacing: '4px', elements }] };
   }
