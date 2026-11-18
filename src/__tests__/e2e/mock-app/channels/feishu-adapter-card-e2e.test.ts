@@ -626,10 +626,10 @@ describe('feishu adapter card e2e', () => {
       assert.equal(scriptedModel.emittedSteps.length, 10);
       assert.equal(scriptedModel.lastError, null);
       const markdown = recordedStreamingCardMarkdown(calls);
-      assert.match(markdown, /读取 `src\/app\.ts`/);
+      assert.match(markdown, /读取 `app\.ts`/);
       assert.match(markdown, /搜索 `oldValue`/);
-      assert.match(markdown, /修改 `src\/app\.ts`/);
-      assert.match(markdown, /```typescript\n\*\*\* Begin Patch[\s\S]*\*\*\* End Patch\n```/);
+      assert.match(markdown, /修改 `app\.ts`/);
+      assert.match(markdown, /```typescript\n\*\*\* Begin Patch\n\*\*\* Update File: src\/app\.ts[\s\S]*\*\*\* End Patch\n```/);
       assert.match(markdown, /运行 `npm test`/);
       assert.doesNotMatch(markdown, /73 tests passed/);
       assert.doesNotMatch(markdown, /Script completed|Wall time|\bSuccess\b|\bCompleted\b|长输出/);
@@ -677,7 +677,7 @@ describe('feishu adapter card e2e', () => {
       assert.equal(model.lastError, null);
       const creates = calls.filter(c => c.kind === 'card-create');
       assert.ok(creates.length >= 3, 'the interim snapshot must actually cross page boundaries');
-      assert.match(recordedStreamingCardMarkdown(calls), /读取 `src\/app.ts`/);
+      assert.match(recordedStreamingCardMarkdown(calls), /读取 `app\.ts`/);
       const final = calls.filter(c => c.kind === 'card-update').at(-1)!;
       const body = JSON.parse(final.payload.data.card.data);
       const markdown = findCardElementsByTag(body, 'markdown').map(e => e.content || '').join('\n');

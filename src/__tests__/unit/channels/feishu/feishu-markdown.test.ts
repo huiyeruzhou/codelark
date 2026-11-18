@@ -422,7 +422,7 @@ describe('buildToolProgressMarkdown', () => {
     ]);
 
     assert.doesNotMatch(rendered, /- update: `src\/a\.ts`/);
-    assert.match(rendered, /修改 `src\/a\.ts`/);
+    assert.match(rendered, /修改 `a\.ts`/);
     assert.match(rendered, /```typescript\n\*\*\* Begin Patch\n\*\*\* Update File: src\/a\.ts/);
     assert.doesNotMatch(rendered, new RegExp(absolutePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(rendered, /workspace\/project/);

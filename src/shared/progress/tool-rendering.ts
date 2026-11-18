@@ -1,10 +1,10 @@
 import type { ToolCallDetail, ToolCallInfo } from '../../domain/progress.js';
-import { buildFencedCodeBlock } from '../markdown/fence.js';
 import {
   buildToolCallDetailFromInput,
   buildToolCallDetailFromOutput,
   mergeToolCallDetail,
   renderToolCallDetailMarkdown,
+  renderStandardPreview,
 } from './tool-call-details.js';
 import { getToolPresentation, type ToolPresentation } from './tool-presentation.js';
 
@@ -75,11 +75,11 @@ function buildFallbackToolDetailMarkdown(tool: ToolCallInfo): string {
   } else {
     if (!isEditTool && tool.input && tool.input.trim()) {
       const language = isBashTool ? 'bash' : isPatchTool ? 'diff' : 'json';
-      details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), language)}`);
+      details.push(`输入：\n${renderStandardPreview(tool.input, language)}`);
     }
   }
   if (tool.showOutput && typeof tool.output === 'string') {
-    details.push(`输出：\n${tool.output ? buildFencedCodeBlock(tool.output, 'text') : '（无文本输出）'}`);
+    details.push(`输出：\n${tool.output ? renderStandardPreview(tool.output, 'text') : '（无文本输出）'}`);
   }
   return details.join('\n\n');
 }

@@ -8,6 +8,7 @@ import { createTextPreview, type TextPreviewOptions } from '../text-preview.js';
 
 export const TOOL_DETAIL_PREVIEW_CHAR_LIMIT = 4_000;
 export const TOOL_DETAIL_PREVIEW_LINE_LIMIT = 80;
+export const TOOL_DETAIL_PREVIEW_BYTE_LIMIT = 4_000;
 export const PATCH_DETAIL_PREVIEW_CHAR_LIMIT = 8_000;
 export const PATCH_DETAIL_PREVIEW_LINE_LIMIT = 160;
 export const EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT = TOOL_DETAIL_PREVIEW_CHAR_LIMIT;
@@ -496,10 +497,14 @@ export function buildToolCallDetailFromOutput(
   }
   if (existing?.kind === 'file_search' || isSearchTool(toolName)) {
     const outputText = sanitizeToolText(raw);
-    const matchCount = outputText ? outputText.split(/\r?\n/).filter(Boolean).length : 0;
+    const counts = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    const matchCount = typeof counts?.totalMatches === 'number' && Number.isInteger(counts.totalMatches) && counts.totalMatches >= 0
+      ? counts.totalMatches
+      : counts && 'totalFiles' in counts ? undefined
+        : outputText ? outputText.split(/\r?\n/).filter(Boolean).length : undefined;
     return {
       kind: 'file_search',
-      ...(matchCount > 0 ? { matchCount } : {}),
+      ...(matchCount !== undefined ? { matchCount } : {}),
       ...(outputText ? { output: outputText } : {}),
     };
   }
@@ -576,10 +581,11 @@ function renderPreview(value: string, language: string, options: TextPreviewOpti
   return [buildFencedCodeBlock(preview.text, language), note ? `_${note}_` : ''].filter(Boolean).join('\n\n');
 }
 
-function renderStandardPreview(value: string, language: string): string {
+export function renderStandardPreview(value: string, language: string): string {
   return renderPreview(value, language, {
     maxChars: TOOL_DETAIL_PREVIEW_CHAR_LIMIT,
     maxLines: TOOL_DETAIL_PREVIEW_LINE_LIMIT,
+    maxBytes: TOOL_DETAIL_PREVIEW_BYTE_LIMIT,
   });
 }
 
@@ -788,7 +794,7 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
     return sections.join('\n\n');
   }
   if (detail.kind === 'file_change') {
-    if (!detail.before && !detail.after && !detail.content && !detail.output && detail.path) sections.push(`path: \`${detail.path}\``);
+    if (detail.path) sections.push(`path: \`${detail.path}\``);
     if (detail.mode) sections.push(`mode: \`${detail.mode}\``);
     if (detail.before) sections.push(`before:\n${renderStandardPreview(detail.before, 'text')}`);
     if (detail.after) sections.push(`after:\n${renderStandardPreview(detail.after, 'text')}`);

@@ -3670,7 +3670,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
     const tools = Array.from({ length: 17 }, (_, index) => {
       const toolNumber = index + 1;
-      const filler = Array.from({ length: 18 }, (__, lineIndex) => `+tool-${toolNumber}-line-${lineIndex + 1}-${'x'.repeat(22)}`).join('\n');
+      const filler = Array.from({ length: 32 }, (__, lineIndex) => `+tool-${toolNumber}-line-${lineIndex + 1}-${'x'.repeat(22)}`).join('\n');
       return {
         id: `tool-${toolNumber}`,
         name: 'apply_patch',
@@ -3715,8 +3715,8 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     const sourceCardJson = String(cardUpdates.at(-1)?.data?.card?.data || '');
     const continuationCardJson = JSON.stringify(createdCards.at(-1));
-    assert.ok(Buffer.byteLength(sourceCardJson, 'utf8') < 18_000);
-    assert.ok(Buffer.byteLength(continuationCardJson, 'utf8') < 18_000);
+    assert.ok(Buffer.byteLength(sourceCardJson, 'utf8') < 28_000);
+    assert.ok(Buffer.byteLength(continuationCardJson, 'utf8') < 28_000);
     assert.match(sourceCardJson, /TOOL_1_END[\s\S]*\*\*\* End Patch/);
     assert.doesNotMatch(sourceCardJson, new RegExp(`TOOL_${tools.length}_END`));
     assert.doesNotMatch(continuationCardJson, /TOOL_1_END/);
@@ -4245,7 +4245,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.doesNotMatch(JSON.stringify(createdCards.at(-1)), /tool_12/);
   });
 
-  it('opens a continuation card immediately when Feishu returns 200850 for a history append', async () => {
+  it('opens a continuation card immediately when Feishu returns 200860 for a history append', async () => {
     const createdCards: Array<Record<string, any>> = [];
     const settingsCalls: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
@@ -4292,7 +4292,7 @@ describe('feishu-adapter structured streaming regions', () => {
             create: async (payload: Record<string, any>) => {
               elementCreates.push(payload);
               if (String(payload.data?.elements || '').includes('stream_txt_2')) {
-                return { code: 200850, msg: 'card payload exceeds Feishu limit' };
+                return { code: 200860, msg: 'card payload exceeds Feishu limit' };
               }
               return {};
             },
@@ -4325,7 +4325,7 @@ describe('feishu-adapter structured streaming regions', () => {
     }, {
       type: 'markdown' as const,
       role: 'assistant' as const,
-      content: '当前输出会触发 200850',
+      content: '当前输出会触发 200860',
     }], 'stream-1');
     await waitForCondition(() => createdCards.length >= 2, 1000);
 
@@ -4336,9 +4336,9 @@ describe('feishu-adapter structured streaming regions', () => {
     const rolloverStaticJson = cardUpdates[0]?.data?.card?.data || '';
     assert.notEqual(JSON.parse(rolloverStaticJson).config?.streaming_mode, true);
     assert.match(rolloverStaticJson, /上一轮输出/);
-    assert.doesNotMatch(rolloverStaticJson, /当前输出会触发 200850/);
+    assert.doesNotMatch(rolloverStaticJson, /当前输出会触发 200860/);
     const continuationJson = JSON.stringify(createdCards.at(-1));
-    assert.match(continuationJson, /当前输出会触发 200850/);
+    assert.match(continuationJson, /当前输出会触发 200860/);
     assert.doesNotMatch(continuationJson, /上一轮输出/);
     const activeState = (adapter as any).activeCards.get('stream-1');
     assert.equal(activeState.cardId, 'card-2');
@@ -4408,8 +4408,8 @@ describe('feishu-adapter structured streaming regions', () => {
     };
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
-    const firstLargeGroup = `上一组 ${'a'.repeat(9_500)}`;
-    const currentLargeGroup = `当前组 ${'b'.repeat(9_500)}`;
+    const firstLargeGroup = `上一组 ${'a'.repeat(14_500)}`;
+    const currentLargeGroup = `当前组 ${'b'.repeat(14_500)}`;
     adapter.onStreamHistory('chat-1', [{
       type: 'markdown' as const,
       role: 'assistant' as const,
@@ -4434,9 +4434,11 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     const rolloverStaticJson = cardUpdates[0]?.data?.card?.data || '';
     assert.notEqual(JSON.parse(rolloverStaticJson).config?.streaming_mode, true);
+    assert.ok(Buffer.byteLength(rolloverStaticJson, 'utf8') < 28_000);
     assert.match(rolloverStaticJson, /上一组/);
     assert.doesNotMatch(rolloverStaticJson, /当前组/);
     const continuationJson = JSON.stringify(createdCards.at(-1));
+    assert.ok(Buffer.byteLength(continuationJson, 'utf8') < 28_000);
     assert.match(continuationJson, /当前组/);
     assert.doesNotMatch(continuationJson, /上一组/);
     const activeState = (adapter as any).activeCards.get('stream-1');

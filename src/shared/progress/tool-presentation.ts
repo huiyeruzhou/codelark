@@ -42,6 +42,10 @@ function inlineCode(value: string): string {
   return `\`${truncateInline(value, 88).replace(/`/g, '′')}\``;
 }
 
+function fileTitle(value: string): string {
+  return inlineCode(value.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) || value);
+}
+
 function inlineCodeExact(value: string): string {
   return `\`${String(value || '').replace(/\s+/g, ' ').trim().replace(/`/g, '′')}\``;
 }
@@ -155,7 +159,7 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
   if (detail.kind === 'patch_apply') {
     const files = detail.files || [];
     const paths = files.map((file) => file.toPath || file.path).filter(Boolean);
-    const singleFile = paths.length === 1 ? inlineCodeExact(paths[0] || '') : '';
+    const singleFile = paths.length === 1 ? fileTitle(paths[0] || '') : '';
     const singleFilePrimary = `🛠️ 修改 ${singleFile}`;
     const target = paths.length === 1 && fitsInlineBudget(singleFilePrimary, TITLE_PRIMARY_CHAR_LIMIT)
       ? singleFile
@@ -171,7 +175,7 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
     }
     const lines = outputLineCount(detail);
     if (lines) meta.push(`输出 ${lines} 行`);
-    return { action: '读取', target: detail.path ? inlineCode(detail.path) : '文件', meta };
+    return { action: '读取', target: detail.path ? fileTitle(detail.path) : '文件', meta };
   }
   if (detail.kind === 'file_search') {
     if (detail.path) meta.push(`路径 ${inlineCode(detail.path)}`);
@@ -181,7 +185,7 @@ function presentationFromDetail(tool: ToolCallInfo): { action: string; target: s
   if (detail.kind === 'file_change') {
     return {
       action: detail.operation === 'write' ? '写入' : '修改',
-      target: detail.path ? inlineCode(detail.path) : '文件',
+      target: detail.path ? fileTitle(detail.path) : '文件',
       meta,
     };
   }

@@ -654,6 +654,30 @@ permission_mode = "plan"
     assert.match(messages[1]?.content || '', /"type":"tool_use"/);
     assert.match(messages[1]?.content || '', /"type":"tool_result"/);
   });
+
+  it('fills a completed native diff into the existing tool without duplicating the call or replaying new text', async () => {
+    resetBridgeTestState();
+    const patch={patch:'*** Begin Patch\n*** Update File: src/example.ts\n@@\n-before\n+after\n*** End Patch',workdir:'/test'};
+    const llm:LLMProvider={streamChat(){return new ReadableStream({start(controller){
+      controller.enqueue(sseEvent('tool_use',{id:'edit-one',name:'Edit',input:{path:'/test/src/example.ts'}}));
+      controller.enqueue(sseEvent('tool_result',{tool_use_id:'edit-one',name:'apply_patch',input:patch,content:'',is_error:false,show_output:false}));
+      controller.close();
+    }})}};
+    const store=initBridgeTestContext({settings:makeBridgeSettings(),llm});
+    const session=store.createSession('completed-native-diff','',undefined,'','normal');
+    const binding=store.upsertChannelChat({channelType:'feishu',chatId:'completed-native-diff',bridgeSessionId:session.id});
+    const toolEvents:any[]=[];const previews:string[]=[];
+    await processMessage(binding,'edit',undefined,undefined,undefined,text=>previews.push(text),(...args)=>toolEvents.push(args),undefined,undefined,undefined,
+      {streamPreview:{includeToolSnippets:true}},createTestSdkConversationRuntime(store,llm));
+    assert.equal(toolEvents.length,2);
+    assert.deepEqual(toolEvents[1],['edit-one','apply_patch','complete',{output:'',isError:false,input:patch,showOutput:false}]);
+    const assistant=store.getMessages(session.id).messages.find(message=>message.role==='assistant')!;
+    const blocks=JSON.parse(assistant.content);
+    const calls=blocks.filter((block:any)=>block.type==='tool_use');
+    assert.equal(calls.length,1);assert.equal(calls[0].id,'edit-one');assert.equal(calls[0].name,'apply_patch');assert.deepEqual(calls[0].input,patch);
+    assert.equal(blocks.filter((block:any)=>block.type==='tool_result').length,1);
+    assert.match(previews.at(-1) || '',/-before\n\+after/);
+  });
 });
 
 it('preserves a runtime-confirmed interrupted outcome without treating it as an SDK error', async () => {

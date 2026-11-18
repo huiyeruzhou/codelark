@@ -5,6 +5,13 @@ import assert from 'node:assert/strict';
 import { createTextPreview } from '../../../shared/text-preview.js';
 
 describe('createTextPreview', () => {
+  it('bounds UTF-8 bytes without splitting Chinese or emoji characters', () => {
+    const preview = createTextPreview('甲😀乙😀丙', { maxChars: 100, maxLines: 80, maxBytes: 9 });
+    assert.equal(preview.text, '甲😀');
+    assert.equal(Buffer.byteLength(preview.text), 7);
+    assert.deepEqual(preview.truncatedBy, ['bytes']);
+    assert.equal(preview.totalChars, 5);
+  });
   it('treats character and line limits as independent hard upper bounds', () => {
     const preview = createTextPreview('12345\n67890\nabcde\nfghij', {
       maxChars: 12,

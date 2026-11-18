@@ -500,6 +500,22 @@ async function consumeStream(
         case 'tool_result': {
           try {
             const resultData = JSON.parse(event.data);
+            // ACP receives file paths first and the actual diff only at completion.
+            // Enrich the existing call instead of emitting a second tool_use.
+            const priorTool = toolPreview.get(resultData.tool_use_id);
+            const completedName = typeof resultData.name === 'string' && resultData.name ? resultData.name : undefined;
+            const hasCompletedInput = typeof resultData.input !== 'undefined';
+            if (completedName || hasCompletedInput) {
+              toolPreview.set(resultData.tool_use_id, {
+                name: completedName || priorTool?.name || 'tool',
+                input: hasCompletedInput ? resultData.input : priorTool?.input,
+              });
+              const startBlock = contentBlocks.find(block => block.type === 'tool_use' && block.id === resultData.tool_use_id);
+              if (startBlock?.type === 'tool_use') {
+                if (completedName) startBlock.name = completedName;
+                if (hasCompletedInput) startBlock.input = resultData.input;
+              }
+            }
             const newBlock = {
               type: 'tool_result' as const,
               tool_use_id: resultData.tool_use_id,
@@ -521,10 +537,11 @@ async function consumeStream(
               try {
                 onToolEvent(
                   resultData.tool_use_id,
-                  '',
+                  completedName || '',
                   resultData.is_error ? 'error' : 'complete',
                   { output: resultData.content, isError: resultData.is_error || false,
-                    ...(resultData.show_output === true ? { showOutput: true } : {}) },
+                    ...(hasCompletedInput ? { input: resultData.input } : {}),
+                    ...(typeof resultData.show_output === 'boolean' ? { showOutput: resultData.show_output } : {}) },
                 );
               } catch { /* non-critical */ }
             }

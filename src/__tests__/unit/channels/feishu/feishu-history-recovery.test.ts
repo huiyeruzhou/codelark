@@ -15,7 +15,7 @@ function harness() {
   let failNext = false;
   let duringCreate: (() => void) | undefined;
   const check = (json: string) => {
-    assert.ok(Buffer.byteLength(json) < 18_000, `oversized payload: ${Buffer.byteLength(json)}`);
+    assert.ok(Buffer.byteLength(json) < 28_000, `oversized payload: ${Buffer.byteLength(json)}`);
     const body = JSON.parse(json);
     assert.ok(_testOnly.countFeishuCardComponents(body) <= 160);
     return body;
@@ -111,24 +111,28 @@ it('keeps the original card open on rejected continuation and preserves input ar
   for (let i = 0; i < 40; i++) assert.equal(all.split(`RECORD_${i}_BEGIN`).length - 1, 1);
 });
 
-it('splits one oversized patch across bounded cards without losing its lines or code fences', async () => {
+it('splits an oversized group of bounded patch previews without losing its lines or code fences', async () => {
   const { adapter, cards } = harness();
-  const lines = Array.from({ length: 900 }, (_, i) => `+PATCH_LINE_${i}_END ${'中文🙂'.repeat(80)}`);
-  const patch = ['*** Begin Patch', '*** Update File: x.py', '@@', ...lines, '*** End Patch'].join('\n');
+  const tools = ['A', 'B'].map(label => {
+    const lines = Array.from({ length: 900 }, (_, i) => `+PATCH_${label}_LINE_${i}_END ${'中文🙂'.repeat(80)}`);
+    const patch = ['*** Begin Patch', `*** Update File: ${label}.py`, '@@', ...lines, '*** End Patch'].join('\n');
+    return { id: `patch-${label}`, name: 'apply_patch', status: 'complete' as const,
+      detail: { kind: 'patch_apply' as const, patchText: patch } };
+  });
   await adapter.createStreamingCard('new-chat', undefined, 'mirror');
-  const tool = { id: 'patch', name: 'apply_patch', status: 'complete' as const, detail: { kind: 'patch_apply' as const, patchText: patch } };
-  const expected = buildToolProgressBlocks([tool], { maxItems: null })[0]!.detail;
-  adapter.onStreamHistory('new-chat', [{ type: 'tool_panel', tools: [tool] }], 'mirror');
+  const expected = buildToolProgressBlocks(tools, { maxItems: null }).map(block => block.detail).join('\n');
+  assert.ok(Buffer.byteLength(expected) > 28_000, 'the bounded patch group must still exceed the actual byte budget');
+  adapter.onStreamHistory('new-chat', [{ type: 'tool_panel', tools }], 'mirror');
   assert.equal(await adapter.finalizeCard('new-chat', 'completed', '', 'mirror'), true);
   const contents: string[] = [];
   const visit = (node: any) => {
     if (!node || typeof node !== 'object') return;
-    if (node.tag === 'markdown' && typeof node.content === 'string' && node.content.includes('PATCH_LINE_')) contents.push(node.content);
+    if (node.tag === 'markdown' && typeof node.content === 'string' && node.content.includes('PATCH_')) contents.push(node.content);
     Object.values(node).forEach(visit);
   };
   [...cards.values()].forEach(visit);
   const all = contents.join('\n');
-  const expectedLines = expected.match(/PATCH_LINE_\d+_END/g)!;
+  const expectedLines = expected.match(/PATCH_[AB]_LINE_\d+_END/g)!;
   for (const line of expectedLines) assert.equal(all.split(line).length - 1, 1, line);
   assert.ok(cards.size > 1);
   for (const content of contents) assert.equal((content.match(/^```/gm) || []).length % 2, 0);
@@ -198,4 +202,29 @@ it('rebases a rewritten snapshot that arrives while the continuation is being cr
   assert.equal(await h.adapter.onStreamEnd('chat', 'completed', '', 'concurrent-revision'), true);
   const all = [...h.cards.values()].map(x => JSON.stringify(x)).join('\n');
   assert.equal(all.split('CONCURRENT_FINAL').length - 1, 1);
+});
+
+it('keeps six ordinary 3 KB tool results on one bounded card', async () => {
+  const { adapter, cards } = harness();
+  await adapter.createStreamingCard('chat', undefined, 'tools');
+  const tools = Array.from({ length: 6 }, (_, index) => ({
+    id: `ordinary-${index}`, name: 'Shell', status: 'complete' as const, showOutput: true,
+    input: JSON.stringify({ command: `inspect-result-${index}` }),
+    output: `TOOL_${index}_BEGIN ` + 'x'.repeat(3_000) + ` TOOL_${index}_END`,
+  }));
+  for (let count = 1; count <= tools.length; count++) {
+    adapter.onStreamHistory('chat', [{ type: 'tool_panel', tools: tools.slice(0, count) }], 'tools');
+    await adapter.flushCardUpdate('tools');
+  }
+  assert.equal(await adapter.finalizeCard('chat', 'completed', '', 'tools'), true);
+  assert.equal(cards.size, 1, 'several normal tool outputs should not cause an early continuation');
+  const body = [...cards.values()][0];
+  const json = JSON.stringify(body);
+  assert.ok(Buffer.byteLength(json) > 18_000, 'the scenario must exceed the old conservative byte threshold');
+  assert.ok(Buffer.byteLength(json) < 28_000);
+  assert.ok(_testOnly.countFeishuCardComponents(body) < 160);
+  for (let i = 0; i < tools.length; i++) {
+    assert.equal(json.split(`TOOL_${i}_BEGIN`).length - 1, 1);
+    assert.equal(json.split(`TOOL_${i}_END`).length - 1, 1);
+  }
 });

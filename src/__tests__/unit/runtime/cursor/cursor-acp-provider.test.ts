@@ -92,6 +92,47 @@ function setup(perms?: PendingPermissions) {
 afterEach(async () => { await closeAllCursorAcpSessions(); });
 
 describe('Cursor ACP direct provider', () => {
+  it('unwraps native Read text with real newlines and retains the complete result for the shared preview', async () => {
+    const {client,provider,sessionId}=setup();
+    const result=collect(provider.streamChat({sessionId,prompt:'read'}));
+    await until(()=>client.count===1);
+    const file=Array.from({length:450},(_,line)=>`${line}: "quoted value"; literal \\n and C:\\project\\file; 中文内容`).join('\n')+'\nLAST_READ_LINE\n';
+    assert.ok(Buffer.byteLength(file)>18_000);
+    client.update({sessionUpdate:'tool_call',toolCallId:'read-large',kind:'read',rawInput:{path:'/test/large.txt'}});
+    client.update({sessionUpdate:'tool_call_update',toolCallId:'read-large',status:'completed',rawOutput:{content:file}});
+    client.end();
+    const events=await result;
+    const start=events.find(event=>event.type==='tool_use')!.data;
+    const finish=events.find(event=>event.type==='tool_result')!.data;
+    assert.equal(finish.content,file);
+    assert.equal(finish.show_output,true);
+    const [block]=buildToolProgressBlocks([{id:start.id,name:start.name,input:JSON.stringify(start.input),output:finish.content,status:'complete',showOutput:finish.show_output}]);
+    assert.ok(block!.detail.includes(file.split('\n').slice(0,2).join('\n')));
+    assert.doesNotMatch(block!.detail,/\{"content":/);
+  });
+
+  it('retains native Grep and Glob statistics and other structured results without fabricating missing bodies', async () => {
+    const {client,provider,sessionId}=setup();
+    const result=collect(provider.streamChat({sessionId,prompt:'search'}));
+    await until(()=>client.count===1);
+    const cases=[
+      {id:'grep',raw:{totalMatches:31,truncated:true}},
+      {id:'glob',raw:{totalFiles:8,truncated:false}},
+      {id:'structured',raw:{error:'upstream error',details:{retained:['one','two']}}},
+    ];
+    for(const {id,raw} of cases){
+      client.update({sessionUpdate:'tool_call',toolCallId:id,kind:'search',rawInput:{pattern:'*.ts'}});
+      client.update({sessionUpdate:'tool_call_update',toolCallId:id,status:'completed',rawOutput:raw});
+    }
+    client.end();const events=await result;
+    for(const {id,raw} of cases){
+      const finish=events.find(event=>event.type==='tool_result'&&event.data.tool_use_id===id)!.data;
+      assert.equal(finish.content,JSON.stringify(raw,null,2));
+      assert.deepEqual(JSON.parse(finish.content),raw);
+      assert.equal(finish.show_output,true);
+    }
+  });
+
   it('retains native Shell stdout, stderr and exit status in the actual shared card renderer', async () => {
     const {client,provider,sessionId} = setup();
     const result = collect(provider.streamChat({sessionId,prompt:'run tools'}));
@@ -124,21 +165,70 @@ describe('Cursor ACP direct provider', () => {
     }
   });
 
-  it('preserves non-Shell diff content and makes it available in the shared card', async () => {
+  it('renders native edits, new files and deletions as one patch per original tool ID', async () => {
     const {client,provider,sessionId} = setup();
-    const result = collect(provider.streamChat({sessionId,prompt:'edit'}));
+    const result = collect(provider.streamChat({sessionId,prompt:'edit',workingDirectory:'/test'}));
     await until(()=>client.count===1);
-    client.update({sessionUpdate:'tool_call',toolCallId:'edit-1',kind:'edit',rawInput:{path:'/test/example.txt',old_string:'before',new_string:'after'}});
-    client.update({sessionUpdate:'tool_call_update',toolCallId:'edit-1',status:'completed',content:[{type:'diff',path:'/test/example.txt',oldText:'before',newText:'ACP_EDIT_RESULT'}],rawOutput:{exitCode:9,stdout:'not a Shell output'}});
+    const cases=[
+      {id:'edit',kind:'edit',oldText:'same\nbefore\nend\n',newText:'same\nACP_EDIT_RESULT\nend\n',action:'update'},
+      {id:'add',kind:'edit',oldText:null,newText:'ACP_NEW_FILE\n',action:'add'},
+      {id:'delete',kind:'delete',oldText:'ACP_DELETED_FILE\n',newText:'',action:'delete'},
+      {id:'empty',kind:'edit',oldText:'removed\n',newText:'',action:'update'},
+    ];
+    for(const item of cases){
+      const filePath=`/test/${item.id}.txt`;
+      client.update({sessionUpdate:'tool_call',toolCallId:item.id,kind:item.kind,rawInput:{path:filePath}});
+      const complete={sessionUpdate:'tool_call_update',toolCallId:item.id,status:'completed',content:[{type:'diff',path:filePath,oldText:item.oldText,newText:item.newText}]};
+      client.update(complete);client.update(complete);
+    }
     client.end();
     const events = await result;
-    const start = events.find(event=>event.type==='tool_use')!.data;
-    const finish = events.find(event=>event.type==='tool_result')!.data;
-    assert.equal(finish.content,'ACP_EDIT_RESULT');
-    assert.equal(finish.is_error,false);
-    const [block] = buildToolProgressBlocks([{id:start.id,name:start.name,input:JSON.stringify(start.input),output:finish.content,status:'complete',showOutput:finish.show_output}]);
-    assert.match(block!.detail,/ACP_EDIT_RESULT/);
-    assert.doesNotMatch(block!.detail,/not a Shell output/);
+    assert.equal(events.filter(event=>event.type==='tool_use').length,cases.length);
+    assert.equal(events.filter(event=>event.type==='tool_result').length,cases.length);
+    for(const item of cases){
+      const finish=events.find(event=>event.type==='tool_result'&&event.data.tool_use_id===item.id)!.data;
+      assert.equal(finish.name,'apply_patch');assert.equal(finish.content,'');assert.equal(finish.show_output,false);
+      const [block]=buildToolProgressBlocks([{id:item.id,name:finish.name,input:JSON.stringify(finish.input),output:finish.content,status:'complete',showOutput:finish.show_output}]);
+      assert.equal(block!.tool.detail?.kind,'patch_apply');
+      if(block!.tool.detail?.kind==='patch_apply') assert.deepEqual(block!.tool.detail.files,[{path:`${item.id}.txt`,action:item.action}]);
+      if(item.oldText?.includes('before')) assert.match(block!.detail,/-before\n\+ACP_EDIT_RESULT/);
+      if(item.id==='add') assert.match(block!.detail,/\+ACP_NEW_FILE/);
+      if(item.id==='delete') assert.match(block!.detail,/-ACP_DELETED_FILE/);
+      if(item.id==='empty') assert.match(block!.detail,/-removed/);
+      assert.equal(block!.detail.split('ACP_EDIT_RESULT').length,item.id==='edit'?2:1,'new text appears in the patch only once');
+    }
+  });
+
+  it('keeps a late edit in a large file visible by removing unchanged outer context from the diff', async () => {
+    const {client,provider,sessionId}=setup();
+    const result=collect(provider.streamChat({sessionId,prompt:'edit',workingDirectory:'/test'}));await until(()=>client.count===1);
+    const prefix=Array.from({length:1000},(_,i)=>`unchanged ${i}`).join('\n');
+    const suffix=Array.from({length:1000},(_,i)=>`tail ${i}`).join('\n');
+    client.update({sessionUpdate:'tool_call',toolCallId:'late-edit',kind:'edit',rawInput:{path:'/test/large.ts'}});
+    client.update({sessionUpdate:'tool_call_update',toolCallId:'late-edit',status:'completed',content:[{type:'diff',path:'/test/large.ts',oldText:`${prefix}\nOLD_VALUE\n${suffix}\n`,newText:`${prefix}\nNEW_VALUE\n${suffix}\n`}]});
+    client.end();const events=await result;
+    const finish=events.find(event=>event.type==='tool_result')!.data;
+    assert.ok(finish.input.patch.length<300);
+    const [block]=buildToolProgressBlocks([{id:'late-edit',name:finish.name,input:JSON.stringify(finish.input),output:finish.content,status:'complete',showOutput:finish.show_output}]);
+    assert.match(block!.detail,/-OLD_VALUE\n\+NEW_VALUE/);
+    assert.match(block!.detail,/unchanged 999/);assert.match(block!.detail,/tail 0/);
+  });
+
+  it('does not invent deleted content from the native Delete path placeholder', async () => {
+    const {client,provider,sessionId}=setup();
+    const result=collect(provider.streamChat({sessionId,prompt:'delete',workingDirectory:'/test'}));await until(()=>client.count===1);
+    const filePath='/test/removed.py';
+    client.update({sessionUpdate:'tool_call',toolCallId:'delete-native',kind:'delete',rawInput:{path:filePath}});
+    // Native ACP erroneously uses deletedFile (path) instead of prevContent.
+    client.update({sessionUpdate:'tool_call_update',toolCallId:'delete-native',status:'completed',content:[{type:'diff',path:filePath,oldText:filePath,newText:''}]});
+    client.end();const events=await result;
+    const finish=events.find(event=>event.type==='tool_result')!.data;
+    assert.equal(finish.input.patch,'*** Begin Patch\n*** Delete File: /test/removed.py\n*** End Patch');
+    assert.match(finish.content,/未提供删除前文件内容/);
+    const [block]=buildToolProgressBlocks([{id:'delete-native',name:finish.name,input:JSON.stringify(finish.input),output:finish.content,status:'complete',showOutput:finish.show_output}]);
+    assert.match(block!.detail,/Delete File: removed.py/);
+    assert.doesNotMatch(block!.detail,/-\/test\/removed.py/);
+    assert.match(block!.detail,/未提供删除前文件内容/);
   });
 
   it('streams new text before completion, ignores load replay and pairs native tool events once', async () => {

@@ -93,6 +93,7 @@ it('keeps one Feishu message through separate native tool polls and finalizes on
     updateRoot();
     await reconcile();
     const initialRefreshes = calls.filter((c) => c.kind === 'update').length;
+    const rawOutputs: string[] = [];
     for (let i = 0; i < 5; i++) {
       if (i >= 3) {
         headers.push({ bubbleId: `thinking-${i}` });
@@ -105,9 +106,9 @@ it('keeps one Feishu message through separate native tool polls and finalizes on
       await reconcile();
       // The delivery watermark can be newer than a late native result timestamp.
       state.mirrorSubscriptions.get('binding').lastDeliveredAt = new Date().toISOString();
-      put(`bubbleId:t:tool-${i}`, { ...body, toolFormerData: { ...body.toolFormerData, status: 'completed', result: JSON.stringify({
-        output: `RESULT-${i}\n${i === 2 ? '@@ patch @@\n- before\n+ after\n'.repeat(30) : ''}END-${i}`,
-      }) } });
+      const output = `RESULT-${i}\n${i === 2 ? '@@ patch @@\n- before\n+ after\n'.repeat(30) : ''}END-${i}`;
+      rawOutputs.push(output);
+      put(`bubbleId:t:tool-${i}`, { ...body, toolFormerData: { ...body.toolFormerData, status: 'completed', result: JSON.stringify({ output }) } });
       await reconcile();
       assert.equal(finalized, 0);
       assert.equal(calls.filter((c) => c.kind === 'settings').length, 0);
@@ -137,7 +138,28 @@ it('keeps one Feishu message through separate native tool polls and finalizes on
       }
     }
     const final = calls.filter((c) => c.kind === 'update').at(-1)!;
-    for (let i = 0; i < 5; i++) assert.match(JSON.stringify(final.payload), new RegExp(`END-${i}`));
+    const markdown: string[] = [];
+    const collectMarkdown = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      const node = value as Record<string, unknown>;
+      if (node.tag === 'markdown' && typeof node.content === 'string') markdown.push(node.content);
+      Object.values(node).forEach(collectMarkdown);
+    };
+    collectMarkdown(JSON.parse(final.payload.data.card.data));
+    for (const i of [0, 1, 3, 4]) {
+      assert.ok(markdown.some(text => text.includes(rawOutputs[i]!)), `short output ${i} must be complete`);
+    }
+    const longOutput = markdown.find(text => text.includes('RESULT-2'))!;
+    assert.ok(longOutput, 'long output must retain its beginning');
+    assert.doesNotMatch(longOutput, /END-2/, 'the long output tail is deliberately outside the 80-line preview');
+    assert.match(longOutput, /显示 \d+\/\d+ 字符 · 80\/92 行/, 'omission must be explicit');
+    const preview = /```text\n([\s\S]*?)\n```/.exec(longOutput)?.[1];
+    assert.ok(preview);
+    assert.ok(Buffer.byteLength(preview, 'utf8') <= 4_000);
+    assert.equal(preview.split('\n').length, 80);
+    const nativeRow = db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get('bubbleId:t:tool-2')!;
+    const nativeResult = JSON.parse(JSON.parse(String(nativeRow.value)).toolFormerData.result);
+    assert.equal(nativeResult.output, rawOutputs[2], 'card preview must not truncate the native result');
     assert.ok(calls.filter((c) => c.kind === 'message').every((c) => c.payload.data.msg_type === 'interactive'));
   } finally {
     runtime?.clearMirrorSubscriptions();

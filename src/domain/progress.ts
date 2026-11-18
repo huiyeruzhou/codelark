@@ -123,7 +123,7 @@ export type ToolCallDetail =
     };
 
 export interface ToolCallInfo {
-  /** Keep the complete retained output inside the expanded tool panel. */
+  /** Show a bounded output preview in the expanded panel; retain the original output separately. */
   showOutput?: boolean;
   id: string;
   name: string;

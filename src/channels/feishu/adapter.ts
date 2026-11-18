@@ -428,8 +428,9 @@ const CARD_FULL_REFRESH_INTERVAL_MS = 5 * 60_000;
 const CARD_SLOW_BATCH_REFRESH_THRESHOLD_MS = 5_000;
 const STREAMING_CARD_COMPONENT_LIMIT = 160;
 const STREAMING_CARD_DIRECT_REFRESH_COMPONENT_THRESHOLD = 20;
-const STREAMING_CARD_PAYLOAD_BYTES_LIMIT = 18_000;
-const STREAMING_CARD_PAYLOAD_CHARS_LIMIT = 18_000;
+// CardKit documents a 30 KB content limit; keep room for serialization and final metadata.
+const STREAMING_CARD_PAYLOAD_BYTES_LIMIT = 28_000;
+const STREAMING_CARD_FOOTER_RESERVE_BYTES = 1_024;
 const STREAMING_CARD_MARKDOWN_COUNT_LIMIT = 150;
 const RICH_CARD_DEFAULT_UPDATE_TTL_MS = 60_000;
 const INITIAL_STREAMING_STATUS = '处理中';
@@ -1244,7 +1245,6 @@ function measureStreamingCardPayload(body: Record<string, unknown>): StreamingCa
 
 function describeStreamingCardPayloadPressure(payload: StreamingCardPayloadStats): string | null {
   if (payload.payloadBytes >= STREAMING_CARD_PAYLOAD_BYTES_LIMIT) return 'payload_bytes';
-  if (payload.payloadChars >= STREAMING_CARD_PAYLOAD_CHARS_LIMIT) return 'payload_chars';
   if (payload.markdownCount >= STREAMING_CARD_MARKDOWN_COUNT_LIMIT) return 'markdown_count';
   return null;
 }
@@ -1358,7 +1358,7 @@ function buildStreamingCardRender(params: {
       // 为最终状态、任务标签和续接提示预留容量。
       const payload = measureStreamingCardPayload(candidate.body);
       return candidate.componentCount <= maxComponents
-        && payload.payloadBytes < STREAMING_CARD_PAYLOAD_BYTES_LIMIT - 1024
+        && payload.payloadBytes < STREAMING_CARD_PAYLOAD_BYTES_LIMIT - STREAMING_CARD_FOOTER_RESERVE_BYTES
         && payload.markdownCount < STREAMING_CARD_MARKDOWN_COUNT_LIMIT;
     }, params.splitOnUserInput);
     return { ...render(page.items), historyItemOffset, historyToolCallOffset,
@@ -4688,7 +4688,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
         markdown_count: rolloverOffsets.payload?.markdownCount,
         limit: STREAMING_CARD_COMPONENT_LIMIT,
         payload_bytes_limit: STREAMING_CARD_PAYLOAD_BYTES_LIMIT,
-        payload_chars_limit: STREAMING_CARD_PAYLOAD_CHARS_LIMIT,
         markdown_count_limit: STREAMING_CARD_MARKDOWN_COUNT_LIMIT,
       });
       await this.rolloverStreamingCard(

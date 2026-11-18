@@ -141,9 +141,64 @@ async function prepareSession(params: StreamChatParams, options: CursorAcpProvid
 }
 
 function toolName(update: Record<string, any>): string {
-  return ({ execute: 'Shell', read: 'Read', edit: 'Edit', delete: 'Delete', search: 'Search', fetch: 'WebFetch' } as Record<string, string>)[update.kind]
+  return ({ execute: 'Shell', read: 'Read', edit: 'apply_patch', delete: 'apply_patch', search: 'Search', fetch: 'WebFetch' } as Record<string, string>)[update.kind]
     || update.title || 'Cursor Tool';
 }
+
+function textLines(text: string): string[] {
+  if (!text) return [];
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines;
+}
+
+function patchDiffLines(beforeText: string, afterText: string): string[] {
+  if (beforeText === afterText) return [];
+  const before = textLines(beforeText), after = textLines(afterText);
+  let prefix = 0, suffix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+  while (suffix < before.length - prefix && suffix < after.length - prefix
+    && before[before.length - suffix - 1] === after[after.length - suffix - 1]) suffix++;
+  // A trailing newline change still needs a visible replacement of the last line.
+  if (prefix === before.length && prefix === after.length) prefix = Math.max(0, prefix - 1);
+  const start = Math.max(0, prefix - 3), tail = Math.min(3, suffix);
+  const removed = before.slice(prefix, before.length - suffix).map(line => `-${line}`);
+  const added = after.slice(prefix, after.length - suffix).map(line => `+${line}`);
+  if (removed.length && !suffix && beforeText && !beforeText.endsWith('\n')) removed.push('\\ No newline at end of file');
+  if (added.length && !suffix && afterText && !afterText.endsWith('\n')) added.push('\\ No newline at end of file');
+  return [
+    `@@ -${start + 1},${before.length - suffix + tail - start} +${start + 1},${after.length - suffix + tail - start} @@`,
+    ...before.slice(start, prefix).map(line => ` ${line}`), ...removed, ...added,
+    ...before.slice(before.length - suffix, before.length - suffix + tail).map(line => ` ${line}`),
+  ];
+}
+
+function completedPatchInput(update: Record<string, any>, kind: string | undefined, cwd: string): { patch: string; workdir: string } | undefined {
+  const diffs = (Array.isArray(update.content) ? update.content : []).map(record).filter(block =>
+    block.type === 'diff' && typeof block.path === 'string' && typeof block.newText === 'string'
+    && (block.oldText === null || typeof block.oldText === 'string'));
+  if (!diffs.length) return undefined;
+  const lines = ['*** Begin Patch'];
+  for (const diff of diffs) {
+    const action = kind === 'delete' ? 'Delete' : diff.oldText === null ? 'Add' : 'Update';
+    lines.push(`*** ${action} File: ${diff.path}`);
+    if (action === 'Update') lines.push(...patchDiffLines(diff.oldText, diff.newText));
+    // Cursor 2026.11.17 uses DeleteSuccess.deletedFile (the path) as oldText,
+    // dropping prevContent. A path placeholder is not deleted file content.
+    else if (!(action === 'Delete' && diff.oldText === diff.path)) {
+      lines.push(...textLines(action === 'Delete' ? diff.oldText || '' : diff.newText).map(line => `${action === 'Delete' ? '-' : '+'}${line}`));
+    }
+  }
+  lines.push('*** End Patch');
+  return { patch: lines.join('\n'), workdir: cwd };
+}
+
+function initialToolInput(update: Record<string, any>, cwd: string): unknown {
+  const input = record(update.rawInput);
+  if (!['edit', 'delete'].includes(update.kind) || typeof input.path !== 'string') return update.rawInput ?? {};
+  return { ...input, patch: `*** Begin Patch\n*** ${update.kind === 'delete' ? 'Delete' : 'Update'} File: ${input.path}\n*** End Patch`, workdir: cwd };
+}
+
 function toolOutput(update: Record<string, any>, name: string): string {
   const content = Array.isArray(update.content) ? update.content.map((item: unknown) => {
     const block = record(item);
@@ -157,7 +212,15 @@ function toolOutput(update: Record<string, any>, name: string): string {
     return `${Number.isInteger(raw.exitCode) ? `Process exited with code ${raw.exitCode}\n` : ''}Output:\n${output}`;
   }
   if (content) return content;
-  return typeof update.rawOutput === 'string' ? update.rawOutput : update.rawOutput === undefined ? '' : JSON.stringify(update.rawOutput);
+  // Native Read wraps the actual file body in {content}. Match the existing
+  // Cursor desktop path: keep visible text and its real newlines, not a JSON
+  // string whose quotes/backslashes/newlines get escaped again by card JSON.
+  for (const key of ['output', 'content', 'markdown', 'text']) {
+    if (typeof raw[key] === 'string') return raw[key];
+  }
+  // Grep/Glob currently send only counts and truncation metadata through ACP.
+  // Preserve exactly what the agent retained; do not invent or re-read results.
+  return typeof update.rawOutput === 'string' ? update.rawOutput : update.rawOutput === undefined ? '' : JSON.stringify(update.rawOutput, null, 2);
 }
 
 /** Direct ACP owns the turn until prompt's terminal response, including cancellation. */
@@ -254,7 +317,7 @@ export class CursorAcpProvider implements LLMProvider {
               throw new Error(`Cursor ACP 未确认思考强度 ${params.cursorReasoningEffort}，未提交输入。`);
             }
           }
-          const tools = new Map<string, { name: string; complete: boolean }>();
+          const tools = new Map<string, { name: string; kind?: string; complete: boolean }>();
           const handleRequest = async (message: CursorAcpMessage) => {
             if (message.id === undefined) return;
             const payload = record(message.params);
@@ -326,18 +389,26 @@ export class CursorAcpProvider implements LLMProvider {
             } else if (typeof update.toolCallId === 'string') {
               let tool = tools.get(update.toolCallId);
               if (!tool) {
-                tool = { name: toolName(update), complete: false }; tools.set(update.toolCallId, tool);
-                emit('tool_use', { id: update.toolCallId, name: tool.name, input: update.rawInput || {} });
+                tool = { name: toolName(update), kind: update.kind, complete: false }; tools.set(update.toolCallId, tool);
+                emit('tool_use', { id: update.toolCallId, name: tool.name, input: initialToolInput(update, session!.cwd) });
               }
               if (!tool.complete && ['completed', 'failed', 'cancelled'].includes(update.status)) {
                 tool.complete = true;
                 const exitCode = record(update.rawOutput).exitCode;
+                const patch = completedPatchInput(update, tool.kind || update.kind, session!.cwd);
+                const missingDeleteContent = (tool.kind || update.kind) === 'delete' && Array.isArray(update.content)
+                  && update.content.some((block: any) => block?.type === 'diff' && typeof block.path === 'string' && block.oldText === block.path);
+                const output = [
+                  toolOutput(patch ? { ...update, content: update.content.filter((block: any) => block?.type !== 'diff') } : update, tool.name),
+                  missingDeleteContent ? 'Cursor 未提供删除前文件内容。' : '',
+                ].filter(Boolean).join('\n');
                 emit('tool_result', {
-                  tool_use_id: update.toolCallId, content: toolOutput(update, tool.name),
+                  tool_use_id: update.toolCallId, content: output,
+                  ...(patch ? { name: 'apply_patch', input: patch } : {}),
                   is_error: update.status !== 'completed' || (tool.name === 'Shell' && Number.isInteger(exitCode) && exitCode !== 0),
                   // Shared cards hide tool output unless the runtime explicitly retains it.
                   // Cursor's completed output is user-visible, just as in the tmux provider.
-                  show_output: true,
+                  show_output: !patch || Boolean(output),
                 });
               }
             }
