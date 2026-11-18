@@ -5207,11 +5207,13 @@ async function handleMessage(
               const prompt = sanitizeInput(buildConversationPromptText(appendModelContextText(
                 modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), msg.contextText), prepared.persistedFileMeta)).text;
               if (prompt) {
+                const replyToMessageId = msg.outputReplyToMessageId
+                  || (msg.messageId.startsWith('manual:') ? undefined : msg.messageId);
                 const turnId = await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
-                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session), msg.messageId.startsWith('manual:') ? undefined : {
-                    channelType: msg.address.channelType, chatId: msg.address.chatId, messageId: msg.messageId,
-                    rootMessageId: msg.threadRootMessageId || msg.messageId,
-                  });
+                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session), replyToMessageId ? {
+                    channelType: msg.address.channelType, chatId: msg.address.chatId, messageId: replyToMessageId,
+                    rootMessageId: msg.outputReplyToMessageId || msg.threadRootMessageId || replyToMessageId,
+                  } : undefined);
                 addInboundGetReaction(adapter, msg, 'app_server_input_accepted', {
                   streamKey: buildMirrorStreamKey(session.id, turnId, '', binding.id),
                 });

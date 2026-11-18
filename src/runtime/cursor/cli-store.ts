@@ -26,9 +26,9 @@ interface CursorNativeSnapshot {
 
 const snapshots = new Map<string, CursorNativeSnapshot>();
 
-// Decode only length-delimited fields, following references from the current
-// root. Blobs left behind by an earlier root are not acceptance evidence.
-function byteFields(bytes: Uint8Array): Map<number, Buffer[]> {
+// Decode length-delimited fields and optionally collect scalar varints. Follow
+// references only from the current root, never blobs left behind by older roots.
+function byteFields(bytes: Uint8Array, scalarFields?: Map<number, number[]>): Map<number, Buffer[]> {
   let offset = 0;
   const readVarint = (): number => {
     let value = 0;
@@ -43,7 +43,15 @@ function byteFields(bytes: Uint8Array): Map<number, Buffer[]> {
   while (offset < bytes.length) {
     const tag = readVarint();
     const wire = tag % 8;
-    if (wire === 0) readVarint();
+    if (wire === 0) {
+      const value = readVarint();
+      if (scalarFields) {
+        const no = Math.floor(tag / 8);
+        const values = scalarFields.get(no) || [];
+        values.push(value);
+        scalarFields.set(no, values);
+      }
+    }
     else if (wire === 1) offset += 8;
     else if (wire === 5) offset += 4;
     else if (wire === 2) {
@@ -150,6 +158,53 @@ export function readCursorNativeMessages(storePath: string): CursorNativeMessage
 
 export function readCursorNativeUserPrompts(storePath: string): string[] | null {
   return readCursorNativeSnapshot(storePath)?.userPrompts ?? null;
+}
+
+export interface CursorNativeTodo {
+  id: string;
+  content: string;
+  status: number;
+}
+
+/** Restore the current Todo list without replaying or traversing message history. */
+export function readCursorNativeTodos(storePath: string): CursorNativeTodo[] | null {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(storePath, { readOnly: true });
+    const row = db.prepare("SELECT value FROM meta WHERE key = '0'").get() as { value?: string | Uint8Array } | undefined;
+    if (!row?.value) return null;
+    const raw = typeof row.value === 'string' ? row.value : Buffer.from(row.value).toString('utf8');
+    const meta = JSON.parse(raw.startsWith('{') ? raw : Buffer.from(raw, 'hex').toString('utf8'));
+    const root = meta?.latestRootBlobId;
+    if (typeof root !== 'string' || !/^[a-f\d]{64}$/i.test(root)) return null;
+    const getBlob = db.prepare('SELECT data FROM blobs WHERE id = ?');
+    const rootRow = getBlob.get(root) as { data?: Uint8Array } | undefined;
+    if (!(rootRow?.data instanceof Uint8Array)) return null;
+    const refs = byteFields(rootRow.data).get(3);
+    if (!refs?.length) return null;
+    const todos: CursorNativeTodo[] = [];
+    const ids = new Set<string>();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    for (const ref of refs) {
+      if (ref.length !== 32) return null;
+      const todoRow = getBlob.get(ref.toString('hex')) as { data?: Uint8Array } | undefined;
+      if (!(todoRow?.data instanceof Uint8Array)) return null;
+      const scalars = new Map<number, number[]>();
+      const fields = byteFields(todoRow.data, scalars);
+      const idBytes = fields.get(1)?.at(-1), contentBytes = fields.get(2)?.at(-1);
+      if (!idBytes || !contentBytes || fields.has(3)) return null;
+      const id = decoder.decode(idBytes), content = decoder.decode(contentBytes);
+      // Protobuf's omitted enum is the native unknown value, not pending.
+      const status = scalars.get(3)?.at(-1) ?? 0;
+      if (!id || ids.has(id) || !Number.isInteger(status) || status < 0 || status > 4) return null;
+      ids.add(id);
+      todos.push({ id, content, status });
+    }
+    return todos;
+  } catch {
+    // Unknown schema or a partial checkpoint must not overwrite a known list.
+    return null;
+  } finally { db?.close(); }
 }
 
 export interface CursorQuestion {

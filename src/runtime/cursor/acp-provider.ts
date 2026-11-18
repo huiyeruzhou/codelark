@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import type { TaskProgressInfo } from '../../domain/progress.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { BRIDGE_SHUTDOWN_REASON } from '../contracts.js';
 import { prepareTextAttachmentPrompt } from '../local-attachments.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import { sseEvent } from '../sse.js';
-import { assertCursorAcpRestrictiveResume } from './acp-session-policy.js';
+import { assertCursorAcpRestrictiveResume, cursorAcpSessionStorePath } from './acp-session-policy.js';
+import { readCursorNativeTodos } from './cli-store.js';
 import { CursorAcpClient, type CursorAcpClientOptions, type CursorAcpMessage } from './acp-client.js';
 
 type Connection = Pick<CursorAcpClient, 'request' | 'notify' | 'respond' | 'reject' | 'onMessage' | 'onDisconnect' | 'connected'> & { close(): void | Promise<void> };
@@ -25,6 +27,7 @@ interface Session {
   force: boolean;
   model?: string;
   configOptions: Array<Record<string, any>>;
+  todos: Map<string, { content: string; status: TaskProgressInfo['status'] | 'cancelled' }>;
   disposalError?: Error;
   client?: Connection;
   ready: Promise<void>;
@@ -37,6 +40,35 @@ function record(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+
+function todoStatus(value: unknown): TaskProgressInfo['status'] | 'cancelled' {
+  if (value === 'completed' || value === 3) return 'completed';
+  if (value === 'in_progress' || value === 2) return 'in_progress';
+  if (value === 'cancelled' || value === 4) return 'cancelled';
+  return 'pending';
+}
+
+function updateTodos(session: Session, value: unknown, merge: boolean): TaskProgressInfo[] {
+  if (!merge) session.todos.clear();
+  for (const item of Array.isArray(value) ? value : []) {
+    const todo = record(item);
+    if (typeof todo.id !== 'string' || !todo.id) continue;
+    const previous = session.todos.get(todo.id);
+    const content = typeof todo.content === 'string' && todo.content.trim() ? todo.content.trim() : previous?.content;
+    if (!content) continue;
+    session.todos.set(todo.id, { content, status: todo.status === undefined && previous ? previous.status : todoStatus(todo.status) });
+  }
+  return [...session.todos.values()].filter(todo => todo.status !== 'cancelled')
+    .map(todo => ({ text: todo.content, status: todo.status as TaskProgressInfo['status'] }));
+}
+
+function planTasks(value: unknown): TaskProgressInfo[] {
+  return (Array.isArray(value) ? value : []).flatMap(item => {
+    const entry = record(item), status = todoStatus(entry.status);
+    return typeof entry.content === 'string' && entry.content.trim() && status !== 'cancelled'
+      ? [{ text: entry.content.trim(), status }] : [];
+  });
+}
 function sessionFor(id: string): Session | undefined {
   return sessions.get(id) || [...sessions.values()].find(session => session.nativeId === id);
 }
@@ -100,7 +132,7 @@ async function prepareSession(params: StreamChatParams, options: CursorAcpProvid
     throw new Error('这个 Cursor ACP 会话已有执行者，未启动第二个进程。');
   }
   if (params.cursorSessionId && params.cursorForce === false) assertCursorAcpRestrictiveResume(params.cursorSessionId, options.env);
-  const session: Session = { bridgeId: params.sessionId, nativeId: params.cursorSessionId, cwd, force: params.cursorForce === true, model, configOptions: [], ready: Promise.resolve() };
+  const session: Session = { bridgeId: params.sessionId, nativeId: params.cursorSessionId, cwd, force: params.cursorForce === true, model, configOptions: [], todos: new Map(), ready: Promise.resolve() };
   sessions.set(params.sessionId, session);
   session.ready = (async () => {
     const client = await (options.clientFactory || CursorAcpClient.start)({
@@ -128,6 +160,10 @@ async function prepareSession(params: StreamChatParams, options: CursorAcpProvid
       if (params.cursorSessionId) {
         const loaded = await client.request<Record<string, any>>('session/load', { sessionId: params.cursorSessionId, cwd, mcpServers: [] }, 120_000);
         session.configOptions = Array.isArray(loaded.configOptions) ? loaded.configOptions : [];
+        // Replay drops UpdateTodos.merge, so it cannot reconstruct an authoritative list.
+        // Restore only the current todo snapshot once; never poll or replay old messages.
+        const todos = readCursorNativeTodos(cursorAcpSessionStorePath(params.cursorSessionId, options.env));
+        if (todos) updateTodos(session, todos, false);
       } else {
         const created = await client.request<{ sessionId?: string; configOptions?: Array<Record<string, any>> }>('session/new', { cwd, mcpServers: [] }, 120_000);
         if (!created.sessionId) throw new Error('Cursor ACP 未返回原生会话 ID。');
@@ -362,7 +398,8 @@ export class CursorAcpProvider implements LLMProvider {
                 await canceling;
               } else client.respond(message.id, { outcome: { outcome: 'answered', answers } });
             } else if (message.method === 'cursor/update_todos') {
-              emit('task_update', { tasks: payload.todos || [], todos: payload.todos || [] }); client.respond(message.id, {});
+              const tasks = updateTodos(session!, payload.todos, payload.merge === true);
+              emit('task_update', { tasks, todos: tasks }); client.respond(message.id, {});
             } else client.reject(message.id, -32601, `Unsupported client method: ${message.method}`);
           };
           unsubscribe = client.onMessage(message => {
@@ -377,7 +414,8 @@ export class CursorAcpProvider implements LLMProvider {
             if (!acceptingUpdates || message.method !== 'session/update' || payload.sessionId !== session!.nativeId) return;
             const update = record(payload.update);
             if (update.sessionUpdate === 'plan') {
-              emit('task_update', { tasks: update.entries || [], todos: update.entries || [] }); return;
+              const tasks = planTasks(update.entries);
+              emit('task_update', { tasks, todos: tasks }); return;
             }
             if (!['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(update.sessionUpdate)) return;
             markAccepted();

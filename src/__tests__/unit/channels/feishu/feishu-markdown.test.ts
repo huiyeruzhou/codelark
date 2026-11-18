@@ -646,6 +646,13 @@ describe('buildToolProgressMarkdown', () => {
 });
 
 describe('buildTaskProgressMarkdown', () => {
+  it('omits malformed legacy tasks instead of rendering undefined titles', () => {
+    const tasks=[{content:'旧字段',status:'completed'},null,{text:' ',status:'pending'},{text:'真实任务',status:'in_progress'}];
+    const rendered=buildTaskProgressMarkdown(tasks as any);
+    assert.equal(rendered,'🔄 真实任务（执行中）');
+    assert.doesNotMatch(rendered,/undefined|null/);
+  });
+
   it('keeps waiting state visible while streaming but not after terminal completion', () => {
     const tasks = [
       { text: '读取日志', status: 'completed' as const },

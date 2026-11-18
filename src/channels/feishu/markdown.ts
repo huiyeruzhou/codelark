@@ -1645,6 +1645,7 @@ export function buildTaskProgressMarkdown(
 ): string {
   if (tasks.length === 0) return '';
   return tasks
+    .filter((task) => typeof task?.text === 'string' && task.text.trim())
     .map((task) => {
       const { icon, label } = getTaskProgressPresentation(task, options);
       return `${icon} ${task.text}（${label}）`;

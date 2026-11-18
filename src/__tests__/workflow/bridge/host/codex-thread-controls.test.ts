@@ -2,14 +2,15 @@ import '../../../setup/test-setup.js';
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
 import { WebSocketServer } from 'ws';
-import { initBridgeTestContext, RecordingAdapter, inboundMessage } from '../../../helpers/bridge/test-bridge-utils.js';
+import { initBridgeTestContext, RecordingAdapter, inboundMessage, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import * as router from '../../../../bridge/session/channel-router.js';
 import { _testOnly } from '../../../../bridge/host/manager.js';
 import { handleTmuxBridgeCommand } from '../../../../bridge/command/tmux.js';
 import { prepareCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
 import { observeAppServerRequests, hasAppServerQuestion } from '../../../../bridge/permission/app-server.js';
 
-async function fixture(t: TestContext, active = true) {
+async function fixture(t: TestContext, active = true, chatId?: string) {
   _testOnly.resetStateForTests();
   const store = initBridgeTestContext();
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
@@ -21,6 +22,11 @@ async function fixture(t: TestContext, active = true) {
     const message = JSON.parse(String(data));
     calls.push(message);
     if (message.id === undefined) return;
+    if (message.method === 'turn/start') {
+      const turn = { id: 'unexpected-turn', status: 'inProgress', items: [] };
+      thread.turns.push(turn);
+      socket.send(JSON.stringify({ method: 'turn/started', params: { threadId: thread.id, turn } }));
+    }
     const result = message.method === 'initialize' ? { codexHome: process.env.CODEX_HOME }
       : message.method === 'thread/loaded/list' ? { data: [thread.id] }
         : message.method === 'turn/steer' ? { turnId: 'active-turn' }
@@ -35,7 +41,7 @@ async function fixture(t: TestContext, active = true) {
     for (const socket of wss.clients) socket.terminate();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
-  const address = { channelType: 'feishu', chatId: `thread-control-${t.name}` };
+  const address = { channelType: 'feishu', chatId: chatId || `thread-control-${t.name}` };
   const binding = router.createBinding(address, process.cwd());
   const endpoint = `ws://127.0.0.1:${info.port}`;
   const handle = await prepareCodexAppServerSession({ sessionId: binding.bridgeSessionId, threadId: thread.id, endpoint });
@@ -146,3 +152,63 @@ for (const command of ['/tmux', '/tmux-key']) for (const autoForward of [false, 
     assert.deepEqual(f.inputCalls(), []);
   });
 }
+
+async function monitorFixture(t: TestContext, active: boolean, thread = true) {
+  resetBridgeTestState();
+  const f = await fixture(t, active, 'oc_monitorthread');
+  createConfigService({ migrate: false, env: {} }).set({ kind: 'home' }, { channels: [{
+    id: f.address.channelType, provider: 'feishu', alias: 'Monitor', enabled: true,
+    config: { threadReplyChats: thread ? [f.address.chatId] : [] },
+  }] });
+  f.adapter.send = async (message) => {
+    f.adapter.sent.push(message);
+    return { ok: true, messageId: `om_monitor_title_${f.adapter.sent.length}` };
+  };
+  return { ...f, monitor: (id: string, outputReplyToMessageId?: string) => _testOnly.handleMessage(f.adapter, {
+    ...inboundMessage(f.address, 'check experiment progress', `manual:${id}`),
+    raw: { manualIngress: true }, outputReplyToMessageId,
+  }) };
+}
+
+for (const active of [false, true]) test(`monitor ${active ? 'steer' : 'start'} retains its generated topic in the Codex protocol reply target`, async (t) => {
+  const f = await monitorFixture(t, active);
+  await f.monitor('monitor-trigger');
+  const title = f.adapter.sent.find((message) => message.startNewThread);
+  assert(title);
+  assert.equal(title.platformMessage?.msgType, 'text');
+  assert.equal(title.replyToMessageId, undefined);
+  assert.equal(title.richCard, undefined);
+  assert.equal(f.inputCalls().length, 1);
+  assert.equal(f.inputCalls()[0].method, active ? 'turn/steer' : 'turn/start');
+  assert.deepEqual(f.inputCalls()[0].params.input, [{ type: 'text', text: 'check experiment progress' }]);
+  // Mirror cards and permission requests both read this native per-turn origin.
+  assert.deepEqual(f.handle.lifecycle.replyTarget('control-thread', active ? 'active-turn' : 'unexpected-turn'), {
+    channelType: f.address.channelType, chatId: f.address.chatId,
+    messageId: 'om_monitor_title_1', rootMessageId: 'om_monitor_title_1',
+  });
+});
+
+test('consecutive monitor triggers steer the Codex turn into a fresh topic each time', async (t) => {
+  const f = await monitorFixture(t, true);
+  await f.monitor('first-trigger');
+  assert.equal(f.handle.lifecycle.replyTarget('control-thread', 'active-turn')?.messageId, 'om_monitor_title_1');
+  await f.monitor('second-trigger');
+  assert.equal(f.adapter.sent.filter((message) => message.startNewThread).length, 2);
+  assert.equal(f.inputCalls().length, 2);
+  assert.equal(f.handle.lifecycle.replyTarget('control-thread', 'active-turn')?.messageId, 'om_monitor_title_2');
+});
+
+test('explicit manual continuation targets survive Codex protocol submission without another title', async (t) => {
+  const f = await monitorFixture(t, false);
+  await f.monitor('continuation', 'om_explicit_continuation_root');
+  assert.equal(f.adapter.sent.filter((message) => message.startNewThread).length, 0);
+  assert.equal(f.handle.lifecycle.replyTarget('control-thread', 'unexpected-turn')?.messageId, 'om_explicit_continuation_root');
+});
+
+test('monitor with thread mode off does not attach its synthetic execution ID as a Codex reply target', async (t) => {
+  const f = await monitorFixture(t, false, false);
+  await f.monitor('ordinary-monitor');
+  assert.equal(f.inputCalls().length, 1);
+  assert.equal(f.adapter.sent.filter((message) => message.startNewThread).length, 0);
+  assert.equal(f.handle.lifecycle.replyTarget('control-thread', 'unexpected-turn'), undefined);
+});

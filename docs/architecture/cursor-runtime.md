@@ -12,6 +12,8 @@ Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `d
 
 `cursor:acp` 启动官方 `agent acp`，通过 stdio JSON-RPC 运行 `initialize → authenticate → session/new|load → session/prompt`。正文、工具开始/结果直接更新当前卡片，不等待 SQLite/JSONL checkpoint，也不依赖 tmux。恢复时 `session/load` 的历史事件仅用于原生上下文，不能当作本轮新输出再次发到群里。模型内部 thought chunk 只对应“正在思考”状态，不把原始 thought 当回答或摘要。
 
+任务清单在 provider 边界把原生 `content` 转成展示契约的 `text`。标准 ACP `plan.entries` 是完整列表；Cursor 的 `cursor/update_todos` 则按 `merge` 决定替换或按 `id` 合并，重复通知不会生成重复项目，取消的项目不冒充完成。原生 `session/load` 不发送完整清单，历史工具事件又缺少 `merge`，因此恢复后仅只读一次当前会话库 root 引用的 Todo，作为后续增量的初始列表；不扫描消息历史、不轮询数据库。缺失或未知格式保留未知状态，不猜测任务完成。卡片丢弃没有标题的旧任务数据，避免显示 `undefined`。
+
 本版原生 ACP 不支持 TUI 的原位 steer。运行中收到普通追加时，CodeLark 先请求 `session/cancel`，等待原生 prompt 确认结束，再提交新输入。确认期间收到的多条追加按到达顺序合并到下一次 prompt，保留每条消息的 Get 确认；后续卡片使用最后一条输入的回复位置，因此话题内继续留在话题，话题外输入按现有规则开新话题。每个 bridge session 只有一个执行者，取消超时或进程断开要明确报错，不能重放旧 prompt 猜测恢复。
 
 `session/request_permission` 使用现有审批卡。`cursor/ask_question` 逐题显示选项，支持单选、多选和自由文本。当前 Cursor ACP adapter 会丢弃 `freeformText`，因此只要回答包含自由文本，CodeLark 就取消问卷所在轮、等待确认，再把完整问答作为新用户消息继续同一会话；不会把文字伪装成选项 ID。问题过期、连接结束或会话改绑后，旧问题卡不再接受回答。

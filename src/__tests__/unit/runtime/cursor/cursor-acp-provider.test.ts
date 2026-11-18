@@ -10,6 +10,7 @@ import { CursorAcpProvider, closeAllCursorAcpSessions, closeCursorAcpSession, in
 import type { CursorAcpMessage } from '../../../../runtime/cursor/acp-client.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
 import { buildToolProgressBlocks } from '../../../../shared/progress/tool-rendering.js';
+import { buildTaskProgressMarkdown } from '../../../../channels/feishu/markdown.js';
 
 class FakeAcp {
   connected = true;
@@ -92,6 +93,49 @@ function setup(perms?: PendingPermissions) {
 afterEach(async () => { await closeAllCursorAcpSessions(); });
 
 describe('Cursor ACP direct provider', () => {
+  it('normalizes native Todo titles and merges partial updates by ID without dropping earlier tasks', async () => {
+    const {client,provider,sessionId}=setup();
+    const result=collect(provider.streamChat({sessionId,prompt:'track tasks'}));
+    await until(()=>client.count===1);
+    const full=Array.from({length:5},(_,i)=>({id:`task-${i}`,content:`任务 ${i}`,status:i<3?'completed':'pending'}));
+    const send=(id:number,todos:unknown[],merge:boolean)=>client.send({id,method:'cursor/update_todos',params:{sessionId:client.nativeId,todos,merge}});
+    send(1,full,false);
+    const delta=[{...full[3],status:'completed'},{...full[4],status:'in_progress'}];
+    send(2,delta,true);send(3,delta,true);
+    send(4,[{id:'task-4',status:'cancelled'}],true);
+    send(5,[{id:'replacement',content:'下一阶段',status:'pending'},{id:'malformed',status:'pending'}],false);
+    client.end();const events=await result;
+    const snapshots=events.filter(event=>event.type==='task_update').map(event=>event.data.tasks);
+    assert.equal(snapshots.length,5);
+    assert.deepEqual(snapshots[1],full.map((task,i)=>({text:task.content,status:i<4?'completed' as const:'in_progress' as const})));
+    assert.deepEqual(snapshots[2],snapshots[1]);
+    assert.equal(snapshots[3].length,4);
+    assert.deepEqual(snapshots[4],[{text:'下一阶段',status:'pending'}]);
+    const rendered=buildTaskProgressMarkdown(snapshots[1]);
+    for(const task of full) assert.ok(rendered.includes(task.content));
+    assert.doesNotMatch(rendered,/undefined/);
+    assert.equal(client.responses.length,5);
+  });
+
+  it('normalizes standard ACP plans without requiring Cursor Todo IDs', async () => {
+    const {client,provider,sessionId}=setup();
+    const result=collect(provider.streamChat({sessionId,prompt:'plan'}));
+    await until(()=>client.count===1);
+    client.update({sessionUpdate:'plan',entries:[
+      {content:'读取记录',priority:'medium',status:'completed'},
+      {content:'修复问题',priority:'medium',status:'in_progress'},
+      {content:'验证结果',priority:'medium',status:'pending'},
+      {content:'取消事项',status:'cancelled'},
+      {content:' '},{status:'pending'},
+    ]});
+    client.end();const events=await result;
+    assert.deepEqual(events.find(event=>event.type==='task_update')!.data.tasks,[
+      {text:'读取记录',status:'completed'},
+      {text:'修复问题',status:'in_progress'},
+      {text:'验证结果',status:'pending'},
+    ]);
+  });
+
   it('unwraps native Read text with real newlines and retains the complete result for the shared preview', async () => {
     const {client,provider,sessionId}=setup();
     const result=collect(provider.streamChat({sessionId,prompt:'read'}));

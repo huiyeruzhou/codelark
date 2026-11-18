@@ -2,14 +2,19 @@ import { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
 
-/** Read only the requested ACP session's permission flag before a restrictive resume. */
-export function assertCursorAcpRestrictiveResume(sessionId: string, env: NodeJS.ProcessEnv = process.env): void {
+export function cursorAcpSessionStorePath(sessionId: string, env: NodeJS.ProcessEnv = process.env): string {
   if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new Error('Cursor ACP 会话 ID 无效。');
   const root = env.CURSOR_CONFIG_DIR?.trim() || (env.XDG_CONFIG_HOME?.trim() ? path.join(env.XDG_CONFIG_HOME, 'cursor') : path.join(os.homedir(), '.cursor'));
+  return path.join(root, 'acp-sessions', sessionId, 'store.db');
+}
+
+/** Read only the requested ACP session's permission flag before a restrictive resume. */
+export function assertCursorAcpRestrictiveResume(sessionId: string, env: NodeJS.ProcessEnv = process.env): void {
+  const storePath = cursorAcpSessionStorePath(sessionId, env);
   let db: DatabaseSync | undefined;
   let runEverything: unknown;
   try {
-    db = new DatabaseSync(path.join(root, 'acp-sessions', sessionId, 'store.db'), { readOnly: true });
+    db = new DatabaseSync(storePath, { readOnly: true });
     const row = db.prepare("SELECT value FROM meta WHERE key = '0'").get() as { value?: string | Uint8Array } | undefined;
     if (!row?.value) throw new Error('missing metadata');
     const raw = typeof row.value === 'string' ? row.value : Buffer.from(row.value).toString('utf8');

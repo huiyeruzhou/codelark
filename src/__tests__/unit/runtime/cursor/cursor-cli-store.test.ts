@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { cursorVisibleThinkingSummary, readCursorNativeMessages, readCursorNativeUserPrompts } from '../../../../runtime/cursor/cli-store.js';
+import { cursorVisibleThinkingSummary, readCursorNativeMessages, readCursorNativeUserPrompts, readCursorNativeTodos } from '../../../../runtime/cursor/cli-store.js';
+import { cursorAcpSessionStorePath } from '../../../../runtime/cursor/acp-session-policy.js';
 import { cursorNativeStore } from '../../../helpers/runtime/cursor-native-store.js';
 import { parseCursorTranscriptRecords, readCursorSessionMirrorRecordDeltaByFilePath } from '../../../../runtime/cursor/session-index.js';
 import { applyToolCallEventToTools, toolCallEventFromMirrorRecord } from '../../../../shared/progress/tool-events.js';
@@ -43,6 +44,59 @@ describe('Cursor native CLI progress', () => {
     const rootId = put(Buffer.concat(refs));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(Buffer.from(JSON.stringify({ latestRootBlobId: rootId })).toString('hex'));
   };
+
+  it('restores five current native Todos with original text/status while ignoring all message history', () => {
+    const field = (no: number, data: Buffer) => Buffer.concat([Buffer.from([no * 8 + 2, data.length]), data]);
+    const todos = Array.from({length:5},(_,status)=>({id:`todo-${status}`,content:`任务 ${status}\n  保留格式 “原文”`,status}));
+    const todoRefs = todos.map(todo => field(3,Buffer.from(put(Buffer.concat([
+      field(1,Buffer.from(todo.id)),field(2,Buffer.from(todo.content)),Buffer.from([24,todo.status]),
+    ])),'hex')));
+    // Broken message/turn refs must be irrelevant: Todo restore only follows field 3.
+    const rootId=put(Buffer.concat([field(1,Buffer.alloc(32,0xab)),...todoRefs,field(8,Buffer.alloc(32,0xcd))]));
+    db.prepare("INSERT INTO meta VALUES ('0', ?)").run(Buffer.from(JSON.stringify({latestRootBlobId:rootId})).toString('hex'));
+    const before=fs.readFileSync(store),mtime=fs.statSync(store).mtimeMs;
+    assert.deepEqual(readCursorNativeTodos(store),todos);
+    assert.deepEqual(readCursorNativeTodos(store),todos);
+    assert.deepEqual(fs.readFileSync(store),before);
+    assert.equal(fs.statSync(store).mtimeMs,mtime);
+    assert.equal(readCursorNativeMessages(store),null,'the invalid historical refs are intentionally unreadable');
+  });
+
+  it('does not invent or partially restore Todos from missing, malformed or newer state', () => {
+    const textFields=Buffer.from([10,1,65,18,1,66]); // id=A, content=B
+    const setTodos=(blobs:Buffer[])=>{
+      const rootId=put(Buffer.concat(blobs.map(blob=>Buffer.concat([Buffer.from([26,32]),Buffer.from(put(blob),'hex')]))));
+      db.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(JSON.stringify({latestRootBlobId:rootId}));
+    };
+    assert.equal(readCursorNativeTodos(path.join(root,'missing.db')),null);
+    assert.equal(fs.existsSync(path.join(root,'missing.db')),false,'read-only open must not create a store');
+    checkpoint([]);assert.equal(readCursorNativeTodos(store),null,'no field 3 does not fabricate an empty list');
+    setTodos([textFields]);
+    assert.deepEqual(readCursorNativeTodos(store),[{id:'A',content:'B',status:0}],'omitted enum is native unknown, not pending');
+    for(const bad of [
+      Buffer.concat([textFields,Buffer.from([24,9])]), // Unknown enum.
+      Buffer.concat([textFields,Buffer.from([24,128])]), // Truncated varint.
+      Buffer.concat([textFields,Buffer.from([26,1,49])]), // Status is a string, not an enum.
+      Buffer.from([10,1,65,18,50,66]), // Truncated content.
+      Buffer.from([10,1,65]), // Missing content.
+    ]){
+      setTodos([Buffer.from([10,1,67,18,1,68,24,1]),bad]);
+      const before=fs.readFileSync(store);
+      assert.equal(readCursorNativeTodos(store),null,'never return only the valid prefix of a corrupt list');
+      assert.deepEqual(fs.readFileSync(store),before);
+    }
+    const missingId=Buffer.alloc(32,0xef).toString('hex');
+    const rootId=put(Buffer.concat([Buffer.from([26,32]),Buffer.from(missingId,'hex')]));
+    db.prepare("UPDATE meta SET value=? WHERE key='0'").run(JSON.stringify({latestRootBlobId:rootId}));
+    assert.equal(readCursorNativeTodos(store),null);
+  });
+
+  it('resolves the same ACP store path for Todo restore and permission checks without accepting path traversal', () => {
+    assert.equal(cursorAcpSessionStorePath('session_1',{CURSOR_CONFIG_DIR:'/cursor-config',XDG_CONFIG_HOME:'/other'}),'/cursor-config/acp-sessions/session_1/store.db');
+    assert.equal(cursorAcpSessionStorePath('session-2',{XDG_CONFIG_HOME:'/xdg'}),'/xdg/cursor/acp-sessions/session-2/store.db');
+    assert.equal(cursorAcpSessionStorePath('session3',{}),path.join(os.homedir(),'.cursor','acp-sessions','session3','store.db'));
+    for(const id of ['', '../other','nested/session','a\\b']) assert.throws(()=>cursorAcpSessionStorePath(id,{}),/会话 ID 无效/);
+  });
 
   it('observes tool activity while the transcript is frozen, without inventing text, tool results or completion', () => {
     const transcript = path.join(root, 'conversation.jsonl');
