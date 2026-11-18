@@ -152,6 +152,7 @@ function isPlatformMessageRequest(value: unknown): value is PlatformMessageReque
     && typeof message?.msgType === 'string'
     && Boolean(message.msgType.trim())
     && message.content !== undefined
+    && (request.replyToMessageId === undefined || typeof request.replyToMessageId === 'string')
     && (request.idempotencyKey === undefined || typeof request.idempotencyKey === 'string');
 }
 
@@ -582,6 +583,7 @@ export async function deliverPlatformMessageToSession(options: {
   discoveryDirectory?: string;
   callerTmuxSession?: string;
   separateMessage?: boolean;
+  replyToMessageId?: string;
 }): Promise<DiscoveredBridgeSession> {
   const target = await resolveBridgeSessionTarget(options);
   if (!options.separateMessage && ['text', 'post'].includes(options.platformMessage.msgType)
@@ -595,6 +597,7 @@ export async function deliverPlatformMessageToSession(options: {
     body: JSON.stringify({
       targetInternalChatId: target.internalChatId,
       platformMessage: options.platformMessage,
+      replyToMessageId: options.replyToMessageId,
       idempotencyKey: options.idempotencyKey,
     }),
   }, 15_000);

@@ -387,12 +387,16 @@ function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   reason: 'command_received' | 'tmux_input_actions_completed' | 'app_server_input_accepted' | 'cursor_desktop_input_accepted',
+  outputStream?: { streamKey: string; requestMessageId?: string },
 ): void {
   const raw = msg.raw as { manualIngress?: unknown } | undefined;
   const syntheticManualIngress = raw?.manualIngress === true || msg.messageId?.startsWith('manual:');
   if (syntheticManualIngress || !msg.messageId) return;
   if (reason === 'app_server_input_accepted' || reason === 'tmux_input_actions_completed') {
-    void adapter.onInputDelivery?.(msg, reason === 'app_server_input_accepted' ? 'accepted' : 'submitted').catch((error) => {
+    const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
+    const task = binding ? getState().activeTasks.get(binding.bridgeSessionId) : undefined;
+    const stream = outputStream || (task ? { streamKey: task.streamKey, requestMessageId: task.requestMessageId } : undefined);
+    void adapter.onInputDelivery?.(msg, reason === 'app_server_input_accepted' ? 'accepted' : 'submitted', undefined, stream).catch((error) => {
       console.warn('[bridge-manager] Input delivery notice failed:', describeUnknownError(error));
     });
   }
@@ -1402,6 +1406,7 @@ export async function sendPlatformMessage(request: PlatformMessageRequest): Prom
   const result = await deliver(adapter, {
     address,
     text: '',
+    replyToMessageId: request.replyToMessageId,
     platformMessage: idempotencyKey && !request.platformMessage.uuid
       ? { ...request.platformMessage, uuid: idempotencyKey }
       : request.platformMessage,
@@ -5060,11 +5065,14 @@ async function handleMessage(
               const prompt = sanitizeInput(buildConversationPromptText(appendModelContextText(
                 modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), msg.contextText), prepared.persistedFileMeta)).text;
               if (prompt) {
-                await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
+                const turnId = await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
                   ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session), {
                     channelType: msg.address.channelType, chatId: msg.address.chatId, messageId: msg.messageId,
+                    rootMessageId: msg.threadRootMessageId || msg.messageId,
                   });
-                addInboundGetReaction(adapter, msg, 'app_server_input_accepted');
+                addInboundGetReaction(adapter, msg, 'app_server_input_accepted', {
+                  streamKey: buildMirrorStreamKey(session.id, turnId, '', binding.id),
+                });
               }
               void reconcileMirrorSubscriptions().catch((error) => console.warn('[bridge-manager] app-server mirror:', error));
               ack();
@@ -5177,8 +5185,11 @@ async function handleMessage(
       const tmuxProviderForwardStartedAtMs = Date.now();
       // An IM steer is also owned by the direct stream. Register its actual
       // prompt before the native mirror can observe the injected user row.
-      const cursorSuppressionId = tmuxProviderRuntime.runtime === 'cursor'
+      const cursorSuppressionId = tmuxProviderRuntime.runtime === 'cursor' && tmuxProviderActiveTask
         ? beginMirrorSuppression(tmuxProviderBridgeSessionId, text) : undefined;
+      if (cursorSuppressionId) {
+        (tmuxProviderActiveTask!.followupMirrorSuppressionIds ??= new Set()).add(cursorSuppressionId);
+      }
       try {
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
@@ -5245,7 +5256,11 @@ async function handleMessage(
           replyToMessageId: msg.messageId,
         });
       } finally {
-        if (cursorSuppressionId) abortMirrorSuppression(tmuxProviderBridgeSessionId, cursorSuppressionId);
+        // Submission completing is not the end of the model turn. Keep ownership
+        // through long tools and multiple steers; the direct runner releases it.
+        if (cursorSuppressionId && getState().activeTasks.get(tmuxProviderBridgeSessionId) !== tmuxProviderActiveTask) {
+          abortMirrorSuppression(tmuxProviderBridgeSessionId, cursorSuppressionId);
+        }
       }
     }
     ack();
@@ -5272,7 +5287,7 @@ async function handleMessage(
       });
       addInboundGetReaction(adapter, msg, 'cursor_desktop_input_accepted');
       void (async () => {
-        const notified = await adapter.onInputDelivery?.(msg, sent.status === 'queued' ? 'queued' : 'accepted', sent.warning).catch((error) => {
+        const notified = await adapter.onInputDelivery?.(msg, sent.status === 'queued' ? 'queued' : 'accepted', sent.warning, { streamKey: tmuxProviderActiveTask.streamKey, requestMessageId: tmuxProviderActiveTask.requestMessageId }).catch((error) => {
           console.warn('[bridge-manager] Input delivery notice failed:', describeUnknownError(error));
           return false;
         });

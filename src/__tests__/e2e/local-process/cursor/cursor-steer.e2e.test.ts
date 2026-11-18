@@ -13,11 +13,16 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 
+import { filterSuppressedMirrorRecords, normalizeMirrorPromptText } from '../../../../bridge/mirror/suppression.js';
+import type { StreamingHistoryItem } from '../../../../domain/index.js';
+
 const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 class SteerAdapter extends RecordingAdapter {
   live = true;
   events: Array<{ type: string; text: string; status?: string }> = [];
   reactions: string[] = [];
+  histories = new Map<string, StreamingHistoryItem[]>();
+  onStreamHistory(_chat: string, items: StreamingHistoryItem[], key?: string) { this.histories.set(key || _chat, structuredClone(items)); }
   onReaction?: (id: string) => void;
   isRunning() { return this.live; }
   consumeOne() { return this.consumeInboundMessage(this.live); }
@@ -34,6 +39,7 @@ for (const scenario of [
   { name: 'stale redraw before queue', redrawDelay: 1_200, interruptOnlyFrames: 0 },
   { name: 'interrupt-only footer before safe steer', redrawDelay: 0, interruptOnlyFrames: 4 },
   { name: 'queued input with retained editor text', redrawDelay: 0, interruptOnlyFrames: 0, retainedDraft: true },
+  { name: 'long-running turn after a follow-up receipt', redrawDelay: 0, interruptOnlyFrames: 0, count: 2, longTurn: true },
   { name: 'two rapid follow-ups', redrawDelay: 0, interruptOnlyFrames: 0, count: 2 },
   { name: 'three rapid identical follow-ups', redrawDelay: 0, interruptOnlyFrames: 0, count: 3 },
   { name: 'delayed earlier input checkpoint', redrawDelay: 0, interruptOnlyFrames: 0, delayedReceipt: true, count: 2 },
@@ -133,7 +139,25 @@ for (const scenario of [
     if (delayedReceipt) assert.ok(!adapter.reactions.includes('initial'), 'earlier input must still await its receipt');
     assert.ok(!finished.includes('initial'));
     staleUntil = Date.now() + scenario.redrawDelay;
-    for (const [i, text] of followups.entries()) adapter.enqueueManualInboundMessage(inboundMessage(address, text, `steer-${i}`));
+    for (const [i, text] of followups.entries()) {
+      adapter.enqueueManualInboundMessage(inboundMessage(address, text, `steer-${i}`));
+      if ('longTurn' in scenario && i === 0) {
+        await until(() => finished.includes('steer-0'), 'first steer submission must finish while model keeps running');
+        const suppressions = structuredClone(bridge.mirrorSuppressUntil);
+        assert.ok(suppressions.get(session.id)?.some((s: { promptText: string; until: number }) => s.promptText === normalizeMirrorPromptText(text) && s.until === Infinity),
+          'an accepted follow-up must retain direct ownership until the model finishes, not expire after submission');
+        const owned = suppressions.get(session.id).find((entry: { promptText: string }) => entry.promptText === normalizeMirrorPromptText(text));
+        const turnId = owned.activeTurnId || owned.candidateTurnId || 'late-steer';
+        const records = [
+          { signature: 'late-start', type: 'task_started' as const, content: '', timestamp: '', turnId },
+          { signature: 'late-user', type: 'message' as const, role: 'user' as const, content: text, userPrompt: text, timestamp: '', turnId },
+          { signature: 'late-answer', type: 'message' as const, role: 'assistant' as const, content: 'late tool output', timestamp: '', turnId },
+        ];
+        assert.deepEqual(filterSuppressedMirrorRecords({ suppressions, ignoredTurnIds: new Map() }, session.id, records,
+          { suppressionWindowMs: 4000, promptMatchGraceMs: 120000 }, Date.now() + 10 * 60_000), [],
+          'ten minutes of model work must not produce a second mirror card');
+      }
+    }
     await until(() => backend.steers.length === count, 'fake model must receive each InjectContextAction during the original run');
     await until(() => finished.includes('initial') && followups.every((_, i) => finished.includes(`steer-${i}`)), 'steered original run and input delivery must complete');
     assert.equal(backend.prompts.length, delayedReceipt ? 2 : 1, 'steer must not create another model run');
@@ -150,11 +174,15 @@ for (const scenario of [
         'test must keep the follow-up queued through each interrupt-only footer');
     }
     if ('retainedDraft' in scenario) assert.ok(staleFrames > 0, 'queued input must coexist with the stale draft');
+    const history = adapter.histories.get(`im:${session.id}:initial`) || [];
+    assert.deepEqual(history.flatMap(item => item.type === 'markdown' && item.role === 'user' ? [item.content] : []), [initial, ...followups],
+      'the original card must contain each accepted native user input once, including identical steers');
+    assert.ok(![...adapter.histories.keys()].some(key => key.startsWith('mirror:')), 'direct native output must not be replayed as another mirror card');
     assert.deepEqual(backend.errors, []); passed = true;
   } finally {
     tmuxCore.capturePane = originalCapture;
     if (!passed || process.env.CODELARK_REAL_CURSOR_E2E_KEEP_ARTIFACTS === '1') {
-      fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ prompts: backend.prompts, steers: backend.steers, errors: backend.errors, events: adapter.events, messages: adapter.sent, staleFrames, observedInterruptOnlyFrames }, null, 2));
+      fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ prompts: backend.prompts, steers: backend.steers, errors: backend.errors, events: adapter.events, histories: Object.fromEntries(adapter.histories), messages: adapter.sent, staleFrames, observedInterruptOnlyFrames }, null, 2));
       fs.writeFileSync(path.join(root, 'screen.txt'), (await originalCapture(pane, 120).catch(() => ({ screen: '' }))).screen);
       console.error(`Cursor steer evidence: ${root}`);
     }

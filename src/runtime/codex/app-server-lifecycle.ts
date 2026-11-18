@@ -21,7 +21,7 @@ export interface AppServerThreadOptions {
   config?: Record<string, unknown>;
   developerInstructions?: string;
 }
-export interface AppServerReplyTarget { channelType: string; chatId: string; messageId: string }
+export interface AppServerReplyTarget { channelType: string; chatId: string; messageId: string; rootMessageId?: string }
 export interface AppServerSubmission { id: string; method: string; turnId?: string; replyTarget?: AppServerReplyTarget }
 export interface AppServerPendingRequest {
   /** Includes connection generation: a callback from an old connection cannot answer a replay. */
@@ -136,7 +136,11 @@ export class CodexAppServerLifecycle {
   }
 
   private rememberReplyTarget(threadId: string, turnId: string, submission?: AppServerSubmission): void {
-    if (!submission?.replyTarget || submission.method !== 'turn/start' || this.replyTarget(threadId, turnId)) return;
+    if (!submission?.replyTarget) return;
+    const previous = this.replyTarget(threadId, turnId);
+    if (previous && (submission.method === 'turn/start'
+      || previous.channelType !== submission.replyTarget.channelType || previous.chatId !== submission.replyTarget.chatId
+      || (previous.rootMessageId || previous.messageId) === (submission.replyTarget.rootMessageId || submission.replyTarget.messageId))) return;
     const targets = this.replyTargets.get(threadId)!;
     targets[turnId] = submission.replyTarget;
     for (const key of Object.keys(targets).slice(0, -128)) delete targets[key];

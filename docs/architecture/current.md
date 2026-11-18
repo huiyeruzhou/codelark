@@ -613,8 +613,17 @@ Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Cod
 
 ### 话题回复的来源与运行状态
 
-普通群的话题回复由 `channels[].config.threadReplyChats`（TOML `thread_reply_chats`）控制，不改变 `ChannelAddress.chatId`，不复用客服模式的虚拟会话键。交互轮次显式传递 `requestMessageId`；CardKit 初次创建前保存回复目的地与开关值，创建重试、续卡及静态恢复沿用同一目的地。
+普通群的话题回复由 `channels[].config.threadReplyChats`（TOML `thread_reply_chats`）控制，不改变 `ChannelAddress.chatId`，不复用客服模式的虚拟会话键。交互轮次显式传递 `requestMessageId`；平台收到成功提交的输入后，按逻辑 stream 保存回复目的地；卡片创建、重试、续卡及静态恢复消费这份意图。话题内 steer 保持目的地，话题外 steer 更新目的地并通过原有续卡通路切换，不查询活动卡片来判断模型状态或输入归属。话题卡不按每条用户记录分页，只在达到容量限制时续卡；普通群卡保留按输入分页的行为。
 
-Codex app-server 的 `turn/start` 提交在既有持久提交记录中携带回复来源。原生 `userMessage.clientId` 或提交响应确认实际 turn 后保存对应关系；最多保留最近 128 轮，`turn/steer` 不覆盖来源。原生 start 通知可能早于输入确认，因此该间隙暂不向 mirror 发布尚未关联的记录，确认后按原游标正常消费。不同群的订阅只使用自身来源，不把另一个群的消息 ID 当回复目标。
+Codex app-server 的 `turn/start` 提交在既有持久提交记录中携带回复来源。原生 `userMessage.clientId` 或提交响应确认实际 turn 后保存对应关系；最多保留最近 128 轮，`turn/steer` 只有跨话题时更新来源，重启后仍使用最新已接收输入对应的话题。原生 start 通知可能早于输入确认，因此该间隙暂不向 mirror 发布尚未关联的记录，确认后按原游标正常消费。不同群的订阅只使用自身来源，不把另一个群的消息 ID 当回复目标。
 
 普通 `runtime_status` 汇总任务队列与原生观察证据，现包含 `unknown`。legacy tmux 在重启后尚未恢复观察、协议断连或提交尚未对账时，保留“状态待确认”；旧的 completed 健康状态和进程存活均不能把它改为空闲。等待问卷计为活动任务，`/then` 在状态未知时不自动提交。话题路由不据此新增 start/steer 判断；协议继续使用自身的 `unknown/idle/active/waiting` 和未确认提交对账。飞书 Get 表情仍只表达现有传输边界，不提升为原生 steer 成功证据。
+
+
+Cursor CLI/ Desktop 的直接流从原生用户记录生成卡片用户输入，按记录 signature 去重，首条消息不再由 runner 额外合成。连续相同 steer 仍是不同的已接收输入；不能按文本内容合并。直接流的 follow-up 防重复记录由当前交互任务持有，输入提交完成不能启动过期倒计时；任务结束后才释放给已有的尾部同步收敛逻辑，防止后台 mirror 重复发卡。
+
+内置 `/tmux-screen`、`/pty-screen` 和 `/shell` 的持续刷新卡片固定发起消息作为回复位置，异步刷新和文本后备发送都沿用它。独立 `lark-live-monitor-card` 使用 `reply_to_message_id` 创建话题卡，已有卡仅按 card ID 更新、恢复和停止。条件监控的平台通知可通过 `codelark send message --reply-to <om_ ID>` 固定回复位置；跨群通知不能借用来源群的消息 ID。旧 monitor 没有保存发起消息时不猜测、不迁移。
+
+边界：`/every`、`/then` 和发给 Agent 的后台任务目前只保存群和会话，不能承诺自动回到创建命令所在话题；它们需要独立保存并传播平台回复来源。本次没有把该缺失伪装成“最新消息”，也没有修改已有任务的发送位置。
+
+从设计上，平台输入的身份与接收状态、原生运行生命周期、卡片输出位置是三个独立事实。后续 provider 改造应让单个运行只有一个输出负责人，mirror 用于未被该负责人消费的本地运行；话题位置必须沿生命周期持久传递，不能由输入状态、屏幕文案或超时推断。ACP 能提供协议事件，但不会自动解决输出的重复所有权或平台路由。

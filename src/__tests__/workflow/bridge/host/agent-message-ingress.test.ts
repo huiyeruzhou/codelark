@@ -235,10 +235,12 @@ describe('agent message manual ingress', () => {
       targetInternalChatId: target.id,
       platformMessage: { msgType: 'interactive', content: { schema: '2.0', body: { elements: [] } } },
       idempotencyKey: 'condition-monitor-platform-id',
+      replyToMessageId: 'om_monitor_origin',
     };
     await sendPlatformMessage(platformRequest);
     await sendPlatformMessage(platformRequest);
     assert.equal(adapter.sentMessages.length, beforePlatformMessage + 1);
+    assert.equal(adapter.sentMessages.at(-1)?.replyToMessageId, 'om_monitor_origin');
     assert.equal(
       adapter.sentMessages.at(-1)?.platformMessage?.uuid,
       'condition-monitor-platform-id',

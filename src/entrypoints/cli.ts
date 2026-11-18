@@ -497,7 +497,7 @@ function rejectUnknownNamedArgs(
 export function buildSendHelpText(): string {
   return [
     `Usage: ${PRIMARY_CLI_NAME} send agent --source <target> --target <target> --text <message> [--source-home <path>] [--home <path>] [--idempotency-key <key>]`,
-    `       ${PRIMARY_CLI_NAME} send message --target <target> --msg-type <type> --content <json> [--home <path>] [--idempotency-key <key>]`,
+    `       ${PRIMARY_CLI_NAME} send message --target <target> --msg-type <type> --content <json> [--home <path>] [--idempotency-key <key>] [--reply-to <message-id>]`,
     '',
     'agent 会把普通输入送入目标 Agent lane，并在源群与目标群显示发送/接收卡片。',
     '发送成功时输出包含 ok=true、target 和 chat_name 的 JSON；失败时以非零状态退出。调用方必须检查结果后再宣称送达。',
@@ -516,6 +516,7 @@ export interface ParsedSendCommand {
   msgType?: string;
   content?: unknown;
   separateMessage?: boolean;
+  replyToMessageId?: string;
   idempotencyKey?: string;
 }
 
@@ -542,7 +543,7 @@ export function parseSendArgs(args: string[]): ParsedSendCommand {
     };
   }
   rejectUnknownNamedArgs(parsed, [
-    '--target', '--home', '--msg-type', '--content', '--idempotency-key',
+    '--target', '--home', '--msg-type', '--content', '--idempotency-key', '--reply-to',
   ], ['--separate-message']);
   const rawContent = requiredArg(parsed.values, '--content');
   let content: unknown;
@@ -555,6 +556,7 @@ export function parseSendArgs(args: string[]): ParsedSendCommand {
     targetHome,
     msgType: requiredArg(parsed.values, '--msg-type'),
     ...(parsed.flags.has('--separate-message') ? { separateMessage: true } : {}),
+    ...(parsed.values.get('--reply-to')?.trim() ? { replyToMessageId: parsed.values.get('--reply-to')!.trim() } : {}),
     content,
     ...(idempotencyKey ? { idempotencyKey } : {}),
   };
@@ -582,6 +584,7 @@ async function runSendCommand(args: string[]): Promise<void> {
         idempotencyKey: command.idempotencyKey,
         callerTmuxSession: await currentTmuxSession(),
         separateMessage: command.separateMessage,
+        replyToMessageId: command.replyToMessageId,
       });
   process.stdout.write(formatSendResult(target, command.mode));
 }

@@ -123,7 +123,7 @@ export abstract class BaseChannelAdapter {
   manageCustomerServiceMode?(_msg: InboundMessage, _args: string): string;
 
   /** Delivery evidence; submitting terminal keys does not prove model acceptance. */
-  onInputDelivery?(_msg: InboundMessage, _status: 'submitted' | 'accepted' | 'queued', _detail?: string): Promise<boolean>;
+  onInputDelivery?(_msg: InboundMessage, _status: 'submitted' | 'accepted' | 'queued', _detail?: string, _stream?: { streamKey: string; requestMessageId?: string }): Promise<boolean>;
   onMessageStart?(_chatId: string, _streamKey?: string, _requestMessageId?: string): void;
   onMessageEnd?(_chatId: string, _streamKey?: string): void;
   acknowledgeUpdate?(_updateId: number): void;

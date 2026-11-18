@@ -63,3 +63,5 @@ codelark monitor cancel "<stable-task-id>" --home "<owner-codelark-home>"
 ```
 
 Report the script path, stable task ID, interval, exact target, notification shape, mention choice, and dry-check result to the user.
+
+话题通知：`DELIVERY_KIND="message"` 时，把目标群中本次发起消息的真实 `om_` ID 固定到 `REPLY_TO_MESSAGE_ID`，模板通过 `codelark send message --reply-to` 传递。在目标群启用 `/thread-mode on` 后，通知会进入该消息的话题。不要使用监控 UUID、会话 ID、其他群消息或运行时最新消息作为目标；跨群通知必须单独指定目标群的话题来源。`agent` 通知是向模型提交任务，不代表平台话题回复。

@@ -76,6 +76,7 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
     channelType: adapter.channelType,
     chatId: msg.address.chatId,
     streamKey: `tmux-screen:${msg.address.channelType}:${msg.address.chatId}:${binding.bridgeSessionId}`,
+    ensureStarted: () => adapter.onMessageStart?.(msg.address.chatId, tmuxScreenTarget.streamKey, msg.messageId),
   };
   const tmuxScreenCard = (
     command === '/tmux-screen'
@@ -140,6 +141,7 @@ async function handleTmuxDispatchCommand(params: TerminalDispatchParams): Promis
           deliver: async (text) => {
             await deliverBridgeNotice(adapter, msg.address, text, {
               sessionId: binding.bridgeSessionId,
+              replyToMessageId: msg.messageId,
               audit: true,
             });
           },
@@ -162,6 +164,7 @@ async function handlePtyScreenDispatchCommand(params: TerminalDispatchParams): P
     channelType: adapter.channelType,
     chatId: msg.address.chatId,
     streamKey: `pty-screen:${msg.address.channelType}:${msg.address.chatId}:${binding.bridgeSessionId}`,
+    ensureStarted: () => adapter.onMessageStart?.(msg.address.chatId, ptyScreenTarget.streamKey, msg.messageId),
   };
   const ptyScreenCard = (
     adapter.supportsStructuredStreamingUi?.(msg.address.chatId)
@@ -192,6 +195,7 @@ async function handlePtyScreenDispatchCommand(params: TerminalDispatchParams): P
       deliver: async (text) => {
         await deliverBridgeNotice(adapter, msg.address, text, {
           sessionId: binding.bridgeSessionId,
+          replyToMessageId: msg.messageId,
           audit: true,
         });
       },
@@ -207,6 +211,7 @@ async function handleShellDispatchCommand(params: TerminalDispatchParams): Promi
     channelType: adapter.channelType,
     chatId: msg.address.chatId,
     streamKey: `shell:${msg.address.channelType}:${msg.address.chatId}:${commandBinding?.bridgeSessionId || 'none'}:${msg.messageId}`,
+    ensureStarted: () => adapter.onMessageStart?.(msg.address.chatId, shellTarget.streamKey, msg.messageId),
   };
   const shellCard = (
     adapter.supportsStructuredStreamingUi?.(msg.address.chatId)

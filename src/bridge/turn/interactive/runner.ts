@@ -167,6 +167,8 @@ export interface InteractiveTaskState {
   streamFinalized: boolean;
   uiEnded: boolean;
   mirrorSuppressionId: string | null;
+  /** Follow-up inputs remain owned by this direct stream until it finishes. */
+  followupMirrorSuppressionIds?: Set<string>;
   finalizeFromExternalTerminal?(
     outcome: 'completed' | 'failed' | 'aborted',
     detail?: string,
@@ -629,7 +631,7 @@ export async function runInteractiveMessage(
 
   try {
     const promptText = text || (attachments && attachments.length > 0 ? DEFAULT_ATTACHMENT_PROMPT : '');
-    if (useInteractiveStreamUi && msg.text.trim()) {
+    if (useInteractiveStreamUi && !isCursorTranscriptTurn && msg.text.trim()) {
       applyUnifiedTurnHistoryUserText(streamState, msg.text);
       streamUi.feedback.pushHistory(streamState.historyItems);
     }
@@ -861,6 +863,11 @@ export async function runInteractiveMessage(
         '',
       );
     }
+
+    for (const id of taskState.followupMirrorSuppressionIds || []) {
+      deps.abortMirrorSuppression(binding.bridgeSessionId, id);
+    }
+    taskState.followupMirrorSuppressionIds?.clear();
 
     if (taskState.mirrorSuppressionId) {
       if (finalOutcome === 'aborted' || isCursorTranscriptTurn || isZcodeTranscriptTurn) {

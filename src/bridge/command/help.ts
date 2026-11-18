@@ -41,7 +41,7 @@ export function buildHelpCommandResponse(): string {
     '- `/fork [新群名]`：从最近已完成的 Codex 卡片分叉；回复卡片则从该卡片分叉。Agent 继承完整历史，新群仅转发该卡片及之前最近 10 条消息，原会话保留，文件不回退',
     '- `/clear [name] [path]` 在当前聊天上下文创建新对话并绑定过去；名称或路径包含空格时，请使用英文双引号 `"` 或英文单引号 `\'`；可用 `/t` 附回旧对话；当前任务或 tmux TUI 追加输入运行中会先询问是否终止',
     '- `/require-at` 查看当前会话的群聊 @bot 要求；`/require-at on|off` 或 `/require_at on|off` 修改当前会话，`/clear`、`/new` 继承此设置',
-    '- `/thread-mode on|off|status` 设置当前群的话题回复；沿用群会话，话题内追问继续处理，运行中补充不移动当前卡片',
+    '- `/thread-mode on|off|status` 设置当前群的话题回复；沿用群会话，话题内追问继续处理，话题内补充继续原卡，话题外补充在新消息下续接',
     '- `/customer` 查看当前群客服模式；`/customer on` 开启，`/customer off` 关闭；群内话题也可使用，作用于整个群。权限沿用客服白名单，空名单默认 bot 创始人',
     '- `/whitelist` 查看客服控制白名单；`/whitelist add @成员` 添加，`/whitelist remove @成员` 移除；支持多人和 `me`；空名单默认 bot 创始人拥有权限，可直接添加成员。别名 `/service-admin`',
     '- 直接发文本：继续当前会话；未绑定时进入临时 BridgeSession',

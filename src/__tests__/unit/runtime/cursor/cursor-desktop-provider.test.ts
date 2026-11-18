@@ -202,6 +202,9 @@ describe('Cursor Desktop provider', () => {
       });
       let output = '';
       for await (const chunk of streamCursorDesktop({ prompt: 'new prompt', sessionId: 'bridge', cursorSessionId: THREAD_ID })) output += chunk;
+      const users = output.trim().split('\n').map(line => JSON.parse(line.slice(6)))
+        .filter(event => event.type === 'history_item').map(event => JSON.parse(event.data)).filter(item => item.role === 'user');
+      assert.deepEqual(users, [{ type: 'markdown', role: 'user', content: 'new prompt' }]);
       assert.match(output, /real native output/);
       assert.ok(output.indexOf('tool_result') < output.indexOf('"type":"result"'));
       assert.equal((output.match(/"type":"tool_use"/g) || []).length, 1);

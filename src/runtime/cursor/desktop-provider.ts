@@ -332,7 +332,6 @@ async function pollDesktopTranscript(
         continue;
       }
       if (record.turnId && record.turnId !== targetTurnId) continue;
-      if (record.type === 'message' && record.role === 'user') continue;
       enqueueCursorRecord(controller, context, record);
     }
     if (context.nextOffset > previousOffset) lastActivityAt = Date.now();

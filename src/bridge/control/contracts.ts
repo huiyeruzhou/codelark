@@ -48,6 +48,7 @@ export interface AgentInputRequest {
 
 export interface PlatformMessageRequest {
   targetInternalChatId: string;
+  replyToMessageId?: string;
   platformMessage: OutboundPlatformMessage;
   idempotencyKey?: string;
 }

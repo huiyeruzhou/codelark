@@ -596,6 +596,11 @@ export function enqueueCursorRecord(
   if (record.turnId && context.baselineTurnIds?.has(record.turnId)) return;
   if (context.emittedSignatures.has(record.signature)) return;
   context.emittedSignatures.add(record.signature);
+  if (record.type === 'message' && record.role === 'user') {
+    const content = (record.userPrompt ?? record.content).trim();
+    if (content) controller.enqueue(sseEvent('history_item', { type: 'markdown', role: 'user', content }));
+    return;
+  }
   if (record.type === 'message' && record.role === 'assistant' && record.content) {
     controller.enqueue(sseEvent(record.replacementKey ? 'text_snapshot' : 'text', record.content));
     return;

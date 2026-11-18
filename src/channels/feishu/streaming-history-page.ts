@@ -35,14 +35,15 @@ export function buildHistoryPage(
   history: StreamingHistoryItem[],
   start: HistoryPageCursor,
   fits: (items: StreamingHistoryItem[]) => boolean,
+  splitOnUserInput = true,
 ): { items: StreamingHistoryItem[]; next: HistoryPageCursor; hasMore: boolean } {
   let next = { ...start, historyTextOffset: start.historyTextOffset || 0 };
   let items: StreamingHistoryItem[] = [];
   let lastSourceItem = -1;
   while (next.historyItemOffset < history.length) {
     const source = history[next.historyItemOffset]!;
-    // 新用户输入开启新的展示页；runtime turn 和完整历史仍保持连续。
-    if (source.type === 'markdown' && source.role === 'user' && items.length > 0) break;
+    // 普通群消息按输入分页；话题中的补充继续更新当前卡片，只按容量分页。
+    if (splitOnUserInput && source.type === 'markdown' && source.role === 'user' && items.length > 0) break;
     const tool = source.type === 'tool_panel' ? source.tools[next.historyToolCallOffset] : undefined;
     if (source.type === 'tool_panel' && !tool) {
       next = { historyItemOffset: next.historyItemOffset + 1, historyToolCallOffset: 0, historyTextOffset: 0 };

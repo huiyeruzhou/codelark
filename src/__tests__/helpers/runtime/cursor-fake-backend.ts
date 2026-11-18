@@ -84,6 +84,7 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
         send(field(4, join(field(1, id), field(3, join(field(1, ref), field(2, data))))));
       }
     };
+    const injectedMessages: unknown[] = [];
     let buffer: Buffer = Buffer.alloc(0);
     stream.on('data', chunk => {
       buffer = join(buffer, Buffer.from(chunk));
@@ -177,9 +178,10 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
             const final = model.steer!(text);
             send(field(1, field(23, join(field(1, injectionId), field(2, field(2, Buffer.alloc(0)))))));
             send(field(1, field(6, field(1, user))));
+            injectedMessages.push({ role: 'user', content: [{ type: 'text', text: `<timestamp>test time</timestamp>\n<user_query>\n${text}\n</user_query>` }], providerOptions: { cursor: { turnSteer: true } } });
             persist([
               { role: 'user', content: [{ type: 'text', text: prompt }] },
-              { role: 'user', content: [{ type: 'text', text: `<timestamp>test time</timestamp>\n<user_query>\n${text}\n</user_query>` }], providerOptions: { cursor: { turnSteer: true } } },
+              ...injectedMessages,
               ...(typeof final === 'string' ? [{ role: 'assistant', content: [{ type: 'text', text: final }] }] : []),
             ], [], () => {
               if (typeof final !== 'string') {

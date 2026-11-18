@@ -67,10 +67,10 @@ describe('cli entrypoint', () => {
     });
     assert.deepEqual(parseSendArgs([
       'message', '--target', 'target-session', '--msg-type', 'interactive',
-      '--content', '{"header":{"template":"green"}}',
+      '--content', '{"header":{"template":"green"}}', '--reply-to', 'om_monitor_origin',
     ]), {
       mode: 'message', target: 'target-session', targetHome: undefined,
-      msgType: 'interactive', content: { header: { template: 'green' } },
+      msgType: 'interactive', content: { header: { template: 'green' } }, replyToMessageId: 'om_monitor_origin',
     });
     assert.match(buildSendHelpText(), /msg_type \+ content/u);
     assert.match(buildSendHelpText(), /ok=true.*非零状态.*检查结果/su);

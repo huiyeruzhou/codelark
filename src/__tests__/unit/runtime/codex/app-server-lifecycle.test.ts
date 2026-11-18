@@ -700,9 +700,9 @@ for (const operationName of ['refresh', 'resume']) test(`detach rejects a late $
   assert.equal(f.runtime.snapshot('thread').attached, false);
 });
 
-test('routes a native turn to its initiating message through double steer, late acceptance and a completed boundary', async (t) => {
+test('routes a native turn through inside and outside steers, late acceptance and a completed boundary', async (t) => {
   const f = await fixture(t);
-  const origin = { channelType: 'feishu', chatId: 'oc_group', messageId: 'om_first' };
+  const origin = { channelType: 'feishu', chatId: 'oc_group', messageId: 'om_first', rootMessageId: 'om_first' };
   let firstRequest: any;
   f.handle(m => {
     if (m.method !== 'turn/start') return false;
@@ -723,13 +723,16 @@ test('routes a native turn to its initiating message through double steer, late 
   await Promise.all(['om_second', 'om_third'].map(messageId => f.runtime.submit('thread', text, {}, { ...origin, messageId })));
   assert.equal(f.received.filter(m => m.method === 'turn/steer').length, 2);
   assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), origin);
+  const outside = { ...origin, messageId: 'om_outside', rootMessageId: 'om_outside' };
+  await f.runtime.submit('thread', text, {}, outside);
+  assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), outside);
   f.send('turn/completed', { turn: { id: 'delayed', status: 'completed' } });
   await until(() => f.runtime.snapshot('thread').activity === 'idle');
   const next = { ...origin, messageId: 'om_next' };
   const nextId = await f.runtime.submit('thread', text, {}, next);
   assert.notEqual(nextId, 'delayed');
   assert.deepEqual(f.runtime.replyTarget('thread', nextId), next);
-  assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), origin);
+  assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), outside);
 });
 
 

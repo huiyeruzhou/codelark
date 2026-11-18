@@ -27,6 +27,7 @@ SOURCE_TARGET = OWNER_TARGET
 SOURCE_HOME = OWNER_HOME
 AGENT_TEXT = "The monitored condition is now satisfied."
 
+REPLY_TO_MESSAGE_ID = ""  # 话题通知填写目标群中本次发起消息的 om_ ID
 MESSAGE_TYPE = "interactive"
 MESSAGE_CONTENT: dict[str, Any] = {
     "schema": "2.0",
@@ -95,6 +96,8 @@ def send_notification() -> None:
             "--content", json.dumps(MESSAGE_CONTENT, ensure_ascii=False, separators=(",", ":")),
             "--idempotency-key", monitor_id,
         ]
+        if REPLY_TO_MESSAGE_ID:
+            arguments.extend(["--reply-to", REPLY_TO_MESSAGE_ID])
     command = build_codelark_command(arguments)
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode != 0:

@@ -132,19 +132,54 @@ it('keeps the original topic when creation fails and final output uses structure
   f.adapter.onMessageEnd(chatId, 'recover');
 });
 
-it('distinguishes transport submission, queueing and acceptance outside the topic without moving the live card', async () => {
+it('routes accepted outside steers by logical stream while inside and queued input keep the topic', async () => {
   const f = fixture();
+  const stream = { streamKey: 'live', requestMessageId: 'om_origin' };
   f.adapter.onMessageStart(chatId, 'live', 'om_origin'); await f.a.cardCreatePromises.get('live');
-  await f.adapter.onInputDelivery(input('om_inside', { threadRootMessageId: 'om_origin' }), 'accepted');
-  assert.equal(f.sent.length, 1);
-  for (const [status, expected] of [['submitted', '接收状态待确认'], ['queued', '已排队'], ['accepted', '模型已接收']] as const) {
-    await f.adapter.onInputDelivery(input(`om_${status}`), status);
-    assert.match(f.sent.at(-1).data.content, new RegExp(expected));
-    assert.match(f.sent.at(-1).data.content, /om_card1/);
-    assert.equal(f.sent.at(-1).path.message_id, `om_${status}`);
-    assert.equal(f.a.activeCards.get('live').replyToMessageId, 'om_origin');
+  f.adapter.onMessageStart(chatId, 'monitor', 'om_monitor'); await f.a.cardCreatePromises.get('monitor');
+  f.adapter.onStreamHistory(chatId, [
+    { type: 'markdown', role: 'user', content: '首条输入' },
+    { type: 'markdown', role: 'assistant', content: '正在处理' },
+    { type: 'markdown', role: 'user', content: '同话题补充' },
+    { type: 'markdown', role: 'user', content: '同话题再次补充' },
+  ], 'live');
+  await f.adapter.onInputDelivery(input('om_inside', { threadRootMessageId: 'om_origin' }), 'accepted', undefined, stream);
+  await f.adapter.onInputDelivery(input('om_queued'), 'queued', undefined, stream);
+  f.a.enqueueCardFlush('live'); await f.a.awaitCardFlushCompletion('live');
+  assert.equal(f.sent.length, 2);
+  await f.adapter.onInputDelivery(input('om_outside'), 'submitted', undefined, stream);
+  f.a.enqueueCardFlush('live'); await f.a.awaitCardFlushCompletion('live');
+  assert.equal(f.sent.length, 3);
+  assert.equal(f.sent.at(-1).path.message_id, 'om_outside');
+  assert.equal(f.sent.at(-1).data.reply_in_thread, true);
+  assert.equal(f.a.activeCards.get('monitor').replyToMessageId, 'om_monitor');
+  await f.adapter.onInputDelivery(input('om_origin'), 'accepted', undefined, stream);
+  await f.adapter.onInputDelivery(input('om_again', { threadRootMessageId: 'om_outside' }), 'accepted', undefined, stream);
+  f.a.enqueueCardFlush('live'); await f.a.awaitCardFlushCompletion('live');
+  assert.equal(f.sent.length, 3, 'inside input and delayed original receipt must not move or duplicate the card');
+  await f.adapter.onInputDelivery(input('om_new_topic'), 'accepted', undefined, stream);
+  assert(await f.adapter.onStreamEnd(chatId, 'completed', '最终输出留在新话题', 'live'));
+  assert.equal(f.sent.at(-1).path.message_id, 'om_new_topic');
+  f.adapter.onMessageEnd(chatId, 'live'); f.adapter.onMessageEnd(chatId, 'monitor');
+});
+
+it('remembers an outside steer before card creation finishes and recovers to that topic after creation failure', async () => {
+  for (const failed of [false, true]) {
+    const f = fixture();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const create = f.a.restClient.cardkit.v1.card.create;
+    f.a.restClient.cardkit.v1.card.create = async () => { await gate; return failed ? { code: 500 } : create(); };
+    f.adapter.onMessageStart(chatId, 'delayed', 'om_origin');
+    await f.adapter.onInputDelivery(input('om_outside'), 'accepted', undefined, { streamKey: 'delayed', requestMessageId: 'om_origin' });
+    assert.equal(f.a.streamReplyTargets.get('delayed').messageId, 'om_outside');
+    release(); await f.a.cardCreatePromises.get('delayed');
+    if (!failed) { f.a.enqueueCardFlush('delayed'); await f.a.awaitCardFlushCompletion('delayed'); }
+    f.adapter.onStreamHistory(chatId, [{ type: 'markdown', role: 'user', content: '新话题补充' }, { type: 'markdown', role: 'assistant', content: '继续原运行' }], 'delayed');
+    assert(await f.adapter.onStreamEnd(chatId, 'completed', '继续原运行', 'delayed'));
+    assert.equal(f.sent.at(-1).path.message_id, 'om_outside');
+    f.adapter.onMessageEnd(chatId, 'delayed');
   }
-  f.adapter.onMessageEnd(chatId, 'live');
 });
 
 
@@ -157,4 +192,41 @@ it('keeps model questions alongside their active card', async () => {
   assert.equal(f.sent.at(-1).path.message_id, 'om_card1');
   assert.equal(f.sent.at(-1).data.reply_in_thread, true);
   f.adapter.onMessageEnd(chatId, 'question');
+});
+
+it('releases routing after final output so a subsequent screen stream uses its own initiating topic', async () => {
+  const f = fixture();
+  const key = 'tmux-screen:reused';
+  for (const origin of ['om_origin', 'om_new_topic']) {
+    f.adapter.onMessageStart(chatId, key, origin);
+    await f.a.cardCreatePromises.get(key);
+    assert.equal(f.sent.at(-1).path.message_id, origin);
+    f.adapter.onStreamText(chatId, '屏幕监控已结束', key);
+    assert(await f.adapter.onStreamEnd(chatId, 'completed', '屏幕监控已结束', key));
+    assert.equal(f.a.streamReplyTargets.has(key), false);
+    assert.equal(f.a.streamReplyChanges.has(key), false);
+  }
+});
+
+
+it('pins a long-running shell monitor to its initiating thread through other messages and stop-like completion', async () => {
+  const { handleTerminalDispatchCommand } = await import('../../../../bridge/command/dispatch-terminal.js');
+  const f = fixture();
+  const binding = router.resolve(address);
+  f.a.lastIncomingMessageId.set(chatId, 'om_unrelated');
+  await handleTerminalDispatchCommand({ adapter: f.adapter, msg: { ...input('om_origin'), text: '/shell --force echo monitor' },
+    command: '/shell', args: '--force echo monitor', currentBinding: binding, commandBinding: binding, store: f.store, markdown: true,
+    deps: { shellRunner: async request => {
+      request.onProgress?.({ stdout: 'MONITOR_RUNNING', stderr: '' });
+      await Promise.all([...f.a.cardCreatePromises.values()]);
+      f.a.lastIncomingMessageId.set(chatId, 'om_outside');
+      request.onProgress?.({ stdout: 'MONITOR_UPDATED', stderr: '' });
+      return { exitCode: 0, stdout: 'MONITOR_STOPPED', stderr: '' };
+    } },
+  });
+  assert.ok(f.sent.length > 0);
+  for (const sent of f.sent) {
+    assert.equal(sent.method, 'reply'); assert.equal(sent.path.message_id, 'om_origin'); assert.equal(sent.data.reply_in_thread, true);
+  }
+  for (const key of f.a.activeCards.keys()) f.adapter.onMessageEnd(chatId, key);
 });
