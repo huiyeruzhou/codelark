@@ -174,7 +174,7 @@ export function ensureMirrorTurnState<TSubscription extends MirrorTurnStateHolde
     subscription.pendingTurn.turnId = record.turnId;
   }
   if (record.timestamp) {
-    subscription.pendingTurn.lastActivityAt = record.timestamp;
+    markMirrorActivity(subscription.pendingTurn, record.timestamp);
   }
   return subscription.pendingTurn;
 }
@@ -184,8 +184,9 @@ function markMirrorActivity(
   timestamp: string,
 ): void {
   const activityAt = timestamp || nowIso();
-  turnState.lastActivityAt = activityAt;
   const activityMs = Date.parse(activityAt);
+  // Checkpoints may append old records after a newer live tool observation.
+  if (activityMs >= (Date.parse(turnState.lastActivityAt) || 0)) turnState.lastActivityAt = activityAt;
   recordUnifiedTurnActivity(turnState, Number.isFinite(activityMs) ? activityMs : Date.now());
 }
 
@@ -410,7 +411,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
           subscription.pendingTurn.turnId = record.turnId;
         }
         if (record.timestamp) {
-          subscription.pendingTurn.lastActivityAt = record.timestamp;
+          markMirrorActivity(subscription.pendingTurn, record.timestamp);
         }
       }
       if (subscription.pendingTurn) {
@@ -471,7 +472,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
     if (record.type === 'context_usage') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
       applyUnifiedTurnContextUsage(pendingTurn, record.contextUsage || null, mirrorTimestampMs(record.timestamp));
-      pendingTurn.lastActivityAt = record.timestamp || nowIso();
+      markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onStatusProgress?.(subscription, pendingTurn);
       continue;
     }
@@ -482,7 +483,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         status: record.goalStatus || 'active',
         objective: record.goalObjective || record.content || '',
       }, mirrorTimestampMs(record.timestamp));
-      pendingTurn.lastActivityAt = record.timestamp || nowIso();
+      markMirrorActivity(pendingTurn, record.timestamp);
       if (hasVisibleTurnProgress(pendingTurn)) {
         hooks.onStreamText?.(subscription, pendingTurn);
       }
@@ -557,7 +558,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         if (text) {
           applyUnifiedTurnHistorySystemText(pendingTurn, text);
           stampHistoryForkSource(subscription, pendingTurn, record);
-          pendingTurn.lastActivityAt = record.timestamp || nowIso();
+          markMirrorActivity(pendingTurn, record.timestamp);
           hooks.onStreamText?.(subscription, pendingTurn);
         }
       }
@@ -571,26 +572,26 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
       if (record.reasoningKind === 'summary') {
         applyUnifiedTurnThinkingSummary(pendingTurn, text);
         stampHistoryForkSource(subscription, pendingTurn, record);
-        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        markMirrorActivity(pendingTurn, record.timestamp);
         hooks.onStreamText?.(subscription, pendingTurn);
         continue;
       }
       if (record.reasoningKind === 'history') {
         applyUnifiedTurnHistoryMarkdown(pendingTurn, 'thinking', text);
         stampHistoryForkSource(subscription, pendingTurn, record);
-        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        markMirrorActivity(pendingTurn, record.timestamp);
         hooks.onStreamText?.(subscription, pendingTurn);
         continue;
       }
       if (record.reasoningKind === 'thinking') {
         applyUnifiedTurnThinkingNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
         applyUnifiedTurnStatusNote(pendingTurn, record.reasoningLabel || '思考', mirrorTimestampMs(record.timestamp));
-        pendingTurn.lastActivityAt = record.timestamp || nowIso();
+        markMirrorActivity(pendingTurn, record.timestamp);
         hooks.onStatusProgress?.(subscription, pendingTurn);
         continue;
       }
       applyUnifiedTurnStatusNote(pendingTurn, text, mirrorTimestampMs(record.timestamp));
-      pendingTurn.lastActivityAt = record.timestamp || nowIso();
+      markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onStatusProgress?.(subscription, pendingTurn);
       continue;
     }
@@ -598,7 +599,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
     if (record.type === 'plan_update') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
       applyUnifiedTurnTasks(pendingTurn, record.tasks || [], mirrorTimestampMs(record.timestamp));
-      pendingTurn.lastActivityAt = record.timestamp || nowIso();
+      markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onTaskProgress?.(subscription, pendingTurn);
       continue;
     }
@@ -612,7 +613,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         });
         stampHistoryForkSource(subscription, pendingTurn, record);
       }
-      pendingTurn.lastActivityAt = record.timestamp || nowIso();
+      markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onToolProgress?.(subscription, pendingTurn);
       continue;
     }
@@ -626,7 +627,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         });
         stampHistoryForkSource(subscription, pendingTurn, record);
       }
-      pendingTurn.lastActivityAt = record.timestamp || nowIso();
+      markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onToolProgress?.(subscription, pendingTurn);
       continue;
     }

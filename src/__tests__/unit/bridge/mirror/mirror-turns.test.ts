@@ -11,6 +11,26 @@ import {
 } from '../../../../bridge/mirror/turns.js';
 
 describe('mirror-turns pending delivery queue', () => {
+  it('keeps the latest activity clock when a frozen transcript catches up with backdated records', () => {
+    const subscription = { sessionId: 'cursor', threadId: 'native', pendingTurn: null } as any;
+    const old = '2026-11-18T10:30:00.000Z';
+    const latest = '2026-11-18T12:20:52.000Z';
+    consumeMirrorRecords(subscription, [
+      { signature: 'start', type: 'task_started', content: '', timestamp: old, turnId: 'turn' },
+      { signature: 'activity', type: 'reasoning', reasoningKind: 'status', content: 'Read 执行完成', timestamp: latest, activityAt: latest, turnId: 'turn' },
+    ]);
+    for (const record of [
+      { signature: 'delayed-thinking', type: 'reasoning' as const, reasoningKind: 'thinking' as const, content: '检查写入结果' },
+      { signature: 'delayed-tool', type: 'tool_started' as const, content: '', toolName: 'Read', toolId: 'tool' },
+      { signature: 'delayed-text', type: 'message' as const, role: 'assistant' as const, content: '正文恢复' },
+    ]) {
+      consumeMirrorRecords(subscription, [{ ...record, timestamp: old, turnId: 'turn' }]);
+      assert.equal(subscription.pendingTurn.lastActivityAt, latest);
+    }
+    assert.equal(subscription.pendingTurn.streamedText, '正文恢复');
+    assert.equal(subscription.pendingTurn.toolCalls.size, 1);
+  });
+
   it('finalizes an error-bearing Codex task_complete as error', () => {
     const subscription = {
       sessionId: 'session-error',
