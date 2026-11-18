@@ -7403,8 +7403,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     // Strip @mention markers from text
     text = this.stripMentionMarkers(text);
+    // In shared-session thread mode, replying to the root is ordinary continuation.
+    // A different parent identifies a specific quoted reply; preserve that context.
+    const isThreadContinuation = isGroup && this.isThreadReplyChat(chatId)
+      && Boolean(msg.thread_id && msg.root_id && msg.parent_id === msg.root_id);
     // Quote downloads share the remaining budget with the message itself.
-    const contextText = await this.buildQuotedMessageContext(msg.parent_id, attachments, chatId, !isBridgeCommandText(commandText));
+    const contextText = isThreadContinuation ? undefined
+      : await this.buildQuotedMessageContext(msg.parent_id, attachments, chatId, !isBridgeCommandText(commandText));
 
     if (!text.trim() && attachments.length === 0) return;
 

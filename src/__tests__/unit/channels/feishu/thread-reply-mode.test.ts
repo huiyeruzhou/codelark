@@ -64,6 +64,37 @@ it('shares group context across topic and outside replies, and persists only the
   assert.equal(f.store.getChannelChat(address.channelType, chatId)?.bridgeSessionId, original.bridgeSessionId);
 });
 
+it('forwards thread continuations verbatim while preserving specific and ordinary quotes', async () => {
+  const f = fixture();
+  const reads: string[] = [];
+  f.a.restClient.im.message.get = async (p: any) => {
+    reads.push(p.path.message_id);
+    return { code: 0, data: { items: [{ message_id: p.path.message_id, chat_id: chatId, msg_type: 'text',
+      body: { content: JSON.stringify({ text: p.path.message_id === 'om_root' ? '/thread-mode on' : '具体回复内容' }) } }] } };
+  };
+  const binding = router.resolve(address);
+  const text = '这个都fully-async了，就不用搞minibsz了吧？';
+  const receive = async (id: string, metadata: Record<string, string>) => {
+    await f.a.processIncomingEvent({ sender: { sender_type: 'user', sender_id: { open_id: 'ou_test' } }, message: {
+      message_id: id, chat_id: chatId, chat_type: 'group', message_type: 'text', content: JSON.stringify({ text }),
+      create_time: String(Date.now()), ...metadata,
+    } });
+    const msg = await f.adapter.consumeOne(); assert(msg);
+    assert.equal(msg.text, text);
+    assert.equal(router.resolve(msg.address).bridgeSessionId, binding.bridgeSessionId);
+    return msg;
+  };
+  const continuation = await receive('om_continue', { root_id: 'om_root', parent_id: 'om_root', thread_id: 'omt_one' });
+  assert.equal(continuation.contextText, undefined);
+  assert.equal(continuation.replyToMessageId, 'om_root', 'delivery routing still retains the parent');
+  assert.deepEqual(reads, [], 'ordinary continuation must not fetch or download the root');
+  const specific = await receive('om_specific', { root_id: 'om_root', parent_id: 'om_specific_reply', thread_id: 'omt_one' });
+  assert.match(specific.contextText!, /具体回复内容/);
+  const ordinary = await receive('om_ordinary', { parent_id: 'om_root' });
+  assert.match(ordinary.contextText!, /\/thread-mode on/);
+  assert.deepEqual(reads, ['om_specific_reply', 'om_root']);
+});
+
 it('pins the initiating message through delayed creation, another incoming message, mode changes and continuation', async () => {
   const f = fixture();
   let release!: () => void;

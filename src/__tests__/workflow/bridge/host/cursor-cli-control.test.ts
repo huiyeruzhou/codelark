@@ -116,13 +116,14 @@ for (const threadMode of [false, true]) it(`Cursor CLI ${threadMode ? 'Feishu th
     const event = { sender: { sender_type: 'user', sender_id: { open_id: 'ou_test' } }, message: {
       message_id: messageId, chat_id: address.chatId, chat_type: 'group', message_type: 'text',
       content: JSON.stringify({ text }), create_time: String(Date.now()),
-      ...(messageId === 'followup-2' ? {} : { root_id: 'om_root', parent_id: 'om_parent', thread_id: 'omt_one' }),
+      ...(messageId === 'followup-2' ? {} : { root_id: 'om_root', parent_id: 'om_root', thread_id: 'omt_one' }),
     } };
     await (adapter as any).processIncomingEvent(event);
     await (adapter as any).processIncomingEvent(event); // Feishu redelivery must not duplicate a steer or Get.
   };
   await send('start', 'first');
   await until(() => Boolean(params));
+  if (threadMode) assert.equal(params!.prompt, 'start', 'thread ownership must not prepend the root message');
   assert.deepEqual([...adapter.reactions], [], 'opening a stream does not prove input acceptance');
   params!.onInputAccepted?.();
   await until(() => adapter.reactions.includes('first'));
@@ -130,11 +131,11 @@ for (const threadMode of [false, true]) it(`Cursor CLI ${threadMode ? 'Feishu th
   await until(() => sent.length === 1);
   await send('also compare controls', 'followup-2');
   await delay(50);
-  assert.deepEqual(sent.map(prompt => prompt.split('\n').at(-1)), ['change direction'], 'concurrent inputs must not interleave');
+  assert.deepEqual(sent, ['change direction'], 'concurrent inputs must not interleave or prepend the thread root');
   assert.deepEqual([...adapter.reactions], ['first'], 'do not acknowledge before input completes');
   release();
   await until(() => adapter.reactions.includes('followup-2'));
-  assert.deepEqual(sent.map(prompt => prompt.split('\n').at(-1)), ['change direction', 'also compare controls']);
+  assert.deepEqual(sent, ['change direction', 'also compare controls']);
   assert.deepEqual(adapter.reactions, ['first', 'followup', 'followup-2'], 'Get belongs to each exact input, never the thread root or parent');
   assert.equal(streams, 1, 'follow-up must reuse the original output stream');
   assert.equal(locks, 1, 'follow-up must bypass both session lock and conversation barrier');
