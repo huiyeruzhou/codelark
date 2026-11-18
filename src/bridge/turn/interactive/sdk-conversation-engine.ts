@@ -102,7 +102,7 @@ export type OnToolEvent = (
   },
 ) => void;
 export type OnTaskEvent = (tasks: TaskProgressInfo[]) => void;
-export type OnStatusNote = (note: string | null) => void;
+export type OnStatusNote = (note: string | null, activityAtMs?: number) => void;
 export type OnThinkingNote = (note: string) => void;
 export type OnHistoryItem = (item: Extract<StreamingHistoryItem, { type: 'markdown' }>) => void;
 export type OnContextUsage = (contextUsage: ContextUsageInfo) => void;
@@ -628,7 +628,8 @@ async function consumeStream(
               });
             }
             if (typeof statusData.reasoning === 'string' && onStatusNote) {
-              try { onStatusNote(statusData.reasoning); } catch { /* non-critical */ }
+              const activityAtMs = typeof statusData.activity_at === 'string' ? Date.parse(statusData.activity_at) : undefined;
+              try { onStatusNote(statusData.reasoning, activityAtMs); } catch { /* non-critical */ }
             }
             if (typeof statusData.thinking === 'string') {
               const thinking = statusData.thinking.trim();

@@ -3969,7 +3969,7 @@ async function sendAgentMessageToSession(options: {
     isCurrentInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.isCurrentInteractiveTask(sessionId, taskStateId),
     touchInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.touchInteractiveTask(sessionId, taskStateId),
     recordInteractiveHealthStart: (sessionId, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveStart(sessionId, detail),
-    recordInteractiveHealthProgress: (sessionId, type, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveProgress(sessionId, type, detail),
+    recordInteractiveHealthProgress: (sessionId, type, detail, activityAtMs) => SESSION_HEALTH_RUNTIME.recordInteractiveProgress(sessionId, type, detail, activityAtMs),
     recordInteractiveHealthTool: (sessionId, toolId, toolName, status) => {
       SESSION_HEALTH_RUNTIME.recordToolState(sessionId, toolId, toolName, status);
     },
@@ -5431,7 +5431,7 @@ async function handleMessage(
       isCurrentInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.isCurrentInteractiveTask(sessionId, taskId),
       touchInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.touchInteractiveTask(sessionId, taskId),
       recordInteractiveHealthStart: (sessionId, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveStart(sessionId, detail),
-      recordInteractiveHealthProgress: (sessionId, type, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveProgress(sessionId, type, detail),
+      recordInteractiveHealthProgress: (sessionId, type, detail, activityAtMs) => SESSION_HEALTH_RUNTIME.recordInteractiveProgress(sessionId, type, detail, activityAtMs),
       recordInteractiveHealthTool: (sessionId, toolId, toolName, status) => {
         SESSION_HEALTH_RUNTIME.recordToolState(sessionId, toolId, toolName, status);
       },

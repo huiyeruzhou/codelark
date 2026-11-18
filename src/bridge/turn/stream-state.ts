@@ -15,6 +15,7 @@ import {
   applyUnifiedTurnThinkingNote,
   type UnifiedTurnProgressState,
 } from './unified-turn-state.js';
+import { HEALTH_SLOW_OBSERVED_MS } from '../health/reducer.js';
 
 export interface StreamState extends UnifiedTurnProgressState {
   lastStatusText: string | null;
@@ -91,8 +92,10 @@ export function formatStreamRuntimeStatus(
   if (context.context) parts.push(context.context);
   if (context.lastIo) parts.push(context.lastIo);
   const runtimeText = joinFooterParts(parts);
-  const note = (pendingUserInput ? `等待你的回答：${pendingUserInput}` : statusNote || '').trim();
-  const thinking = pendingUserInput ? '' : (thinkingNote || '').trim();
+  const stale = !pendingUserInput && typeof lastActivityAgeMs === 'number' && lastActivityAgeMs > HEALTH_SLOW_OBSERVED_MS;
+  const note = (pendingUserInput ? `等待你的回答：${pendingUserInput}`
+    : stale ? '长时间未收到新的执行记录，尚未确认当前执行状态。' : statusNote || '').trim();
+  const thinking = pendingUserInput || stale ? '' : (thinkingNote || '').trim();
   const lines: string[] = [];
   if (note) lines.push(`当前步骤：${note}`);
   if (thinking) lines.push(`当前思考：${truncateStatusNote(thinking, MAX_STREAM_THINKING_NOTE_CHARS)}`);

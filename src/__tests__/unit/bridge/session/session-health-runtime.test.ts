@@ -23,6 +23,17 @@ describe('session-health-runtime', () => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
   });
 
+  it('keeps delayed runtime activity at its source time and rejects older observations', () => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('Cursor activity', 'test-model', undefined, '/workspace', 'code');
+    store.updateSession(session.id, { runtime_status: 'running', last_progress_at: '2026-11-18T11:04:57.000Z' });
+    const runtime = createSessionHealthRuntime({ getStore: () => store, nowIso: () => '2026-11-18T12:03:19.000Z' });
+    runtime.recordInteractiveProgress(session.id, 'text', 'Write 开始执行', Date.parse('2026-11-18T11:51:27.000Z'));
+    assert.equal(store.getSession(session.id)?.last_progress_at, '2026-11-18T11:51:27.000Z');
+    runtime.recordInteractiveProgress(session.id, 'text', '旧工具事件', Date.parse('2026-11-18T11:00:00.000Z'));
+    assert.equal(store.getSession(session.id)?.last_progress_at, '2026-11-18T11:51:27.000Z');
+  });
+
   it('marks a long-running missing tool process as suspected_detached', async () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('Health Detached', 'test-model', undefined, 'D:\\workspace\\health-detached', 'code');

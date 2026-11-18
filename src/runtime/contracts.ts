@@ -111,6 +111,8 @@ export interface LLMProvider {
 }
 
 export interface BridgeMirrorRecord {
+  /** Actual observation time for independently persisted runtime activity. */
+  activityAt?: string;
   signature: string;
   type: 'message' | 'reasoning' | 'plan_update' | 'task_started' | 'task_complete' | 'task_aborted' | 'tool_started' | 'tool_finished' | 'context_usage' | 'goal_status';
   role?: 'user' | 'assistant' | 'commentary' | 'system';

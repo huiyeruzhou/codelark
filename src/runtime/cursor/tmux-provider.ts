@@ -629,7 +629,7 @@ export function enqueueCursorRecord(
       }));
       return;
     }
-    controller.enqueue(sseEvent('status', { reasoning: record.content }));
+    controller.enqueue(sseEvent('status', { reasoning: record.content, ...(record.activityAt ? { activity_at: record.activityAt } : {}) }));
     return;
   }
   if (record.type === 'tool_started') {

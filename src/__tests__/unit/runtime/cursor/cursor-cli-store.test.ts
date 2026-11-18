@@ -12,6 +12,7 @@ import { parseCursorTranscriptRecords, readCursorSessionMirrorRecordDeltaByFileP
 import { applyToolCallEventToTools, toolCallEventFromMirrorRecord } from '../../../../shared/progress/tool-events.js';
 import { buildToolProgressBlocks } from '../../../../shared/progress/tool-rendering.js';
 import type { ToolCallInfo } from '../../../../domain/progress.js';
+import { enqueueCursorRecord, type CursorTurnContext } from '../../../../runtime/cursor/tmux-provider.js';
 
 const user = (text: string) => ({ role: 'user', content: [{ type: 'text', text }] });
 const assistant = (...content: unknown[]) => ({ role: 'assistant', content });
@@ -42,6 +43,53 @@ describe('Cursor native CLI progress', () => {
     const rootId = put(Buffer.concat(refs));
     db.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(Buffer.from(JSON.stringify({ latestRootBlobId: rootId })).toString('hex'));
   };
+
+  it('observes tool activity while the transcript is frozen, without inventing text, tool results or completion', () => {
+    const transcript = path.join(root, 'conversation.jsonl');
+    const now = Date.now();
+    fs.writeFileSync(transcript, wire([transcriptUser('inspect')]));
+    fs.utimesSync(transcript, new Date(now - 60 * 60_000), new Date(now - 60 * 60_000));
+    const spool = `${transcript}.tool-events`; fs.mkdirSync(spool);
+    const event = (at: number, sessionId = 'conversation') => {
+      fs.writeFileSync(path.join(spool, `${BigInt(at) * 1_000_000n}-42-preToolUse.json`), JSON.stringify({
+        conversation_id: sessionId, session_id: sessionId, transcript_path: transcript,
+        hook_event_name: 'preToolUse', tool_name: 'Write', tool_use_id: 'native-write',
+      }));
+    };
+    event(now - 120_000);
+    event(now - 60_000, 'another-conversation');
+    const read = () => readCursorSessionMirrorRecordDeltaByFilePath(transcript, 0, fs.statSync(transcript).size, '', null, []);
+    const records = read().records;
+    const activity = records.find(r => r.activityAt)!;
+    assert.ok(activity);
+    assert.equal(activity.timestamp, new Date(now - 120_000).toISOString());
+    assert.equal(activity.turnId, records.find(r => r.type === 'task_started')?.turnId);
+    assert.match(activity.content, /Write 开始执行/);
+    assert.equal(records.some(r => r.type === 'task_complete' || r.type === 'tool_finished'), false);
+
+    const events: string[] = [];
+    const context: CursorTurnContext = { sessionName: 'test', sessionId: 'conversation', nextOffset: 0,
+      trailingText: '', nextTurnId: null, nextSpecialCallIds: [], emittedSignatures: new Set(), emittedToolStarts: new Set(), terminalSeen: false };
+    const controller: ReadableStreamDefaultController<string> = { desiredSize: 1, enqueue(data) { events.push(data); }, close() {}, error() {} };
+    enqueueCursorRecord(controller, context, activity);
+    enqueueCursorRecord(controller, context, read().records.find(r => r.activityAt)!);
+    assert.equal(events.map(s => JSON.parse(s.slice(6))).filter(e => e.type === 'status').length, 1, 're-reading the same event must not reset the activity clock');
+    assert.ok(events.some(s => s.includes(activity.activityAt!)));
+    assert.equal(context.terminalSeen, false);
+
+    fs.appendFileSync(transcript, wire([
+      { role: 'assistant', message: { content: [{ type: 'text', text: 'Verified native final answer.' }] } },
+      { type: 'turn_ended', status: 'success' },
+    ]));
+    const completed = read().records;
+    assert.equal(completed.some(r => r.activityAt), false, 'a late hook cannot reopen a completed native turn');
+    for (const record of completed) enqueueCursorRecord(controller, context, record);
+    const delivered = [...events];
+    for (const record of read().records) enqueueCursorRecord(controller, context, record);
+    assert.deepEqual(events, delivered, 'transcript catch-up must be delivered only once');
+    assert.ok(events.some(s => s.includes('Verified native final answer.')));
+    assert.equal(context.terminalSeen, true, 'only the native terminal completes the turn');
+  });
 
   it('uses only the current ordered prompt references and ignores orphaned results', () => {
     put(Buffer.from(JSON.stringify(result('one', 'orphaned successful result'))));

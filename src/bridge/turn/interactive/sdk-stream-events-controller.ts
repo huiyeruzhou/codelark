@@ -43,7 +43,7 @@ export interface CreateInteractiveSdkStreamEventsControllerParams {
   nowMs(): number;
   isCurrentTask(sessionId: string, taskId: string): boolean;
   touchTask(sessionId: string, taskId: string): void;
-  recordHealthProgress(sessionId: string, type: 'text' | 'permission_wait', detail?: string): void;
+  recordHealthProgress(sessionId: string, type: 'text' | 'permission_wait' | 'reasoning', detail?: string, activityAtMs?: number): void;
   recordHealthTool(sessionId: string, toolId: string, toolName: string, status: 'running' | 'complete' | 'error'): void;
   previewOnPartialText?(fullText: string): void;
 }
@@ -57,7 +57,7 @@ export interface InteractiveSdkStreamEventsController {
     detail?: { input?: unknown; output?: string; isError?: boolean },
   ): void;
   onTaskEvent(tasks: TaskProgressInfo[]): void;
-  onStatusNote(note: string | null): void;
+  onStatusNote(note: string | null, activityAtMs?: number): void;
   onThinkingNote(note: string): void;
   onHistoryItem(item: Extract<StreamingHistoryItem, { type: 'markdown' }>): void;
   onContextUsage(contextUsage: ContextUsageInfo): void;
@@ -136,10 +136,17 @@ export function createInteractiveSdkStreamEventsController(
       }
       pushRunningStatus();
     },
-    onStatusNote(note) {
+    onStatusNote(note, activityAtMs) {
       if (!isCurrentTask()) return;
-      updateStreamStatusNote(params.streamState, note, params.nowMs());
-      if (params.streamState.statusNote) markActivity();
+      const now = params.nowMs();
+      const observedAt = typeof activityAtMs === 'number' && Number.isFinite(activityAtMs)
+        ? Math.min(now, activityAtMs) : now;
+      updateStreamStatusNote(params.streamState, note, observedAt);
+      if (params.streamState.statusNote) {
+        params.taskState.lastActivityAt = params.streamState.lastActivityAtMs;
+        params.touchTask(params.sessionId, params.taskId);
+        if (activityAtMs !== undefined) params.recordHealthProgress(params.sessionId, 'reasoning', note || undefined, observedAt);
+      }
       pushRunningStatus();
     },
     onThinkingNote(note) {

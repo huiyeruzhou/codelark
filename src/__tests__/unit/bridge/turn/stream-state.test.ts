@@ -22,6 +22,18 @@ import {
 } from '../../../../shared/time-zone.js';
 
 describe('stream-state', () => {
+  it('does not keep claiming active execution after a long observation gap, and recovers on new progress', () => {
+    const state = createStreamState(0);
+    updateStreamStatusNote(state, 'Cursor Agent 已接收消息，正在运行。', 0);
+    updateStreamThinkingNote(state, '旧思考', 0);
+    const stale = buildStreamRuntimeStatus(state, 58 * 60_000, { includeLastActivityAge: true });
+    assert.match(stale, /长时间未收到新的执行记录，尚未确认当前执行状态/);
+    assert.doesNotMatch(stale, /正在运行|旧思考/);
+    updateStreamStatusNote(state, '最近工具活动：Write 开始执行', 57 * 60_000);
+    assert.match(buildStreamRuntimeStatus(state, 58 * 60_000, { includeLastActivityAge: true }), /Write 开始执行/);
+    assert.match(buildStreamRuntimeStatus(state, 58 * 60_000, { includeLastActivityAge: true }), /上次响应 1m/);
+    assert.match(formatStreamRuntimeStatus(58 * 60_000, 58 * 60_000, null, null, null, undefined, '选择模型'), /等待你的回答：选择模型/);
+  });
   it('formats durations without zero middle units and accumulates hours', () => {
     assert.equal(formatRuntimeDuration(10_000), '10s');
     assert.equal(formatRuntimeDuration(70_000), '1m10s');

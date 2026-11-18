@@ -1048,10 +1048,11 @@ stream_status_check_interval_seconds = 3
     assert.equal(formatInteractiveRuntimeStatus(65_000), '已运行 1m5s');
     assert.equal(formatInteractiveRuntimeStatus(3_661_000, 10_000), '已运行 1h1m1s · 上次响应 10s');
     assert.equal(formatInteractiveRuntimeStatus(1_000, 70_000), '已运行 1s · 上次响应 1m10s');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_600_000), '已运行 1s · 上次响应 1h');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_610_000), '已运行 1s · 上次响应 1h10s');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_720_000), '已运行 1s · 上次响应 1h2m');
-    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_730_000), '已运行 1s · 上次响应 1h2m10s');
+    const stale = '当前步骤：长时间未收到新的执行记录，尚未确认当前执行状态。\n';
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_600_000), stale + '已运行 1s · 上次响应 1h');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_610_000), stale + '已运行 1s · 上次响应 1h10s');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_720_000), stale + '已运行 1s · 上次响应 1h2m');
+    assert.equal(formatInteractiveRuntimeStatus(1_000, 3_730_000), stale + '已运行 1s · 上次响应 1h2m10s');
   });
 
   it('shows status-only stream updates for Claude background preparation without suppressing fallback text', async () => {

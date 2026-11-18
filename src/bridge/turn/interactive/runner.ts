@@ -197,7 +197,7 @@ export interface RunInteractiveMessageDeps {
   isCurrentInteractiveTask(sessionId: string, taskId: string): boolean;
   touchInteractiveTask(sessionId: string, taskId: string): void;
   recordInteractiveHealthStart(sessionId: string, detail?: string): void;
-  recordInteractiveHealthProgress(sessionId: string, type: 'text' | 'permission_wait', detail?: string): void;
+  recordInteractiveHealthProgress(sessionId: string, type: 'text' | 'permission_wait' | 'reasoning', detail?: string, activityAtMs?: number): void;
   recordInteractiveHealthTool(sessionId: string, toolId: string, toolName: string, status: 'running' | 'complete' | 'error'): void;
   recordInteractiveStreamUiSnapshot?(sessionId: string, snapshot: StructuredStreamingUiSnapshot): void;
   recordInteractiveHealthEnd(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;

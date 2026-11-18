@@ -41,7 +41,7 @@ export interface CreateSessionHealthRuntimeDeps {
 
 export interface SessionHealthRuntime {
   recordInteractiveStart(sessionId: string, detail?: string): void;
-  recordInteractiveProgress(sessionId: string, type: SessionProgressType, detail?: string): void;
+  recordInteractiveProgress(sessionId: string, type: SessionProgressType, detail?: string, activityAtMs?: number): void;
   recordToolState(sessionId: string, toolId: string, toolName: string, status: SessionToolStatus): void;
   recordStructuredStreamUi(sessionId: string, snapshot: StructuredStreamingUiSnapshot): void;
   recordInteractiveEnd(sessionId: string, outcome: SessionEndOutcome, detail?: string): void;
@@ -152,14 +152,17 @@ export function createSessionHealthRuntime(
     });
   }
 
-  function recordInteractiveProgress(sessionId: string, type: SessionProgressType, detail?: string): void {
+  function recordInteractiveProgress(sessionId: string, type: SessionProgressType, detail?: string, activityAtMs?: number): void {
     const nowIso = deps.nowIso();
     const session = deps.getStore().getSession(sessionId);
     if (!session || shouldIgnoreNonStartProgress(session)) return;
+    const observedAt = typeof activityAtMs === 'number' && Number.isFinite(activityAtMs)
+      ? Math.min(Date.parse(nowIso), activityAtMs) : Date.parse(nowIso);
+    if (observedAt < (Date.parse(session.last_progress_at || '') || 0)) return;
     maybePersistProgress(sessionId, {
       health_status: type === 'permission_wait' ? 'waiting_tool' : 'running_active',
       health_reason: buildProgressReason(type, detail),
-      last_progress_at: nowIso,
+      last_progress_at: new Date(observedAt).toISOString(),
       last_progress_type: type,
     }, type);
   }
@@ -343,6 +346,7 @@ export function createSessionHealthRuntime(
           sessionId,
           'reasoning',
           '检测到本地会话新的思考/状态说明。',
+          record.activityAt ? Date.parse(record.activityAt) : undefined,
         );
         continue;
       }

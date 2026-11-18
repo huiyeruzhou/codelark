@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { readCursorNativeMessages, cursorNativeToolKey, cursorVisibleThinkingSummary, type CursorNativeMessage } from './cli-store.js';
 import { CODELARK_HOME } from '../../configuration/paths.js';
 import { CursorDesktopSessionSource, statCursorDesktopStore } from './desktop-session-source.js';
+import { readCursorToolActivity } from './tool-activity.js';
 
 import type {
   BridgeMirrorRecord,
@@ -1335,6 +1336,13 @@ export function readCursorSessionMirrorRecordDeltaByFilePath(
       currentSpecialCallIds,
       ...cursorStoreParserOptions(storePath),
     });
+    const terminal = parsed.records.some(record => record.turnId === parsed.nextTurnId
+      && (record.type === 'task_complete' || record.type === 'task_aborted'));
+    if (!terminal) {
+      const afterMs = Math.max(fs.statSync(filePath).mtimeMs, Date.parse(cursorTurnTimestamp(parsed.nextTurnId) || '') || 0);
+      const activity = readCursorToolActivity(filePath, parsed.nextTurnId, afterMs);
+      if (activity) parsed.records.push(activity);
+    }
     return {
       records: parsed.records,
       nextOffset: Math.max(startOffset, endOffset),
@@ -1388,6 +1396,7 @@ export function createCursorMirrorJsonlSource(): CursorMirrorJsonlSource {
         for (const candidate of storePath ? [storePath, `${storePath}-wal`] : []) {
           try { mtimeMs = Math.max(mtimeMs, fs.statSync(candidate).mtimeMs); } catch { /* WAL may be checkpointed. */ }
         }
+        try { mtimeMs = Math.max(mtimeMs, fs.statSync(`${filePath}.tool-events`).mtimeMs); } catch { /* Optional tool spool. */ }
         return { size: stat.size, mtimeMs, identity: `${stat.dev}:${stat.ino}` };
       } catch { return null; }
     },

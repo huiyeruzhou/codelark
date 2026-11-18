@@ -21,7 +21,7 @@ function makeHarness(options: {
   const toolEvents: unknown[] = [];
   const historySnapshots: unknown[] = [];
   const previewTexts: string[] = [];
-  const healthProgress: Array<{ type: string; detail?: string }> = [];
+  const healthProgress: Array<{ type: string; detail?: string; activityAtMs?: number }> = [];
   const healthTools: Array<{ toolId: string; toolName: string; status: string }> = [];
   let touchCount = 0;
   let statusPushCount = 0;
@@ -91,8 +91,8 @@ function makeHarness(options: {
     touchTask() {
       touchCount += 1;
     },
-    recordHealthProgress(_sessionId, type, detail) {
-      healthProgress.push({ type, detail });
+    recordHealthProgress(_sessionId, type, detail, activityAtMs) {
+      healthProgress.push({ type, detail, ...(activityAtMs !== undefined ? { activityAtMs } : {}) });
     },
     recordHealthTool(_sessionId, toolId, toolName, status) {
       healthTools.push({ toolId, toolName, status });
@@ -118,6 +118,16 @@ function makeHarness(options: {
 }
 
 describe('interactive-turn sdk-stream-events-controller', () => {
+  it('uses the native activity timestamp instead of making delayed observations look fresh', () => {
+    const harness = makeHarness();
+    harness.controller.onStatusNote('最近工具活动：Write 开始执行', 1005);
+    assert.equal(harness.taskState.lastActivityAt, 1005);
+    assert.equal(harness.healthProgress.at(-1)?.activityAtMs, 1005);
+    harness.controller.onStatusNote('最近工具活动：Write 开始执行', 1005);
+    assert.equal(harness.taskState.lastActivityAt, 1005);
+    assert.equal(harness.streamTexts.length, 0);
+    assert.equal(harness.toolEvents.length, 0);
+  });
   it('routes partial text through preview, health, task activity, and streaming card text', () => {
     const harness = makeHarness();
 
