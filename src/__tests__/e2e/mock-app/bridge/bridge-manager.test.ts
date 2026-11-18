@@ -2416,13 +2416,15 @@ agent = "claude"
       onStreamEnd: async () => true,
     });
 
-    const subscription = {
-      pendingTurn: null,
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-1',
       sessionId: 'session-1',
       threadId: 'thread-1',
       channelType: 'feishu',
       chatId: 'chat-1',
-    } as { pendingTurn: any; threadId: string };
+      filePath: null,
+      lastDeliveredAt: null,
+    });
 
     const originalDateNow = Date.now;
     Date.now = () => Date.parse('2026-03-25T08:00:00.700Z');
@@ -2453,10 +2455,10 @@ agent = "claude"
 
       assert.equal(subscription.pendingTurn?.streamStarted, true);
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
-        'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:**我:** codex prompt\n\n**codex:**',
-        `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
+        'metadata:mirror:session-1:binding-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
+        'start:mirror:session-1:binding-1:turn-1',
+        'text:mirror:session-1:binding-1:turn-1:**我:** codex prompt\n\n**codex:**',
+        `status:mirror:session-1:binding-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
       ]);
     } finally {
       Date.now = originalDateNow;
@@ -2486,13 +2488,15 @@ agent = "claude"
       onStreamEnd: async () => true,
     });
 
-    const subscription = {
-      pendingTurn: null,
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-1',
       sessionId: 'session-1',
       threadId: 'thread-1',
       channelType: 'feishu',
       chatId: 'chat-1',
-    } as { pendingTurn: any; threadId: string };
+      filePath: null,
+      lastDeliveredAt: null,
+    });
 
     const originalDateNow = Date.now;
     Date.now = () => Date.parse('2026-03-25T08:00:00.700Z');
@@ -2518,10 +2522,10 @@ agent = "claude"
 
       assert.equal(subscription.pendingTurn?.userText, '（基于 Review findings）\nok,当前调整已经可以收尾了吗');
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
-        'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
-        `status:mirror:session-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
+        'metadata:mirror:session-1:binding-1:turn-1:本地会话:codex,effort:medium,model:test-model,bridge_id:session-,mirror',
+        'start:mirror:session-1:binding-1:turn-1',
+        'text:mirror:session-1:binding-1:turn-1:**我:**\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\n**codex:**',
+        `status:mirror:session-1:binding-1:turn-1:${formatFooterClockTime(Date.parse('2026-03-25T08:00:00.700Z'))} · 已运行 0s · 上次响应 0s`,
       ]);
     } finally {
       Date.now = originalDateNow;
