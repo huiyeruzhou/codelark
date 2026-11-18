@@ -613,7 +613,7 @@ Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Cod
 
 ### 话题回复的来源与运行状态
 
-普通群的话题回复由 `channels[].config.threadReplyChats`（TOML `thread_reply_chats`）控制，不改变 `ChannelAddress.chatId`，不复用客服模式的虚拟会话键。交互轮次显式传递 `requestMessageId`；平台收到成功提交的输入后，按逻辑 stream 保存回复目的地；卡片创建、重试、续卡及静态恢复消费这份意图。话题内 steer 保持目的地，话题外 steer 更新目的地并通过原有续卡通路切换，不查询活动卡片来判断模型状态或输入归属。话题卡不按每条用户记录分页，只在达到容量限制时续卡；普通群卡保留按输入分页的行为。
+普通群的话题回复由 `channels[].config.threadReplyChats`（TOML `thread_reply_chats`）控制，不改变 `ChannelAddress.chatId`，不复用客服模式的虚拟会话键。交互轮次显式传递 `requestMessageId`；平台收到成功提交的输入后，按逻辑 stream 保存回复目的地；卡片创建、重试、续卡及静态恢复消费这份意图。话题内 steer 保持目的地，话题外 steer 更新目的地并通过原有续卡通路切换，不查询活动卡片来判断模型状态或输入归属。话题卡不按每条用户记录分页，只在达到容量限制时续卡；普通群卡保留按输入分页的行为。 没有平台来源的 mirror 也保存明确的空回复目标，后续文本、工具或重试不得借用群里最后一条消息。内部 manual: 提交不能成为平台回复 ID，也不能覆盖已关联的真实话题；旧持久化内部 ID 在读取时视为无平台来源。
 
 Codex app-server 的 `turn/start` 提交在既有持久提交记录中携带回复来源。原生 `userMessage.clientId` 或提交响应确认实际 turn 后保存对应关系；最多保留最近 128 轮，`turn/steer` 只有跨话题时更新来源，重启后仍使用最新已接收输入对应的话题。原生 start 通知可能早于输入确认，因此该间隙暂不向 mirror 发布尚未关联的记录，确认后按原游标正常消费。不同群的订阅只使用自身来源，不把另一个群的消息 ID 当回复目标。
 

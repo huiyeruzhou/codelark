@@ -194,6 +194,38 @@ it('keeps model questions alongside their active card', async () => {
   f.adapter.onMessageEnd(chatId, 'question');
 });
 
+it('keeps source-less and legacy manual mirror output in one card despite newer chat input', async () => {
+  for (const source of [undefined, 'manual:internal-submission']) {
+    const f = fixture();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const create = f.a.restClient.cardkit.v1.card.create;
+    f.a.restClient.cardkit.v1.card.create = async () => { await gate; return create(); };
+    f.adapter.onMirrorStreamStart(chatId, 'local-native', source);
+    f.a.lastIncomingMessageId.set(chatId, 'om_unrelated');
+    f.adapter.onStreamHistory(chatId, [{ type: 'markdown', role: 'assistant', content: '本地原生输出' }], 'local-native');
+    f.adapter.onStreamText(chatId, '本地原生输出', 'local-native');
+    release(); await f.a.cardCreatePromises.get('local-native');
+    f.a.enqueueCardFlush('local-native'); await f.a.awaitCardFlushCompletion('local-native');
+    assert(await f.adapter.onStreamEnd(chatId, 'completed', '本地原生输出', 'local-native'));
+    assert.equal(f.sent.length, 1, 'no phantom card followed by a topic rollover');
+    assert.equal(f.sent[0].method, 'create', 'internal input IDs and unrelated input are never reply targets');
+    assert.equal(f.a.streamReplyTargets.has('local-native'), false);
+  }
+});
+
+it('allows a real accepted steer to establish a topic after a source-less local turn', async () => {
+  const f = fixture();
+  f.adapter.onMirrorStreamStart(chatId, 'local-native'); await f.a.cardCreatePromises.get('local-native');
+  assert.equal(await f.adapter.onInputDelivery(input('manual:job'), 'accepted', undefined, { streamKey: 'local-native' }), false);
+  await f.adapter.onInputDelivery(input('om_outside'), 'accepted', undefined, { streamKey: 'local-native' });
+  f.a.enqueueCardFlush('local-native'); await f.a.awaitCardFlushCompletion('local-native');
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent[1].path.message_id, 'om_outside');
+  assert.equal(f.sent[1].data.reply_in_thread, true);
+  f.adapter.onMessageEnd(chatId, 'local-native');
+});
+
 it('releases routing after final output so a subsequent screen stream uses its own initiating topic', async () => {
   const f = fixture();
   const key = 'tmux-screen:reused';

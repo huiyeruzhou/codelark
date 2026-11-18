@@ -13,7 +13,6 @@ import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider
 import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 
-import { filterSuppressedMirrorRecords, normalizeMirrorPromptText } from '../../../../bridge/mirror/suppression.js';
 import type { StreamingHistoryItem } from '../../../../domain/index.js';
 
 const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
@@ -143,19 +142,10 @@ for (const scenario of [
       adapter.enqueueManualInboundMessage(inboundMessage(address, text, `steer-${i}`));
       if ('longTurn' in scenario && i === 0) {
         await until(() => finished.includes('steer-0'), 'first steer submission must finish while model keeps running');
-        const suppressions = structuredClone(bridge.mirrorSuppressUntil);
-        assert.ok(suppressions.get(session.id)?.some((s: { promptText: string; until: number }) => s.promptText === normalizeMirrorPromptText(text) && s.until === Infinity),
-          'an accepted follow-up must retain direct ownership until the model finishes, not expire after submission');
-        const owned = suppressions.get(session.id).find((entry: { promptText: string }) => entry.promptText === normalizeMirrorPromptText(text));
-        const turnId = owned.activeTurnId || owned.candidateTurnId || 'late-steer';
-        const records = [
-          { signature: 'late-start', type: 'task_started' as const, content: '', timestamp: '', turnId },
-          { signature: 'late-user', type: 'message' as const, role: 'user' as const, content: text, userPrompt: text, timestamp: '', turnId },
-          { signature: 'late-answer', type: 'message' as const, role: 'assistant' as const, content: 'late tool output', timestamp: '', turnId },
-        ];
-        assert.deepEqual(filterSuppressedMirrorRecords({ suppressions, ignoredTurnIds: new Map() }, session.id, records,
-          { suppressionWindowMs: 4000, promptMatchGraceMs: 120000 }, Date.now() + 10 * 60_000), [],
-          'ten minutes of model work must not produce a second mirror card');
+        await until(() => [...bridge.cursorMirrorSubscriptions.values()].some((s: any) => (s.cursor.directTurnIds?.length || 0) >= 2),
+          'provider must report both native turns to the mirror before finishing');
+        assert.equal(bridge.mirrorSuppressUntil.get(session.id)?.length || 0, 0,
+          'Cursor ownership must not depend on a prompt expiry timer');
       }
     }
     await until(() => backend.steers.length === count, 'fake model must receive each InjectContextAction during the original run');

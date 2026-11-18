@@ -170,6 +170,7 @@ export async function processMessage(
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
+    onNativeTurn?: (threadId: string, turnId: string, completed: boolean) => Promise<void>;
     onInputAccepted?: () => void;
   },
   runtime?: SdkConversationRuntime,
@@ -368,6 +369,7 @@ async function consumeStream(
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
     onRuntimeIdentity?: OnRuntimeIdentity;
+    onNativeTurn?: (threadId: string, turnId: string, completed: boolean) => Promise<void>;
   },
   activeRuntime: RuntimeAgent = 'codex',
 ): Promise<ConversationResult> {
@@ -651,6 +653,11 @@ async function consumeStream(
           break;
         }
 
+        case 'native_turn': {
+          const identity = JSON.parse(event.data) as { session_id?: string; turn_id?: string; completed?: boolean };
+          if (identity.session_id && identity.turn_id) await options?.onNativeTurn?.(identity.session_id, identity.turn_id, identity.completed === true);
+          break;
+        }
         case 'history_item': {
           try {
             const item = JSON.parse(event.data) as Partial<Extract<StreamingHistoryItem, { type: 'markdown' }>>;

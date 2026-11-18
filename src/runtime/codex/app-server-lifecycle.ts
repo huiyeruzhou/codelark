@@ -132,11 +132,13 @@ export class CodexAppServerLifecycle {
   }
   replyTarget(threadId: string, turnId: string): AppServerReplyTarget | undefined {
     if (!this.replyTargets.has(threadId)) this.replyTargets.set(threadId, this.options.loadReplyTargets?.(threadId) || {});
-    return this.replyTargets.get(threadId)?.[turnId];
+    const target = this.replyTargets.get(threadId)?.[turnId];
+    // 兼容曾持久化的内部提交标识，它不是平台可回复的消息。
+    return target?.messageId.startsWith('manual:') ? undefined : target;
   }
 
   private rememberReplyTarget(threadId: string, turnId: string, submission?: AppServerSubmission): void {
-    if (!submission?.replyTarget) return;
+    if (!submission?.replyTarget || submission.replyTarget.messageId.startsWith('manual:')) return;
     const previous = this.replyTarget(threadId, turnId);
     if (previous && (submission.method === 'turn/start'
       || previous.channelType !== submission.replyTarget.channelType || previous.chatId !== submission.replyTarget.chatId

@@ -2477,12 +2477,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
   /** Desired stream state that arrives while the first CardKit card is still being created. */
   private pendingCardCreateStates = new Map<string, PendingStreamingCardCreateState>();
   // Input-owned routing survives card creation failures and card replacements.
-  private streamReplyTargets = new Map<string, { chatId: string; messageId: string; rootId?: string; threadId?: string; inThread: boolean }>();
+  private streamReplyTargets = new Map<string, { chatId: string; messageId?: string; rootId?: string; threadId?: string; inThread: boolean }>();
   private streamReplyChanges = new Map<string, Promise<boolean>>();
 
   private rememberStreamReplyTarget(chatId: string, streamKey: string, messageId?: string): void {
-    if (messageId && !this.streamReplyTargets.has(streamKey)) {
-      this.streamReplyTargets.set(streamKey, { chatId, messageId, inThread: this.isThreadReplyChat(chatId) });
+    // 无平台来源也是明确的路由，后续刷新不能借用群里最后一条输入。
+    if (!this.streamReplyTargets.has(streamKey)) {
+      if (messageId?.startsWith('manual:')) messageId = undefined;
+      this.streamReplyTargets.set(streamKey, { chatId, messageId, inThread: Boolean(messageId) && this.isThreadReplyChat(chatId) });
     }
   }
 
@@ -4159,7 +4161,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     actionRows: FeishuCardActionButton[][],
     metadata: StructuredStreamingUiMetadata,
     reason = 'component_count',
-    replyTarget?: { messageId: string; inThread: boolean },
+    replyTarget?: { messageId?: string; inThread: boolean },
   ): Promise<boolean> {
     const cardkit = (this.restClient as any)?.cardkit?.v1;
     if (!cardkit?.card?.settings) return false;
@@ -4196,7 +4198,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     };
     const created = await this._doCreateStreamingCard(
       state.chatId,
-      replyTarget?.messageId ?? state.replyToMessageId,
+      replyTarget ? replyTarget.messageId : state.replyToMessageId,
       streamKey,
       nextInitialState,
       flushCarry,
@@ -7182,7 +7184,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   async onInputDelivery(msg: InboundMessage, status: 'submitted' | 'accepted' | 'queued', _detail?: string,
     stream?: { streamKey: string; requestMessageId?: string }): Promise<boolean> {
-    if (!stream || status === 'queued' || !this.isThreadReplyChat(msg.address.chatId)) return false;
+    if (!stream || msg.messageId.startsWith('manual:') || status === 'queued' || !this.isThreadReplyChat(msg.address.chatId)) return false;
     const key = stream.streamKey;
     this.rememberStreamReplyTarget(msg.address.chatId, key, stream.requestMessageId || msg.messageId);
     const change = (this.streamReplyChanges.get(key) || Promise.resolve(false)).catch(() => false).then(async () => {
@@ -7195,13 +7197,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
         previous.threadId = msg.threadId;
         return false;
       }
-      if (!previous.rootId) {
+      if (!previous.rootId && previous.messageId) {
         const anchor = await this.getTopicMessage(previous.messageId);
         if (anchor.chat_id !== msg.address.chatId) throw new Error('输出话题不属于当前群');
         previous.rootId = anchor.root_id || anchor.message_id;
         previous.threadId = anchor.thread_id;
       }
-      if (msg.threadRootMessageId === previous.rootId || msg.replyToMessageId === previous.rootId
+      if ((previous.rootId && (msg.threadRootMessageId === previous.rootId || msg.replyToMessageId === previous.rootId))
         || (msg.threadId && msg.threadId === previous.threadId)) return false;
       const target = { chatId: msg.address.chatId, messageId: msg.messageId,
         rootId: msg.threadRootMessageId || msg.messageId, threadId: msg.threadId, inThread: true };

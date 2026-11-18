@@ -168,7 +168,6 @@ export interface InteractiveTaskState {
   uiEnded: boolean;
   mirrorSuppressionId: string | null;
   /** Follow-up inputs remain owned by this direct stream until it finishes. */
-  followupMirrorSuppressionIds?: Set<string>;
   finalizeFromExternalTerminal?(
     outcome: 'completed' | 'failed' | 'aborted',
     detail?: string,
@@ -202,6 +201,7 @@ export interface RunInteractiveMessageDeps {
   recordInteractiveStreamUiSnapshot?(sessionId: string, snapshot: StructuredStreamingUiSnapshot): void;
   recordInteractiveHealthEnd(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
   beginMirrorSuppression(sessionId: string, promptText: string): string;
+  claimDirectMirrorTurn?(sessionId: string, threadId: string, turnId: string, completed: boolean): Promise<void>;
   abortMirrorSuppression(sessionId: string, suppressionId?: string | null): void;
   settleMirrorSuppression(sessionId: string, suppressionId?: string | null, durationMs?: number): void;
   releaseInteractiveTask(sessionId: string, taskId: string): void;
@@ -608,7 +608,7 @@ export async function runInteractiveMessage(
   let preparedPromptText: string | null = null;
 
   const ensureMirrorSuppression = (promptText: string | null | undefined): void => {
-    if (isProtocolTurn || isRuntimeMirrorTurn || taskState.mirrorSuppressionId) return;
+    if (isProtocolTurn || isRuntimeMirrorTurn || isCursorTranscriptTurn || taskState.mirrorSuppressionId) return;
     const normalizedPrompt = (promptText || '').trim();
     if (!normalizedPrompt) return;
     taskState.mirrorSuppressionId = deps.beginMirrorSuppression(binding.bridgeSessionId, promptText || '');
@@ -673,6 +673,7 @@ export async function runInteractiveMessage(
       {
         isCurrentTask: () => deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId),
         onInputAccepted: () => { cursorInputAccepted = true; deps.onInputAccepted?.(); },
+        onNativeTurn: (threadId, turnId, completed) => deps.claimDirectMirrorTurn?.(binding.bridgeSessionId, threadId, turnId, completed) || Promise.resolve(),
         expandToolCalls: true,
         streamPreview: {
           includeToolSnippets: useInteractiveStreamUi && !streamUi.hasStreamingCards,
@@ -863,11 +864,6 @@ export async function runInteractiveMessage(
         '',
       );
     }
-
-    for (const id of taskState.followupMirrorSuppressionIds || []) {
-      deps.abortMirrorSuppression(binding.bridgeSessionId, id);
-    }
-    taskState.followupMirrorSuppressionIds?.clear();
 
     if (taskState.mirrorSuppressionId) {
       if (finalOutcome === 'aborted' || isCursorTranscriptTurn || isZcodeTranscriptTurn) {

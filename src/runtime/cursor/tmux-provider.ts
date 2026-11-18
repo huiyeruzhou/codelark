@@ -560,6 +560,7 @@ export interface CursorTurnContext {
   nextTurnId: string | null;
   nextSpecialCallIds: string[];
   emittedSignatures: Set<string>;
+  emittedTurnIds?: Set<string>;
   emittedToolStarts: Set<string>;
   /** Turns present before input submission cannot belong to this direct stream. */
   baselineTurnIds?: Set<string>;
@@ -596,6 +597,11 @@ export function enqueueCursorRecord(
   if (record.turnId && context.baselineTurnIds?.has(record.turnId)) return;
   if (context.emittedSignatures.has(record.signature)) return;
   context.emittedSignatures.add(record.signature);
+  const terminal = record.type === 'task_complete' || record.type === 'task_aborted';
+  if (context.sessionId && record.turnId && (terminal || !(context.emittedTurnIds ??= new Set()).has(record.turnId))) {
+    (context.emittedTurnIds ??= new Set()).add(record.turnId);
+    controller.enqueue(sseEvent('native_turn', { session_id: context.sessionId, turn_id: record.turnId, completed: terminal }));
+  }
   if (record.type === 'message' && record.role === 'user') {
     const content = (record.userPrompt ?? record.content).trim();
     if (content) controller.enqueue(sseEvent('history_item', { type: 'markdown', role: 'user', content }));

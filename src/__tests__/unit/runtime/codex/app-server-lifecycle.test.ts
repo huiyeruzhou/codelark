@@ -80,6 +80,18 @@ async function fixture(t: TestContext) {
 }
 const text = [{ type: 'text' as const, text: 'hello' }];
 
+test('manual inputs cannot replace a platform reply target, including legacy persisted origins', async (t) => {
+  const f = await fixture(t);
+  const origin = { channelType: 'feishu', chatId: 'oc_group', messageId: 'om_origin', rootMessageId: 'om_origin' };
+  const turn = await f.runtime.submit('thread', text, {}, origin);
+  await f.runtime.submit('thread', text, {}, { ...origin, messageId: 'manual:job', rootMessageId: 'manual:job' });
+  assert.deepEqual(f.runtime.replyTarget('thread', turn), origin);
+  const restored = new CodexAppServerLifecycle('ws://127.0.0.1:1', {
+    loadReplyTargets: () => ({ [turn]: { ...origin, messageId: 'manual:legacy' } }),
+  });
+  try { assert.equal(restored.replyTarget('thread', turn), undefined); } finally { restored.close(); }
+});
+
 test('connection snapshot is read-only before the first thread and exposes a failed handshake', async () => {
   let calls = 0;
   let rejectConnect!: (error: Error) => void;

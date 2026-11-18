@@ -6,6 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createMirrorRuntime } from '../../../../bridge/mirror/runtime.js';
+import { mirrorReadPosition } from '../../../../bridge/mirror/subscription-state.js';
+import type { BridgeMirrorRecord, MirrorJsonlSource } from '../../../../runtime/contracts.js';
+import type { MirrorRuntimeSession } from '../../../../bridge/mirror/runtime.js';
 import {
   consumeBufferedMirrorTurns,
   consumeMirrorRecords,
@@ -15,6 +18,93 @@ import {
 import { createKimiMirrorJsonlSource } from '../../../../runtime/kimi/session-index.js';
 
 const MIRROR_TEST_BUFFER_TIMEOUT_MS = 10 * 60_000;
+
+it('never replays direct Cursor turns after late snapshot rewrites or restart, while local turns still mirror', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-native-ownership-'));
+  const filePath = path.join(root, 'native.json'); fs.writeFileSync(filePath, '[]');
+  let records: BridgeMirrorRecord[] = [];
+  let revision = 0;
+  let now = Date.now();
+  let claimDuringRead: string | undefined;
+  const session: MirrorRuntimeSession = { runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'native' } } };
+  const state = { running: true, adapters: new Map([['feishu', { isRunning: () => false }]]),
+    mirrorSubscriptions: new Map(), mirrorWakeTimer: null, mirrorSyncInFlight: false, activeTasks: new Map<string, unknown>() };
+  const delivered: string[] = [];
+  const source: MirrorJsonlSource = {
+    runtime: 'cursor', readMode: 'snapshot',
+    findByThreadId: () => ({ threadId: 'native', filePath }),
+    statSnapshot: () => ({ size: ++revision, mtimeMs: revision, identity: 'snapshot' }),
+    readDelta: () => ({ records: structuredClone(records), nextOffset: revision, trailingText: '', nextTurnId: null, nextSpecialCallIds: [], unknownKinds: [] }),
+  };
+  const create = () => createMirrorRuntime(() => state as never, {
+    watchDebounceMs: 0, danglingThreadRetryLimit: 3, failureSuspendThreshold: 3, failureSuspendMs: 60_000,
+  }, {
+    mirrorSource: source, nowIso: () => new Date(now).toISOString(), describeUnknownError: String,
+    listChannelChats: () => [{ id: 'binding', channelType: 'feishu', chatId: 'chat', bridgeSessionId: 'session' }],
+    getSession: () => session, getSessionMirrorThreadId: () => 'native', hasSessionMirrorSource: () => true,
+    getMirrorSourceSummary: () => source.findByThreadId('native'), getCodexSessionByThreadIdSafe: () => null,
+    clearSessionCodexThreadId() {},
+    syncMirrorSessionStateSafe() {
+      const subscription = state.mirrorSubscriptions.get('binding');
+      if (subscription) session.mirror_read_position = structuredClone(mirrorReadPosition(subscription));
+    },
+    filterSuppressedMirrorRecords: (_id, rows) => rows, observeSessionHealthRecords() {},
+    filterHistorySync: async (_subscription, rows) => {
+      // direct 在 mirror 已读取、尚未缓冲的异步间隙确认同一轮次。
+      if (claimDuringRead) runtime.claimDirectMirrorTurn('session', 'native', claimDuringRead);
+      return { records: rows, hold: false };
+    },
+    consumeMirrorRecords,
+    flushTimedOutMirrorTurn: s => flushTimedOutMirrorTurn(s, MIRROR_TEST_BUFFER_TIMEOUT_MS, now),
+    consumeBufferedMirrorTurns: s => consumeBufferedMirrorTurns(s, MIRROR_TEST_BUFFER_TIMEOUT_MS, now),
+    hasPendingMirrorWork, stopMirrorStreaming() {},
+    deliverMirrorTurns: async (_s, turns) => { delivered.push(...turns.map(t => t.text)); return { deliveredCount: turns.length }; },
+  });
+  const turn = (id: string, version: string): BridgeMirrorRecord[] => [
+    { signature: `${id}:start:${version}`, type: 'task_started', turnId: id, content: '', timestamp: new Date(now).toISOString() },
+    { signature: `${id}:answer:${version}`, type: 'message', role: 'assistant', turnId: id, content: `output ${version}`, timestamp: new Date(now).toISOString() },
+    { signature: `${id}:end:${version}`, type: 'task_complete', turnId: id, content: `output ${version}`, timestamp: new Date(now).toISOString() },
+  ];
+  let runtime = create();
+  try {
+    await runtime.reconcileMirrorSubscriptions();
+    state.activeTasks.set('session', {});
+    for (const id of ['initial', 'steer-1', 'steer-2']) {
+      records.push(...turn(id, 'early'));
+      claimDuringRead = id === 'steer-2' ? id : undefined;
+      await runtime.reconcileMirrorSubscriptions(); // mirror may observe a record before the direct reader
+      if (claimDuringRead) assert.deepEqual(state.mirrorSubscriptions.get('binding').bufferedRecords, []);
+      assert.equal(runtime.claimDirectMirrorTurn('session', 'native', id), true);
+      assert.deepEqual(state.mirrorSubscriptions.get('binding').bufferedRecords, []);
+    }
+    runtime.claimDirectMirrorTurn('session', 'native', 'steer-2', true);
+    now += 40 * 60_000;
+    claimDuringRead = undefined;
+    state.activeTasks.clear();
+    records = ['initial', 'steer-1', 'steer-2'].flatMap(id => turn(id, 'late'));
+    await runtime.reconcileMirrorSubscriptions();
+    assert.deepEqual(delivered, []);
+    assert.deepEqual(session.mirror_read_position?.directTurnIds, ['initial', 'steer-1', 'steer-2']);
+    runtime.clearMirrorSubscriptions(); runtime = create();
+    records = ['initial', 'steer-1', 'steer-2'].flatMap(id => turn(id, 'after-restart'));
+    await runtime.reconcileMirrorSubscriptions();
+    assert.deepEqual(delivered, []);
+    records.push(...turn('local', 'new'));
+    await runtime.reconcileMirrorSubscriptions();
+    await runtime.reconcileMirrorSubscriptions();
+    assert.deepEqual(delivered, ['output new']);
+    // 更新 bridge 时原生模型可能仍在跑，恢复必须继续接收这轮的新输出。
+    state.activeTasks.set('session', {});
+    records.push(...turn('incomplete', 'before-handoff').slice(0, 2));
+    await runtime.reconcileMirrorSubscriptions();
+    runtime.claimDirectMirrorTurn('session', 'native', 'incomplete');
+    runtime.clearMirrorSubscriptions(); state.activeTasks.clear(); runtime = create();
+    await runtime.reconcileMirrorSubscriptions();
+    records.push(...turn('incomplete', 'after-handoff').slice(1));
+    await runtime.reconcileMirrorSubscriptions();
+    assert.deepEqual(delivered, ['output new', 'output after-handoff']);
+  } finally { runtime.clearMirrorSubscriptions(); fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 describe('mirror-runtime pending deliveries', () => {
   let runtime: ReturnType<typeof createMirrorRuntime> | null = null;

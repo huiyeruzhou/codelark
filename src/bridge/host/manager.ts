@@ -2431,13 +2431,8 @@ const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   observeSessionHealthRecords: (sessionId, threadId, records) => {
     SESSION_HEALTH_RUNTIME.observeBridgeMirrorRecords(sessionId, threadId, records);
   },
-  routeRuntimeRecords: (runtime, sessionId, threadId, records) => routeRuntimeRecords(
-    sessionId,
-    runtime,
-    threadId,
-    records,
-    TURN_COORDINATOR,
-  ),
+  // Cursor 直接流按原生顺序消费完整历史和终态。后台读取不能抢先结束它，
+  // 否则终态前尚未消费的 steer / 工具记录会落回 mirror 再次输出。
   consumeMirrorRecords,
   flushTimedOutMirrorTurn: (subscription) => flushTimedOutMirrorTurn(subscription),
   hasPendingMirrorWork,
@@ -2506,6 +2501,14 @@ function resetMirrorSessionForInteractiveRun(sessionId: string): void {
   KIMI_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   CURSOR_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
   ZCODE_MIRROR_RUNTIME.resetMirrorSessionForInteractiveRun(sessionId);
+}
+
+async function claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed: boolean): Promise<void> {
+  if (CURSOR_MIRROR_RUNTIME.claimDirectMirrorTurn(sessionId, threadId, turnId, completed)) return;
+  await CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
+  if (!CURSOR_MIRROR_RUNTIME.claimDirectMirrorTurn(sessionId, threadId, turnId, completed)) {
+    throw new Error('Cursor 原生轮次尚未建立输出归属');
+  }
 }
 
 const restoringAppServerBindings = new Set<string>();
@@ -3953,6 +3956,7 @@ async function sendAgentMessageToSession(options: {
     },
     recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
     beginMirrorSuppression,
+    claimDirectMirrorTurn,
     abortMirrorSuppression,
     settleMirrorSuppression,
     releaseInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskStateId),
@@ -5066,7 +5070,7 @@ async function handleMessage(
                 modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), msg.contextText), prepared.persistedFileMeta)).text;
               if (prompt) {
                 const turnId = await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
-                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session), {
+                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session), msg.messageId.startsWith('manual:') ? undefined : {
                     channelType: msg.address.channelType, chatId: msg.address.chatId, messageId: msg.messageId,
                     rootMessageId: msg.threadRootMessageId || msg.messageId,
                   });
@@ -5183,13 +5187,6 @@ async function handleMessage(
     if (text) {
       const tmuxProviderBridgeSessionId = tmuxProviderChat.bridgeSessionId;
       const tmuxProviderForwardStartedAtMs = Date.now();
-      // An IM steer is also owned by the direct stream. Register its actual
-      // prompt before the native mirror can observe the injected user row.
-      const cursorSuppressionId = tmuxProviderRuntime.runtime === 'cursor' && tmuxProviderActiveTask
-        ? beginMirrorSuppression(tmuxProviderBridgeSessionId, text) : undefined;
-      if (cursorSuppressionId) {
-        (tmuxProviderActiveTask!.followupMirrorSuppressionIds ??= new Set()).add(cursorSuppressionId);
-      }
       try {
         const tmuxProviderCommandStartedAtMs = Date.now();
         await handleCommand(adapter, msg, `/tmux ${text}`, {
@@ -5255,12 +5252,6 @@ async function handleMessage(
         enqueueBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
         });
-      } finally {
-        // Submission completing is not the end of the model turn. Keep ownership
-        // through long tools and multiple steers; the direct runner releases it.
-        if (cursorSuppressionId && getState().activeTasks.get(tmuxProviderBridgeSessionId) !== tmuxProviderActiveTask) {
-          abortMirrorSuppression(tmuxProviderBridgeSessionId, cursorSuppressionId);
-        }
       }
     }
     ack();
@@ -5419,6 +5410,7 @@ async function handleMessage(
       },
       recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
       beginMirrorSuppression,
+      claimDirectMirrorTurn,
       abortMirrorSuppression,
       settleMirrorSuppression,
       releaseInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskId),

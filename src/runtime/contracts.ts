@@ -28,6 +28,7 @@ export type SSEEventType =
   | 'text'
   | 'text_snapshot'
   | 'history_item'
+  | 'native_turn'
   | 'tool_use'
   | 'tool_result'
   | 'tool_output'

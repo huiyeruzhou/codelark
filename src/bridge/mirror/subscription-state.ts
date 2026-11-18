@@ -99,7 +99,7 @@ export function createMirrorSubscription(
     threadId: input.threadId,
     filePath: input.filePath,
     cursor: input.readPosition?.threadId === input.threadId
-      ? { initialized: true, ...input.readPosition }
+      ? restoreMirrorCursor(input.readPosition)
       : { initialized: false, lastEventCount: 0 },
     dirty: input.activityTier === 'cold' ? false : true,
     status: input.filePath ? 'watching' : 'stale',
@@ -127,6 +127,13 @@ export function createMirrorSubscription(
     missingThreadPolls: 0,
     consecutiveFailures: 0,
     suspendedUntil: null,
+  };
+}
+
+function restoreMirrorCursor(position: MirrorReadPosition): BridgeMirrorCursor {
+  const { directActiveTurnId, ...cursor } = position;
+  return { initialized: true, ...cursor,
+    ...(cursor.directTurnIds ? { directTurnIds: cursor.directTurnIds.filter(id => id !== directActiveTurnId) } : {}),
   };
 }
 
@@ -178,7 +185,7 @@ export function updateMirrorSubscription(
   if (threadChanged) {
     resetMirrorSubscriptionForThreadChange(subscription, input.lastDeliveredAt);
     if (input.readPosition?.threadId === input.threadId) {
-      subscription.cursor = { initialized: true, ...input.readPosition };
+      subscription.cursor = restoreMirrorCursor(input.readPosition);
     }
   } else if (filePathChanged) {
     resetMirrorSubscriptionForFilePathChange(subscription);
@@ -201,6 +208,8 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
     lastEventTurnId,
     lastEventCount,
     seenTurnSignatures,
+    directTurnIds,
+    directActiveTurnId,
   } = subscription.cursor;
   return {
     threadId: subscription.threadId,
@@ -211,6 +220,7 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
     lastEventTurnId,
     lastEventCount,
     ...(seenTurnSignatures ? { seenTurnSignatures } : {}),
+    ...(directTurnIds ? { directTurnIds, directActiveTurnId } : {}),
   };
 }
 

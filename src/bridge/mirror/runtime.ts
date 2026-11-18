@@ -159,6 +159,7 @@ export interface CreateMirrorRuntimeDeps {
 }
 
 export interface MirrorRuntime {
+  claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed?: boolean): boolean;
   resetMirrorSessionForInteractiveRun(sessionId: string): void;
   reconcileMirrorSubscriptions(): Promise<void>;
   clearMirrorSubscriptions(): void;
@@ -547,6 +548,13 @@ export function createMirrorRuntime(
         );
       }
     }
+    // 已由原生直接流消费的轮次不能排入后台补发；包括晚到结果和重写快照。
+    const excludeDirect = (records: BridgeMirrorRecord[]) => {
+      const directTurnIds = new Set(subscription.cursor.directTurnIds);
+      return records.filter(record => !record.turnId || !directTurnIds.has(record.turnId));
+    };
+    deliverableRecords = excludeDirect(deliverableRecords);
+    subscription.bufferedRecords = excludeDirect(subscription.bufferedRecords);
     const unsuppressedRecords = !protocol && deliverableRecords.length > 0
       ? deps.filterSuppressedMirrorRecords(subscription.sessionId, deliverableRecords)
       : deliverableRecords;
@@ -605,7 +613,9 @@ export function createMirrorRuntime(
     const blocked = getState().activeTasks.has(subscription.sessionId);
     const deliveryPlan = buildMirrorDeliveryPlan(subscription, mirrorRecords, {
       blocked,
-      filterSuppressedRecords: protocol ? (_sessionId, records) => records : deps.filterSuppressedMirrorRecords,
+      // 上面的异步路由/历史检查期间，direct 可能刚确认原生轮次；入队前重读归属。
+      filterSuppressedRecords: (sessionId, records) => protocol ? excludeDirect(records)
+        : deps.filterSuppressedMirrorRecords(sessionId, excludeDirect(records)),
       flushTimedOutTurn: (currentSubscription) => protocol ? null : deps.flushTimedOutMirrorTurn(currentSubscription),
       consumeBufferedTurns: (currentSubscription) => protocol
         ? deps.consumeMirrorRecords(currentSubscription, currentSubscription.bufferedRecords.splice(0))
@@ -761,7 +771,22 @@ export function createMirrorRuntime(
     }
   }
 
+  function claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed = false): boolean {
+    let claimed = false;
+    for (const subscription of getState().mirrorSubscriptions.values()) {
+      if (subscription.sessionId !== sessionId || subscription.threadId !== threadId) continue;
+      const ids = subscription.cursor.directTurnIds ??= [];
+      if (!ids.includes(turnId)) ids.push(turnId);
+      subscription.cursor.directActiveTurnId = completed ? undefined : turnId;
+      subscription.bufferedRecords = subscription.bufferedRecords.filter(record => record.turnId !== turnId);
+      claimed = true;
+    }
+    if (claimed) deps.syncMirrorSessionStateSafe(sessionId, 'native direct turn ownership');
+    return claimed;
+  }
+
   return {
+    claimDirectMirrorTurn,
     resetMirrorSessionForInteractiveRun,
     reconcileMirrorSubscriptions,
     clearMirrorSubscriptions,

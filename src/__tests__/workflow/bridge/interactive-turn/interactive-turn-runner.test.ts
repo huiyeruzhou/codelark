@@ -699,7 +699,7 @@ stream_status_check_interval_seconds = 3
     assert.deepEqual(simulator.deliveredAttachments, []);
   });
 
-  it('keeps Cursor direct transcript ownership while leaving a grace suppression for its background mirror', async () => {
+  it('uses native ownership instead of expiring prompt suppression for Cursor direct output', async () => {
     const simulator = new ScriptedSessionSimulator('chat-cursor-direct-suppression');
     simulator.setRuntimeProvider('cursor', 'tmux');
 
@@ -714,7 +714,6 @@ stream_status_check_interval_seconds = 3
           sessionId: 'cursor-direct-session',
           cwd: 'D:\\workspace\\cursor-direct',
         });
-        simulator.taskStateMap.get(simulator.sessionId())!.followupMirrorSuppressionIds = new Set(['steer-1', 'steer-2']);
         assert.deepEqual(simulator.abortedMirrorSuppressions, []);
         onPartialText?.('CURSOR_DIRECT_DONE');
       }],
@@ -722,14 +721,9 @@ stream_status_check_interval_seconds = 3
 
     assert.equal(simulator.adapter.streamEnds.at(-1)?.status, 'completed');
     assert.match(simulator.adapter.streamEnds.at(-1)?.text || '', /CURSOR_DIRECT_DONE/);
-    assert.deepEqual(simulator.mirrorSuppressions, [{
-      sessionId: simulator.sessionId(),
-      prompt: 'prepared Cursor direct prompt',
-    }]);
+    assert.deepEqual(simulator.mirrorSuppressions, []);
     assert.equal(simulator.settledMirrorSuppressions.length, 0);
-    assert.deepEqual(simulator.abortedMirrorSuppressions, ['steer-1', 'steer-2', 'suppression-1'].map(suppressionId => ({
-      sessionId: simulator.sessionId(), suppressionId,
-    })));
+    assert.deepEqual(simulator.abortedMirrorSuppressions, []);
     const metadata = simulator.adapter.streamMetadata.at(-1);
     assert.ok(metadata?.title);
     assert.match((metadata?.tags || []).join(' '), /\bcursor\b/);

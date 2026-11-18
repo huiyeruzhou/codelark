@@ -10,6 +10,9 @@ export interface BridgeMirrorCursor {
   lastEventTurnId?: string;
   lastEventCount: number;
   seenTurnSignatures?: string[];
+  directTurnIds?: string[];
+  /** 未完成的直接轮次在进程恢复时交给 mirror 继续观察。 */
+  directActiveTurnId?: string;
 }
 
 export interface BridgeMirrorDelta {
@@ -29,6 +32,7 @@ function makeCursor(records: BridgeMirrorRecord[], previous?: BridgeMirrorCursor
     lastEventContent: lastEvent?.content,
     lastEventTurnId: lastEvent?.turnId,
     lastEventCount: records.length,
+    ...(previous?.directTurnIds ? { directTurnIds: previous.directTurnIds, directActiveTurnId: previous.directActiveTurnId } : {}),
     ...(trackTurn && lastEvent?.turnId ? { seenTurnSignatures: [...new Set([
       ...(previous?.lastEventTurnId === lastEvent.turnId ? previous.seenTurnSignatures || [] : []),
       ...records.filter(record => record.turnId === lastEvent.turnId).map(record => record.signature),
@@ -50,7 +54,7 @@ export function advanceBridgeMirrorCursor(
   }
 
   if (!cursor?.initialized) {
-    return makeCursor(appendedRecords);
+    return makeCursor(appendedRecords, cursor);
   }
 
   const lastEvent = appendedRecords[appendedRecords.length - 1];
@@ -63,6 +67,7 @@ export function advanceBridgeMirrorCursor(
     lastEventContent: lastEvent?.content,
     lastEventTurnId: lastEvent?.turnId,
     lastEventCount: cursor.lastEventCount + appendedRecords.length,
+    ...(cursor.directTurnIds ? { directTurnIds: cursor.directTurnIds, directActiveTurnId: cursor.directActiveTurnId } : {}),
   };
 }
 

@@ -43,6 +43,10 @@ export interface MirrorReadPosition {
   lastEventCount: number;
   /** Cursor 当前轮已读取的稳定事件签名，防止快照中间插入漏读；不含正文。 */
   seenTurnSignatures?: string[];
+  /** 已由直接流负责的原生轮次；身份不会因沉默、steer 或重启而过期。 */
+  directTurnIds?: string[];
+  /** 未完成的直接轮次在进程恢复时交给 mirror 继续观察。 */
+  directActiveTurnId?: string;
 }
 
 /** A bounded, durable choice about missed mirror output; never the full transcript. */
