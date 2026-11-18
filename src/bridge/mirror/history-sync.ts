@@ -41,6 +41,22 @@ function updatePreviews(previous: MirrorHistorySyncState['previews'], records: B
   return [...previews.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-HISTORY_LIMIT);
 }
 
+function summarizeBacklog(records: BridgeMirrorRecord[]): MirrorHistorySyncState['backlog'] {
+  if (!records.length) return undefined;
+  const unique = new Map(records.map(record => [record.signature, record]));
+  const replies = new Set<string>();
+  let earliest = Infinity;
+  let latest = -Infinity;
+  for (const record of unique.values()) {
+    const timestamp = Date.parse(record.timestamp);
+    earliest = Math.min(earliest, timestamp);
+    latest = Math.max(latest, timestamp);
+    if (record.type === 'message' && record.role === 'assistant') replies.add(record.turnId || record.replacementKey || record.signature);
+  }
+  return { recordCount: unique.size, replyCount: replies.size,
+    earliestAt: new Date(earliest).toISOString(), latestAt: new Date(latest).toISOString() };
+}
+
 function historyCardKey(state: MirrorHistorySyncState, sessionId: string): string {
   return `mirror-history:${sessionId}:${state.id}`;
 }
@@ -65,10 +81,13 @@ function buildHistoryPage(state: MirrorHistorySyncState, sessionId: string, page
 }
 
 export function buildMirrorHistoryChoice(state: MirrorHistorySyncState, sessionId: string): OutboundRichCard {
+  const backlog = state.backlog;
+  const formatTime = (value: string) => value.replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
   return {
     title: '选择历史同步范围', template: 'orange',
     updateKey: historyCardKey(state, sessionId), updateTtlMs: null,
     sections: [{ text: '发现较早的内容或大量积压，已暂停历史补发，等待你选择。' },
+      ...(backlog ? [{ text: `本次检测到 ${backlog.recordCount} 条记录，其中 ${backlog.replyCount} 条回复。\n时间范围：${formatTime(backlog.earliestAt)} 至 ${formatTime(backlog.latestAt)}。` }] : []),
       { text: '可以同步最近20条回复摘要，在这张卡里翻页查看；或跳过历史、从现在继续同步。历史工具过程不补发，完整记录仍保留在 Cursor。' }],
     actions: [[
       { text: '最近20条回复', type: 'primary', callbackData: buildCommandCallbackData(`/sync-history 20 ${state.id}`, sessionId) },
@@ -109,11 +128,20 @@ export function createMirrorHistorySyncController(deps: {
         content: turn.text, timestamp: turn.timestamp,
       })), ...records];
     const unseenBacklog = Number.isFinite(ignoreBefore) ? backlog.filter((record) => Date.parse(record.timestamp) > ignoreBefore) : backlog;
+    const previousPreviews = pending?.previews || [];
+    if (pending) {
+      // An unanswered choice covers one batch, not every later outage. Only
+      // inspect records outside its original cutoff: the same held history
+      // must not keep creating notices, and fresh output must still pass.
+      const previousCutoff = Date.parse(pending.createdAt) - RECENT_GRACE_MS;
+      const laterBacklog = unseenBacklog.filter(record => Date.parse(record.timestamp) > previousCutoff);
+      if (needsMirrorHistoryChoice(laterBacklog, checkpointAt, nowMs)) pending = undefined;
+    }
     if (!pending && !needsMirrorHistoryChoice(unseenBacklog, checkpointAt, nowMs)) return { records, hold: false };
     pending = pending || {
       id: randomUUID(), bindingId: subscription.bindingId, threadId: subscription.threadId,
       channelType: subscription.channelType, chatId: subscription.chatId,
-      status: 'pending', createdAt: new Date(nowMs).toISOString(), noticeAttempted: false, previews: [],
+      status: 'pending', createdAt: new Date(nowMs).toISOString(), noticeAttempted: false, previews: previousPreviews,
     };
     // A history decision owns only the backlog present when it was created.
     // New native turns must keep flowing, including after a Bridge restart.
@@ -130,7 +158,8 @@ export function createMirrorHistorySyncController(deps: {
     const livePending = subscription.bufferedRecords.some(isNew) || subscription.pendingDeliveries.some(isNew)
       || Boolean(subscription.pendingTurn && isNew({ timestamp: subscription.pendingTurn.startedAt }));
     const shouldNotify = !pending.noticeAttempted;
-    const next = { ...pending, previews: updatePreviews(pending.previews.filter(preview => !isNew(preview)), history), noticeAttempted: true };
+    const next = { ...pending, backlog: pending.backlog || summarizeBacklog(history),
+      previews: updatePreviews(pending.previews.filter(preview => !isNew(preview)), history), noticeAttempted: true };
     if (JSON.stringify(session.mirror_history_sync) !== JSON.stringify(next)) {
       store.updateSession(subscription.sessionId, { mirror_history_sync: next }, { touch: false });
     }

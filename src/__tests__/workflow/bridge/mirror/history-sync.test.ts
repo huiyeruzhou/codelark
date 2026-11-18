@@ -103,6 +103,40 @@ it('separates fresh minute-precision output from an old backlog in the same poll
   assert.equal(f.notices.length, 1);
 });
 
+it('renews an unanswered choice for a later backlog without swallowing fresh output or repeating the notice', async () => {
+  const f = fixture();
+  await (await f.gate(f.subscription, [reply(1)])).notify?.();
+  const oldId = f.state().id;
+  f.restart();
+  const later = 3 * 24 * 60 * 60_000;
+  f.setNow(NOW + later);
+  const backlog = Array.from({ length: 12 }, (_, n) => reply(n + 10, later - 60 * 60_000 + n * 1000));
+  const fresh = reply(99, later - 1000);
+  // A saved pending choice must not bypass the burst check, even without a
+  // source reset and even if the read checkpoint itself is recent.
+  const result = await f.gate(f.subscription, [...backlog, fresh], stamp(later - 1000));
+  assert.deepEqual(result.records, [fresh]);
+  assert.equal(result.hold, false);
+  assert.notEqual(f.state().id, oldId);
+  assert.match(f.command(`skip ${oldId}`).response, /已失效/);
+  assert.equal(f.state().status, 'pending');
+  await result.notify?.();
+  assert.equal(f.notices.length, 2);
+  const notice = JSON.stringify(f.notices[1]);
+  assert.match(notice, /12 条记录.*12 条回复/);
+  assert.match(notice, /2026-10-12 14:40:00/);
+  assert.match(notice, /2026-10-12 14:40:11/);
+  assert.match(notice, /UTC/);
+  assert.ok(f.state().previews.some(p => p.text === '回答 1'), 'retain previously held previews');
+  const id = f.state().id;
+  f.restart();
+  await (await f.gate(f.subscription, backlog, stamp(later - 1000), true)).notify?.();
+  await (await f.gate(f.subscription, [], stamp(later))).notify?.();
+  assert.equal(f.state().id, id);
+  assert.equal(f.notices.length, 2);
+  assert.deepEqual(f.command('').richCard, f.notices[1], 'reopen retains batch summary after an empty poll');
+});
+
 for (const count of [1, 3, 20]) {
   it(`returns only ${count} bounded replies, deduplicates revisions, and makes callback retries idempotent`, async () => {
     const f = fixture();
@@ -266,9 +300,14 @@ it('uses the bound Desktop source without its discovery index, recovers from fal
   }
 });
 
-for (const sourceKind of ['snapshot', 'buffer', 'retry'] as const) {
-  it(`prevents a 60-reply flood from ${sourceKind} before any stream/delivery, then resumes one fresh turn`, async () => {
+for (const staleChoice of [false, true]) for (const sourceKind of ['snapshot', 'buffer', 'retry'] as const) {
+  it(`prevents a 60-reply flood from ${sourceKind}, stale choice=${staleChoice}, before any stream/delivery, then resumes one fresh turn`, async () => {
     const f = fixture();
+    if (staleChoice) f.store.updateSession(f.session.id, { mirror_history_sync: {
+      id: 'old-unanswered-choice', bindingId: f.binding.id, threadId: 'thread',
+      channelType: f.binding.channelType, chatId: f.binding.chatId, status: 'pending',
+      createdAt: stamp(-3 * 24 * 60 * 60_000), noticeAttempted: true, previews: [],
+    } });
     f.store.updateSession(f.session.id, { mirror_read_position: { threadId: 'thread', lastEventCount: 0, lastEventTimestamp: stamp(-60 * 60_000) } });
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-history-gate-'));
     const file = path.join(root, 'transcript.jsonl');

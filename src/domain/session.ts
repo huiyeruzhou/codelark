@@ -61,6 +61,7 @@ export interface MirrorHistorySyncState {
   status: 'pending' | 'resolved';
   createdAt: string;
   noticeAttempted: boolean;
+  backlog?: { recordCount: number; replyCount: number; earliestAt: string; latestAt: string };
   ignoreBefore?: string;
   selectedCount?: number;
   previews: Array<{ key: string; text: string; timestamp: string }>;
