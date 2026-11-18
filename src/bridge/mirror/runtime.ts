@@ -159,11 +159,14 @@ export interface CreateMirrorRuntimeDeps {
 }
 
 export interface MirrorRuntime {
-  claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed?: boolean): boolean;
+  claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed?: boolean, replyTarget?: MirrorInputOrigin): boolean;
+  updateDirectMirrorReplyTarget(sessionId: string, replyTarget: MirrorInputOrigin, expectedTurnId?: string): void;
   resetMirrorSessionForInteractiveRun(sessionId: string): void;
   reconcileMirrorSubscriptions(): Promise<void>;
   clearMirrorSubscriptions(): void;
 }
+
+type MirrorInputOrigin = Omit<NonNullable<MirrorReadPosition['replyTarget']>, 'turnId'>;
 
 export function createMirrorRuntime(
   getState: () => BridgeMirrorRuntimeState,
@@ -771,13 +774,15 @@ export function createMirrorRuntime(
     }
   }
 
-  function claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed = false): boolean {
+  function claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed = false, replyTarget?: MirrorInputOrigin): boolean {
     let claimed = false;
     for (const subscription of getState().mirrorSubscriptions.values()) {
       if (subscription.sessionId !== sessionId || subscription.threadId !== threadId) continue;
       const ids = subscription.cursor.directTurnIds ??= [];
       if (!ids.includes(turnId)) ids.push(turnId);
       subscription.cursor.directActiveTurnId = completed ? undefined : turnId;
+      if (replyTarget) subscription.cursor.replyTarget = { ...replyTarget, turnId };
+      else if (subscription.cursor.replyTarget?.turnId !== turnId) subscription.cursor.replyTarget = undefined;
       subscription.bufferedRecords = subscription.bufferedRecords.filter(record => record.turnId !== turnId);
       claimed = true;
     }
@@ -785,8 +790,19 @@ export function createMirrorRuntime(
     return claimed;
   }
 
+  function updateDirectMirrorReplyTarget(sessionId: string, replyTarget: MirrorInputOrigin, expectedTurnId?: string): void {
+    for (const subscription of getState().mirrorSubscriptions.values()) {
+      if (subscription.sessionId !== sessionId) continue;
+      const turnId = subscription.cursor.directActiveTurnId || subscription.cursor.directTurnIds?.at(-1);
+      if (expectedTurnId && expectedTurnId !== turnId) continue;
+      if (turnId) subscription.cursor.replyTarget = { ...replyTarget, turnId };
+    }
+    deps.syncMirrorSessionStateSafe(sessionId, 'accepted Cursor input reply target');
+  }
+
   return {
     claimDirectMirrorTurn,
+    updateDirectMirrorReplyTarget,
     resetMirrorSessionForInteractiveRun,
     reconcileMirrorSubscriptions,
     clearMirrorSubscriptions,

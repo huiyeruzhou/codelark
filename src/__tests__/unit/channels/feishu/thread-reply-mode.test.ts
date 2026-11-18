@@ -10,6 +10,7 @@ import { configToTomlShape, tomlToConfigPatch } from '../../../../configuration/
 import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
 import * as router from '../../../../bridge/session/channel-router.js';
 import type { InboundMessage } from '../../../../domain/index.js';
+import { createMirrorSubscription, mirrorReplyMessageId } from '../../../../bridge/mirror/subscription-state.js';
 
 const configPath = path.join(CODELARK_HOME, 'config.toml');
 const originalConfig = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
@@ -192,6 +193,30 @@ it('keeps model questions alongside their active card', async () => {
   assert.equal(f.sent.at(-1).path.message_id, 'om_card1');
   assert.equal(f.sent.at(-1).data.reply_in_thread, true);
   f.adapter.onMessageEnd(chatId, 'question');
+});
+
+it('finalizes the restored native turn in its persisted topic after the direct adapter disappears', async () => {
+  const first = fixture();
+  first.adapter.onMessageStart(chatId, 'direct', 'om_origin'); await first.a.cardCreatePromises.get('direct');
+  await first.adapter.onInputDelivery(input('om_inside', { threadRootMessageId: 'om_origin' }), 'accepted', undefined,
+    { streamKey: 'direct', requestMessageId: 'om_origin' });
+  first.adapter.onMessageEnd(chatId, 'direct');
+  const restored = createMirrorSubscription({ bindingId: 'binding', sessionId: 'session', channelType: address.channelType,
+    chatId, threadId: 'native', filePath: null, lastDeliveredAt: null,
+    readPosition: JSON.parse(JSON.stringify({ threadId: 'native', lastEventCount: 4, directTurnIds: ['turn'], directActiveTurnId: 'turn',
+      replyTarget: { turnId: 'turn', channelType: address.channelType, chatId, messageId: 'om_inside' } })) });
+  const next = fixture();
+  next.a.lastIncomingMessageId.set(chatId, 'om_unrelated_after_restart');
+  next.adapter.onMirrorStreamStart(chatId, 'restored', mirrorReplyMessageId(restored, 'turn'));
+  next.adapter.onStreamText(chatId, '热更新后完成的最终回答', 'restored');
+  await next.a.cardCreatePromises.get('restored');
+  assert(await next.adapter.onStreamEnd(chatId, 'completed', '热更新后完成的最终回答', 'restored'));
+  assert.equal(next.sent.length, 1);
+  assert.equal(next.sent[0].method, 'reply');
+  assert.equal(next.sent[0].path.message_id, 'om_inside');
+  assert.equal(next.sent[0].data.reply_in_thread, true);
+  assert.equal(mirrorReplyMessageId(restored, 'different-turn'), undefined);
+  assert.equal(mirrorReplyMessageId({ ...restored, chatId: 'another-chat' }, 'turn'), undefined);
 });
 
 it('keeps source-less and legacy manual mirror output in one card despite newer chat input', async () => {

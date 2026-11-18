@@ -210,6 +210,7 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
     seenTurnSignatures,
     directTurnIds,
     directActiveTurnId,
+    replyTarget,
   } = subscription.cursor;
   return {
     threadId: subscription.threadId,
@@ -221,7 +222,14 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
     lastEventCount,
     ...(seenTurnSignatures ? { seenTurnSignatures } : {}),
     ...(directTurnIds ? { directTurnIds, directActiveTurnId } : {}),
+    ...(replyTarget ? { replyTarget } : {}),
   };
+}
+
+export function mirrorReplyMessageId(subscription: BridgeMirrorSubscription, turnId: string | null): string | undefined {
+  const target = subscription.cursor.replyTarget;
+  return target?.turnId === turnId && target.channelType === subscription.channelType
+    && target.chatId === subscription.chatId ? target.messageId : undefined;
 }
 
 export function clearMirrorSubscriptionFailure(subscription: BridgeMirrorSubscription): void {

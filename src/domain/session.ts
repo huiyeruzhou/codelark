@@ -47,6 +47,8 @@ export interface MirrorReadPosition {
   directTurnIds?: string[];
   /** 未完成的直接轮次在进程恢复时交给 mirror 继续观察。 */
   directActiveTurnId?: string;
+  /** 当前原生轮次的已确认平台来源；输出接管不能改变话题。 */
+  replyTarget?: { turnId: string; channelType: string; chatId: string; messageId: string };
 }
 
 /** A bounded, durable choice about missed mirror output; never the full transcript. */

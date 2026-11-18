@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createMirrorRuntime } from '../../../../bridge/mirror/runtime.js';
-import { mirrorReadPosition } from '../../../../bridge/mirror/subscription-state.js';
+import { mirrorReadPosition, mirrorReplyMessageId } from '../../../../bridge/mirror/subscription-state.js';
 import type { BridgeMirrorRecord, MirrorJsonlSource } from '../../../../runtime/contracts.js';
 import type { MirrorRuntimeSession } from '../../../../bridge/mirror/runtime.js';
 import {
@@ -30,6 +30,12 @@ it('never replays direct Cursor turns after late snapshot rewrites or restart, w
   const state = { running: true, adapters: new Map([['feishu', { isRunning: () => false }]]),
     mirrorSubscriptions: new Map(), mirrorWakeTimer: null, mirrorSyncInFlight: false, activeTasks: new Map<string, unknown>() };
   const delivered: string[] = [];
+  const outputOrigins: Array<string | undefined> = [];
+  const consume = (subscription: Parameters<typeof consumeMirrorRecords>[0], rows: BridgeMirrorRecord[]) =>
+    consumeMirrorRecords(subscription, rows, {
+      onTurnStarted: (s, t) => outputOrigins.push(mirrorReplyMessageId(s as never, t.turnId)),
+      onStreamText: (s, t) => outputOrigins.push(mirrorReplyMessageId(s as never, t.turnId)),
+    });
   const source: MirrorJsonlSource = {
     runtime: 'cursor', readMode: 'snapshot',
     findByThreadId: () => ({ threadId: 'native', filePath }),
@@ -54,9 +60,9 @@ it('never replays direct Cursor turns after late snapshot rewrites or restart, w
       if (claimDuringRead) runtime.claimDirectMirrorTurn('session', 'native', claimDuringRead);
       return { records: rows, hold: false };
     },
-    consumeMirrorRecords,
+    consumeMirrorRecords: consume,
     flushTimedOutMirrorTurn: s => flushTimedOutMirrorTurn(s, MIRROR_TEST_BUFFER_TIMEOUT_MS, now),
-    consumeBufferedMirrorTurns: s => consumeBufferedMirrorTurns(s, MIRROR_TEST_BUFFER_TIMEOUT_MS, now),
+    consumeBufferedMirrorTurns: s => consume(s, s.bufferedRecords.splice(0)),
     hasPendingMirrorWork, stopMirrorStreaming() {},
     deliverMirrorTurns: async (_s, turns) => { delivered.push(...turns.map(t => t.text)); return { deliveredCount: turns.length }; },
   });
@@ -97,12 +103,21 @@ it('never replays direct Cursor turns after late snapshot rewrites or restart, w
     state.activeTasks.set('session', {});
     records.push(...turn('incomplete', 'before-handoff').slice(0, 2));
     await runtime.reconcileMirrorSubscriptions();
-    runtime.claimDirectMirrorTurn('session', 'native', 'incomplete');
+    runtime.claimDirectMirrorTurn('session', 'native', 'incomplete', false,
+      { channelType: 'feishu', chatId: 'chat', messageId: 'om_original' });
+    runtime.updateDirectMirrorReplyTarget('session', { channelType: 'feishu', chatId: 'chat', messageId: 'om_outside_steer' });
+    runtime.updateDirectMirrorReplyTarget('session', { channelType: 'feishu', chatId: 'chat', messageId: 'om_inside_steer' });
+    runtime.updateDirectMirrorReplyTarget('session', { channelType: 'feishu', chatId: 'chat', messageId: 'om_stale_receipt' }, 'steer-2');
+    assert.equal(session.mirror_read_position?.replyTarget?.messageId, 'om_inside_steer', 'a late receipt from another turn cannot redirect output');
     runtime.clearMirrorSubscriptions(); state.activeTasks.clear(); runtime = create();
     await runtime.reconcileMirrorSubscriptions();
     records.push(...turn('incomplete', 'after-handoff').slice(1));
     await runtime.reconcileMirrorSubscriptions();
     assert.deepEqual(delivered, ['output new', 'output after-handoff']);
+    assert.equal(outputOrigins.at(-1), 'om_inside_steer', 'the final answer must retain the latest accepted topic after restart');
+    records.push(...turn('independent-local', 'new-local'));
+    await runtime.reconcileMirrorSubscriptions();
+    assert.equal(outputOrigins.at(-1), undefined, 'an unrelated local turn cannot inherit an older IM topic');
   } finally { runtime.clearMirrorSubscriptions(); fs.rmSync(root, { recursive: true, force: true }); }
 });
 

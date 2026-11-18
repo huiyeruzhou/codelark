@@ -157,6 +157,8 @@ export interface InteractiveTaskState {
   adapter: BaseChannelAdapter;
   address: InboundMessage['address'];
   requestMessageId: string;
+  latestAcceptedMessageId?: string;
+  nativeTurnId?: string;
   streamKey: string;
   sessionId: string;
   hasStreamingCards: boolean;
@@ -167,7 +169,6 @@ export interface InteractiveTaskState {
   streamFinalized: boolean;
   uiEnded: boolean;
   mirrorSuppressionId: string | null;
-  /** Follow-up inputs remain owned by this direct stream until it finishes. */
   finalizeFromExternalTerminal?(
     outcome: 'completed' | 'failed' | 'aborted',
     detail?: string,

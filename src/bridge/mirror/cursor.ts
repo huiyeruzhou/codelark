@@ -1,4 +1,5 @@
 import type { BridgeMirrorRecord } from '../../runtime/contracts.js';
+import type { MirrorReadPosition } from '../../domain/session.js';
 
 export interface BridgeMirrorCursor {
   initialized: boolean;
@@ -13,6 +14,7 @@ export interface BridgeMirrorCursor {
   directTurnIds?: string[];
   /** 未完成的直接轮次在进程恢复时交给 mirror 继续观察。 */
   directActiveTurnId?: string;
+  replyTarget?: MirrorReadPosition['replyTarget'];
 }
 
 export interface BridgeMirrorDelta {
@@ -32,6 +34,7 @@ function makeCursor(records: BridgeMirrorRecord[], previous?: BridgeMirrorCursor
     lastEventContent: lastEvent?.content,
     lastEventTurnId: lastEvent?.turnId,
     lastEventCount: records.length,
+    ...(previous?.replyTarget ? { replyTarget: previous.replyTarget } : {}),
     ...(previous?.directTurnIds ? { directTurnIds: previous.directTurnIds, directActiveTurnId: previous.directActiveTurnId } : {}),
     ...(trackTurn && lastEvent?.turnId ? { seenTurnSignatures: [...new Set([
       ...(previous?.lastEventTurnId === lastEvent.turnId ? previous.seenTurnSignatures || [] : []),
@@ -67,6 +70,7 @@ export function advanceBridgeMirrorCursor(
     lastEventContent: lastEvent?.content,
     lastEventTurnId: lastEvent?.turnId,
     lastEventCount: cursor.lastEventCount + appendedRecords.length,
+    ...(cursor.replyTarget ? { replyTarget: cursor.replyTarget } : {}),
     ...(cursor.directTurnIds ? { directTurnIds: cursor.directTurnIds, directActiveTurnId: cursor.directActiveTurnId } : {}),
   };
 }

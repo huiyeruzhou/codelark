@@ -124,7 +124,7 @@ import {
   type MirrorSuppressionState,
   type MirrorSuppressionStore,
 } from '../mirror/suppression.js';
-import { mirrorReadPosition, type BridgeMirrorSubscription } from '../mirror/subscription-state.js';
+import { mirrorReadPosition, mirrorReplyMessageId, type BridgeMirrorSubscription } from '../mirror/subscription-state.js';
 import { SessionRegistryService } from '../session/registry.js';
 import { migrateCursorDesktopSessionIdentities, resolveCursorTransport } from '../session/cursor-transport.js';
 import {
@@ -219,6 +219,7 @@ import { buildRuntimeStreamTags } from '../../shared/streaming-metadata.js';
 import { ThreadDisplayService } from '../session/thread-display-resolver.js';
 import {
   runInteractiveMessage,
+  type InteractiveTaskState,
 } from '../turn/interactive/runner.js';
 import {
   resolveInteractiveTurnEnvironment as resolveInteractiveTurnEnvironmentBase,
@@ -407,6 +408,20 @@ function addInboundGetReaction(
       error: describeUnknownError(error),
     });
   });
+}
+
+function rememberCursorInputReplyTarget(msg: InboundMessage, acceptedTask?: InteractiveTaskState | null): void {
+  if (msg.messageId.startsWith('manual:')) return;
+  const store = getBridgeContext().store;
+  const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+  const task = acceptedTask || (binding && getState().activeTasks.get(binding.bridgeSessionId));
+  if (!binding || !task || task.sessionId !== binding.bridgeSessionId
+    || getSessionActiveRuntime(store.getSession(binding.bridgeSessionId)) !== 'cursor') return;
+  if (msg.messageId === task.requestMessageId && task.latestAcceptedMessageId && task.latestAcceptedMessageId !== msg.messageId) return;
+  task.latestAcceptedMessageId = msg.messageId;
+  CURSOR_MIRROR_RUNTIME.updateDirectMirrorReplyTarget(binding.bridgeSessionId, {
+    channelType: msg.address.channelType, chatId: msg.address.chatId, messageId: msg.messageId,
+  }, task.nativeTurnId);
 }
 
 function scheduleTmuxProviderExitProbe(params: {
@@ -2155,7 +2170,9 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
       return target?.channelType === subscription.channelType && target.chatId === subscription.chatId ? target.messageId : undefined;
     }
     const task = getState().activeTasks.get(subscription.sessionId);
-    return task?.address.channelType === subscription.channelType && task.address.chatId === subscription.chatId ? task.requestMessageId : undefined;
+    return mirrorReplyMessageId(subscription, turn.turnId)
+      || (task?.address.channelType === subscription.channelType && task.address.chatId === subscription.chatId
+        ? task.latestAcceptedMessageId || task.requestMessageId : undefined);
   },
   getPendingUserInput: (sessionId) => getBridgeContext().store.getSession(sessionId)?.pending_user_input,
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
@@ -2504,9 +2521,14 @@ function resetMirrorSessionForInteractiveRun(sessionId: string): void {
 }
 
 async function claimDirectMirrorTurn(sessionId: string, threadId: string, turnId: string, completed: boolean): Promise<void> {
-  if (CURSOR_MIRROR_RUNTIME.claimDirectMirrorTurn(sessionId, threadId, turnId, completed)) return;
+  const task = getState().activeTasks.get(sessionId);
+  if (task) task.nativeTurnId = turnId;
+  const messageId = task?.latestAcceptedMessageId || task?.requestMessageId;
+  const target = task && messageId && !messageId.startsWith('manual:')
+    ? { channelType: task.address.channelType, chatId: task.address.chatId, messageId } : undefined;
+  if (CURSOR_MIRROR_RUNTIME.claimDirectMirrorTurn(sessionId, threadId, turnId, completed, target)) return;
   await CURSOR_MIRROR_RUNTIME.reconcileMirrorSubscriptions();
-  if (!CURSOR_MIRROR_RUNTIME.claimDirectMirrorTurn(sessionId, threadId, turnId, completed)) {
+  if (!CURSOR_MIRROR_RUNTIME.claimDirectMirrorTurn(sessionId, threadId, turnId, completed, target)) {
     throw new Error('Cursor 原生轮次尚未建立输出归属');
   }
 }
@@ -5192,6 +5214,8 @@ async function handleMessage(
         await handleCommand(adapter, msg, `/tmux ${text}`, {
           tmuxProviderAutoForward: true,
           onTmuxProviderAutoForwarded: () => {
+            // 原生最终输出可能先于输入确认回调，使用提交时持有的任务身份。
+            rememberCursorInputReplyTarget(msg, tmuxProviderActiveTask);
             // Get means the tmux input actions completed. It does not claim the
             // TUI has created a turn. Adding it is detached from the message lane.
             addInboundGetReaction(adapter, msg, 'tmux_input_actions_completed');
@@ -5277,6 +5301,7 @@ async function handleMessage(
         },
       });
       addInboundGetReaction(adapter, msg, 'cursor_desktop_input_accepted');
+      if (sent.status !== 'queued') rememberCursorInputReplyTarget(msg, tmuxProviderActiveTask);
       void (async () => {
         const notified = await adapter.onInputDelivery?.(msg, sent.status === 'queued' ? 'queued' : 'accepted', sent.warning, { streamKey: tmuxProviderActiveTask.streamKey, requestMessageId: tmuxProviderActiveTask.requestMessageId }).catch((error) => {
           console.warn('[bridge-manager] Input delivery notice failed:', describeUnknownError(error));
@@ -5394,7 +5419,12 @@ async function handleMessage(
   try {
     const displayService = new ThreadDisplayService(store);
     await runInteractiveMessage(adapter, msg, text, hasAttachments ? msg.attachments : undefined, {
-      onInputAccepted: () => addInboundGetReaction(adapter, msg, 'tmux_input_actions_completed'),
+      onInputAccepted: () => {
+        const inputBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+        const task = inputBinding && getState().activeTasks.get(inputBinding.bridgeSessionId);
+        if (task?.requestMessageId === msg.messageId) rememberCursorInputReplyTarget(msg, task);
+        addInboundGetReaction(adapter, msg, 'tmux_input_actions_completed');
+      },
       registerInteractiveTask: (task) => INTERACTIVE_RUNTIME.registerInteractiveTask(task),
       registerBridgeTurn: (turn) => TURN_COORDINATOR.registerInteractiveTurn(turn),
       resetMirrorSessionForInteractiveRun,

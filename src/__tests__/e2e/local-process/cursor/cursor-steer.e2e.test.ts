@@ -168,6 +168,9 @@ for (const scenario of [
     assert.deepEqual(history.flatMap(item => item.type === 'markdown' && item.role === 'user' ? [item.content] : []), [initial, ...followups],
       'the original card must contain each accepted native user input once, including identical steers');
     assert.ok(![...adapter.histories.keys()].some(key => key.startsWith('mirror:')), 'direct native output must not be replayed as another mirror card');
+    const savedTarget = store.getSession(session.id)?.mirror_read_position?.replyTarget;
+    assert.equal(savedTarget?.messageId, `steer-${count - 1}`, 'latest accepted input must survive a bridge restart');
+    assert.equal(savedTarget?.chatId, address.chatId);
     assert.deepEqual(backend.errors, []); passed = true;
   } finally {
     tmuxCore.capturePane = originalCapture;
