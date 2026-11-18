@@ -55,14 +55,14 @@ describe('UserInputTurnCountCache', () => {
     assert.equal(cache.get('codex', sessionPath, isUserLine), 2);
   });
 
-  it('persists the stat-keyed count for a fast bridge restart', async () => {
+  for (const runtime of ['codex', 'cursor'] as const) it(`persists ${runtime} counts for a fast bridge restart`, async () => {
     const { cache, cachePath, sessionPath } = fixture();
     fs.writeFileSync(sessionPath, `${JSON.stringify({ role: 'user', text: 'one' })}\n`);
-    cache.get('codex', sessionPath, isUserLine);
+    cache.get(runtime, sessionPath, isUserLine);
     await cache.waitForIdle();
 
     const restarted = new UserInputTurnCountCache(cachePath);
-    assert.equal(restarted.get('codex', sessionPath, isUserLine), 1);
+    assert.equal(restarted.get(runtime, sessionPath, isUserLine), 1);
   });
 
   it('rescans a grown file when the cached snapshot ended mid-line', async () => {

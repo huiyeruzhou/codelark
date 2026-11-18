@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { CODELARK_HOME } from '../../../configuration/paths.js';
 
-export type LocalRuntimeName = 'codex' | 'claude' | 'kimi';
+export type LocalRuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor';
 export type UserInputLineMatcher = (line: string) => boolean;
 
 interface CachedTurnCount {
@@ -42,7 +42,7 @@ function cacheKey(runtime: LocalRuntimeName, filePath: string): string {
 function validEntry(value: unknown): value is CachedTurnCount {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Partial<CachedTurnCount>;
-  return (entry.runtime === 'codex' || entry.runtime === 'claude' || entry.runtime === 'kimi')
+  return (entry.runtime === 'codex' || entry.runtime === 'claude' || entry.runtime === 'kimi' || entry.runtime === 'cursor')
     && typeof entry.filePath === 'string'
     && Number.isFinite(entry.size)
     && Number.isFinite(entry.mtimeMs)

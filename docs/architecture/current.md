@@ -170,6 +170,10 @@ conversation barrier 是 lane 之上的保护规则，用来处理“这条命�
 
 会话索引热路径只能读取目录、文件元信息和小型持久缓存，禁止为了表格里的“用户输入轮数”同步整文件读取 JSONL。轮数缓存以 `runtime + path + size + mtime` 为键：冷缓存和新增后缀由单并发异步流统计，命令先返回；下一次刷新显示精确值。单次接管解析出的候选列表应复用于同 runtime 的卡片刷新，不能为同一个动作重复扫描。
 
+Codex 的有限列表先按文件当前修改时间排序，再逐个解析元信息和标题，取得所需数量的有效会话后停止。归档、子 agent、内部 Skill 工作区、损坏或刚被移走的文件不占名额；同一 thread 的多个文件取最近活动的一份。旧会话继续写入后会重新排到前面，不按文件名中的创建日期截断。完整 thread ID 查找先利用原生 rollout 文件名定位，并核验文件内的身份；非标准导入文件名仍可通过元信息查找。Cursor 的用户轮数也使用上述异步缓存，不同步读取整份 transcript。
+
+卡片接管携带完整会话 ID 时，先解析目标，再执行现有停止确认、占用检查和绑定提交；不会因为当前仍绑定 Codex 而先枚举 Codex 列表。序号和名称仍按当前 runtime 的列表解析。接管后的卡片重新展示目标 runtime 的候选列表，不能只显示刚接管的一条。
+
 因此 `/t` 不是“把某个 thread id 写到聊天上”，而是“把底层 runtime 会话纳入 BridgeSession，再让聊天绑定这个 BridgeSession”。新增 agent 时必须同时定义它的本地 session index、materialize 身份、archive 语义和 mirror source；只新增 provider stream 不足以让 `/t` 可恢复、可切换、可观察。
 
 ## Mirror 运行时

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { BridgeMessage } from '../../../domain/message.js';
 import {
+  extractThreadIdFromRolloutName,
   loadArchivedThreadIds,
   moveSessionFileToArchive,
 } from './archive-store.js';
@@ -166,7 +167,13 @@ function parseCodexSession(
   threadIndexEntries: Map<string, ThreadIndexEntry>,
   archivedThreadIds: Set<string>,
 ): CodexSessionSummary | null {
-  const firstLine = readFirstLine(filePath, MAX_SESSION_META_BYTES);
+  let firstLine: string;
+  try {
+    firstLine = readFirstLine(filePath, MAX_SESSION_META_BYTES);
+  } catch {
+    // A native session can be archived or replaced after discovery.
+    return null;
+  }
   if (!firstLine) return null;
 
   let parsed: SessionMetaLine;
@@ -218,6 +225,16 @@ function trimTitle(text: string): string {
   return trimTitleBase(text, TITLE_MAX_CHARS);
 }
 
+function sessionFilesByActivity(files: string[]): string[] {
+  return files.flatMap((filePath) => {
+    try {
+      return [{ filePath, mtimeMs: fs.statSync(filePath).mtimeMs }];
+    } catch {
+      return [];
+    }
+  }).sort((a, b) => b.mtimeMs - a.mtimeMs).map(({ filePath }) => filePath);
+}
+
 export function listCodexSessions(limit?: number): CodexSessionSummary[] {
   const root = getCodexSessionsRoot();
   if (!fs.existsSync(root)) return [];
@@ -227,18 +244,25 @@ export function listCodexSessions(limit?: number): CodexSessionSummary[] {
   const files: string[] = [];
   walkSessionFiles(root, files);
 
+  // Sort cheap filesystem metadata before opening histories. An old rollout
+  // that receives new input must still rise to the top, regardless of its name.
+  const candidates = sessionFilesByActivity(files);
+  const bounded = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+    ? Math.max(1, Math.floor(limit)) : undefined;
   const allSessions = new Map<string, CodexSessionSummary>();
-  for (const filePath of files) {
+  for (const filePath of candidates) {
     const session = parseCodexSession(filePath, threadIndexEntries, archivedThreadIds);
     if (!session) continue;
+    if (allSessions.has(session.threadId)) continue;
     allSessions.set(session.threadId, session);
     sessionFileByThreadId.set(sessionFileCacheKey(session.threadId), session.filePath);
+    if (bounded && allSessions.size >= bounded) break;
   }
 
   const sessions = Array.from(allSessions.values());
   return sessions
     .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt))
-    .slice(0, typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.max(1, Math.floor(limit)) : undefined);
+    .slice(0, bounded);
 }
 
 export function getCodexSessionByThreadId(threadId: string): CodexSessionSummary | null {
@@ -255,8 +279,23 @@ export function getCodexSessionByThreadId(threadId: string): CodexSessionSummary
     sessionFileByThreadId.delete(cacheKey);
   }
 
-  const sessions = listCodexSessions();
-  return sessions.find((session) => session.threadId === threadId) || null;
+  // Native rollout filenames carry the full thread ID. A miss (e.g. a Cursor
+  // ID) must not parse every Codex history before another runtime is tried.
+  const files: string[] = [];
+  walkSessionFiles(getCodexSessionsRoot(), files);
+  const named = files.filter((filePath) => extractThreadIdFromRolloutName(path.basename(filePath)) === threadId);
+  const legacy = files.filter((filePath) => !extractThreadIdFromRolloutName(path.basename(filePath)));
+  const archivedThreadIds = loadArchivedThreadIds();
+  if (archivedThreadIds.has(threadId)) return null;
+  if (!named.length && !legacy.length) return null;
+  const threadIndexEntries = loadThreadIndexEntries(archivedThreadIds);
+  for (const filePath of sessionFilesByActivity([...named, ...legacy])) {
+    const session = parseCodexSession(filePath, threadIndexEntries, archivedThreadIds);
+    if (session?.threadId !== threadId) continue;
+    sessionFileByThreadId.set(cacheKey, filePath);
+    return session;
+  }
+  return null;
 }
 
 export function readCodexSessionModel(threadId: string): string | undefined {

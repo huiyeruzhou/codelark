@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-
 import {
   archiveCodexSession,
   getCodexSessionByThreadId,
@@ -113,25 +111,14 @@ function isKimiUserInputLine(line: string): boolean {
   }
 }
 
-function countCursorUserInputTurns(filePath: string): number | undefined {
+function isCursorUserInputLine(line: string): boolean {
   try {
-    let count = 0;
-    for (const line of fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let parsed: any;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (parsed?.role !== 'user') continue;
-      const text = textOf(parsed?.message?.content);
-      if (!text || isInternalUserInput(text)) continue;
-      count += 1;
-    }
-    return count;
+    const parsed = JSON.parse(line) as any;
+    if (parsed?.role !== 'user') return false;
+    const text = textOf(parsed?.message?.content);
+    return Boolean(text && !isInternalUserInput(text));
   } catch {
-    return undefined;
+    return false;
   }
 }
 
@@ -199,7 +186,7 @@ function toCursorRuntimeSession(session: ReturnType<typeof listCursorSessionFile
     lastEventAt: session.updatedAt || session.createdAt || new Date(0).toISOString(),
     title: session.title || session.sessionId.slice(0, 8),
     activeEstimate: false,
-    userInputTurns: session.filePath ? countCursorUserInputTurns(session.filePath) : undefined,
+    userInputTurns: session.filePath ? userInputTurnCountCache.get('cursor', session.filePath, isCursorUserInputLine) : undefined,
   };
 }
 

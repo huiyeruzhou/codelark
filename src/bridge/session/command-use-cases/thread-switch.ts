@@ -26,7 +26,8 @@ import {
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import { parseForceFlag } from './args.js';
 import { sessionLooksRunning } from './status-guards.js';
-import { listCommandLocalRuntimeSessions } from './source.js';
+import { getCommandLocalRuntimeThreadByIdSafe, listCommandLocalRuntimeSessions } from './source.js';
+import { validateSessionId } from '../../../shared/security/validators.js';
 import { prepareCurrentSessionForAttachment } from './attachment-lifecycle.js';
 import { buildTakeoverConfirmationCard } from './takeover-confirmation.js';
 import {
@@ -238,13 +239,20 @@ export async function handleThreadSwitchCommand(options: {
   }
 
   const runtime = options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
-  const displayedThreads = listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime);
+  // Card actions carry an exact native ID, possibly from a different runtime
+  // than the current binding. Resolve it before enumerating the old runtime.
+  const directThread = validateSessionId(threadArgs)
+    ? getCommandLocalRuntimeThreadByIdSafe(threadArgs, undefined, 'thread switch by exact id').thread
+    : undefined;
+  const displayedThreads = directThread
+    ? [directThread]
+    : listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime);
   if (!displayedThreads) {
     return { response: '读取本地会话列表失败，请稍后重试。' };
   }
   const decoratedThreads = options.threadDisplay.decorateLocalRuntimeSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
   const reusableRefreshSessions = (): typeof displayedThreads | undefined => (
-    options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId) === runtime
+    !directThread && options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId) === runtime
       ? displayedThreads
       : undefined
   );
