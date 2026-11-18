@@ -127,7 +127,9 @@ function isManualInputRequest(value: unknown): value is ManualInputRequest {
     && Boolean(source)
     && ['codelarkHome', 'internalChatId', 'platformChatId', 'bridgeSessionId', 'chatName', 'botName']
       .every((key) => typeof source?.[key as keyof AgentMessageSource] === 'string')
-    && (request.idempotencyKey === undefined || typeof request.idempotencyKey === 'string');
+    && (request.idempotencyKey === undefined || typeof request.idempotencyKey === 'string')
+    && (request.replyToMessageId === undefined || (typeof request.replyToMessageId === 'string'
+      && Boolean(request.replyToMessageId.trim()) && !request.replyToMessageId.startsWith('manual:')));
 }
 
 function isAgentInputRequest(value: unknown): value is AgentInputRequest {

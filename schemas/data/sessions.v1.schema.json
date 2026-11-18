@@ -318,6 +318,24 @@
             "sessionId": {
               "type": "string"
             },
+            "sessionProvider": {
+              "enum": ["tmux", "acp"]
+            },
+            "previousSession": {
+              "type": "object",
+              "required": ["sessionId", "provider"],
+              "properties": {
+                "sessionId": { "type": "string" },
+                "provider": { "enum": ["tmux", "acp"] },
+                "cwd": { "type": "string" },
+                "transport": { "enum": ["cli", "desktop"] },
+                "tmuxSessionName": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "transport": {
+              "enum": ["cli", "desktop"]
+            },
             "cwd": {
               "type": "string"
             },
@@ -325,7 +343,7 @@
               "type": "string"
             },
             "provider": {
-              "const": "tmux"
+              "enum": ["tmux", "acp"]
             },
             "reasoningEffort": {
               "enum": ["low", "medium", "high", "xhigh", "max"]

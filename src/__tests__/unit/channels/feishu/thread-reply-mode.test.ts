@@ -287,3 +287,43 @@ it('pins a long-running shell monitor to its initiating thread through other mes
   }
   for (const key of f.a.activeCards.keys()) f.adapter.onMessageEnd(chatId, key);
 });
+
+it('creates an explicit plain title as a new topic even while another card is active', async () => {
+  const f = fixture();
+  f.adapter.onMessageStart(chatId, 'old-topic', 'om_origin');
+  await f.a.cardCreatePromises.get('old-topic');
+  const result = await f.adapter.send({ address, text: '定时任务：检查结果', startNewThread: true,
+    platformMessage: { msgType: 'text', content: { text: '定时任务：检查结果' } } });
+  assert.equal(result.ok, true); assert(result.messageId);
+  assert.equal(f.sent.at(-1).method, 'create');
+  assert.equal(f.sent.at(-1).data.msg_type, 'text');
+  assert.equal(f.sent.at(-1).path, undefined);
+  f.adapter.onMessageEnd(chatId, 'old-topic');
+});
+
+it('keeps the same card when accepting the root of the topic containing its initial reply', async () => {
+  const f = fixture();
+  f.a.restClient.im.message.get = async (p: any) => ({ code: 0, data: { items: [{ message_id: p.path.message_id,
+    chat_id: chatId, root_id: 'om_root_b', thread_id: 'omt_b' }] } });
+  f.adapter.onMessageStart(chatId, 'reply-in-b', 'om_reply_b');
+  await f.a.cardCreatePromises.get('reply-in-b');
+  const initialCard = f.a.activeCards.get('reply-in-b').messageId;
+  assert.equal(await f.adapter.onInputDelivery(input('om_root_b'), 'accepted', undefined,
+    { streamKey: 'reply-in-b', requestMessageId: 'om_reply_b' }), false);
+  f.a.enqueueCardFlush('reply-in-b'); await f.a.awaitCardFlushCompletion('reply-in-b');
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.a.activeCards.get('reply-in-b').messageId, initialCard);
+  assert.equal(f.a.streamReplyTargets.get('reply-in-b').messageId, 'om_reply_b');
+  f.adapter.onMessageEnd(chatId, 'reply-in-b');
+});
+
+it('does not send synthetic scheduled execution IDs to Feishu when thread mode is off', async () => {
+  const f = fixture(); f.adapter.manageThreadReplyMode(input('om_off'), 'off');
+  for (const executionId of ['every:task:1', 'then:task']) {
+    f.adapter.onMessageStart(chatId, executionId, executionId);
+    await f.a.cardCreatePromises.get(executionId);
+    assert.equal(f.sent.at(-1).method, 'create');
+    assert.equal(f.sent.at(-1).path, undefined);
+    f.adapter.onMessageEnd(chatId, executionId);
+  }
+});

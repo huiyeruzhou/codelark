@@ -23,6 +23,13 @@ async function readStream(stream: ReadableStream<string>): Promise<string> {
 }
 
 describe('CodexRoutingProvider', () => {
+  it('routes Cursor ACP directly without invoking either tmux transport', async () => {
+    const provider = new CodexRoutingProvider() as any;
+    const params = { prompt: 'hello', sessionId: 'acp-session', runtime: 'cursor' as const, cursorProvider: 'acp' as const };
+    provider.cursorTmuxProvider = { streamChat() { throw new Error('ACP must not invoke tmux'); } };
+    provider.cursorAcpProvider = { streamChat(actual: unknown) { assert.equal(actual, params); return streamWithText('acp-stream'); } };
+    assert.equal(await readStream(provider.streamChat(params)), 'acp-stream');
+  });
   it('keeps one Cursor tmux provider while dispatching to the bound transport with no fallback', async () => {
     const provider = new CursorTmuxProvider() as any;
     const routes: string[] = [];

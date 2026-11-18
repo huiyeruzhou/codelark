@@ -248,6 +248,7 @@ export async function runInteractiveMessage(
   deps: RunInteractiveMessageDeps,
 ): Promise<void> {
   const turnEnvironment = deps.resolveInteractiveTurnEnvironment(msg.address, msg.messageId);
+  const requestMessageId = msg.outputReplyToMessageId || msg.messageId;
   const {
     binding,
     initialSession,
@@ -303,7 +304,8 @@ export async function runInteractiveMessage(
     && (getSessionCodexProviderOverride(initialSession) === 'tmux'
       || Boolean(getSessionRuntimeTmuxSessionName(initialSession)));
   const isKimiMirrorTurn = activeRuntime === 'kimi';
-  const isCursorTranscriptTurn = activeRuntime === 'cursor';
+  const isCursorAcpTurn = activeRuntime === 'cursor' && resolveCursorRuntimeConfig(initialSession, binding).provider === 'acp';
+  const isCursorTranscriptTurn = activeRuntime === 'cursor' && !isCursorAcpTurn;
   const isZcodeTranscriptTurn = activeRuntime === 'zcode';
   const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn || isKimiMirrorTurn;
   const initialCodexThreadId = getSessionCodexThreadId(initialSession) || codexThreadId || '';
@@ -324,7 +326,7 @@ export async function runInteractiveMessage(
   const ensureMessageStarted = () => {
     if (!useMessageLifecycle) return;
     if (messageStartCalled) return;
-    adapter.onMessageStart?.(msg.address.chatId, streamKey, msg.messageId);
+    adapter.onMessageStart?.(msg.address.chatId, streamKey, requestMessageId);
     messageStartCalled = true;
   };
 
@@ -347,7 +349,7 @@ export async function runInteractiveMessage(
     abortController: taskAbort,
     adapter,
     address: msg.address,
-    requestMessageId: msg.messageId,
+    requestMessageId,
     streamKey,
     sessionId: binding.bridgeSessionId,
     hasStreamingCards: false,
@@ -392,7 +394,7 @@ export async function runInteractiveMessage(
         : activeRuntime === 'zcode'
           ? getSessionZcodeSessionId(initialSession)
         : turnClassification.codexThreadId,
-    requestMessageId: msg.messageId,
+    requestMessageId,
     streamKey,
     startedAt: taskStartedAt,
   });
@@ -510,7 +512,7 @@ export async function runInteractiveMessage(
             adapter,
             address: msg.address,
             sessionId: binding.bridgeSessionId,
-            replyToMessageId: streamMessageId || msg.messageId,
+            replyToMessageId: streamMessageId || requestMessageId,
             deliverResponse: deps.deliverResponse,
           }, assembleSdkFinalResponse({ attachments: outboundAttachments }), {
             skipText: true,
@@ -576,7 +578,7 @@ export async function runInteractiveMessage(
         adapter,
         address: msg.address,
         sessionId: binding.bridgeSessionId,
-        replyToMessageId: msg.messageId,
+        replyToMessageId: requestMessageId,
         deliverResponse: deps.deliverResponse,
         deliverManualInput: deps.deliverManualInput
           ? (input) => deps.deliverManualInput!(binding.id, input)
@@ -652,7 +654,7 @@ export async function runInteractiveMessage(
           perm.toolInput,
           binding.bridgeSessionId,
           perm.suggestions,
-          msg.messageId,
+          requestMessageId,
         );
         sdkStreamEvents.onPermissionWait(perm.toolName);
       },
@@ -689,6 +691,7 @@ export async function runInteractiveMessage(
             const tags = (metadata.tags || []).filter((tag) => !tag.toLowerCase().startsWith('model:'));
             streamUi.pushMetadata({ ...metadata, tags: [...tags, `model:${identity.model}`] });
           }
+          if (isCursorAcpTurn) return;
           if (identity.runtime === 'claude' || identity.runtime === 'kimi' || identity.runtime === 'cursor' || identity.runtime === 'zcode') {
             ensureMirrorSuppression(preparedPromptText);
             runtimeMirrorActivated = true;

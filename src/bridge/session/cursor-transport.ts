@@ -17,6 +17,7 @@ export function resolveCursorTransport(
   findThread: FindCursorThread = findCursorSessionFileById,
 ): CursorTransport {
   if (getSessionActiveRuntime(session) !== 'cursor') return 'cli';
+  if (session?.runtime?.cursor?.sessionProvider === 'acp') return 'cli';
   if (session?.runtime?.cursor?.transport === 'desktop' || session?.runtime?.cursor?.provider === 'desktop') return 'desktop';
   const sessionId = getSessionCursorSessionId(session);
   if (!sessionId) return 'cli';
@@ -45,6 +46,7 @@ export function upgradeCursorDesktopSessionIdentity(
 ): BridgeSession {
   if (
     getSessionActiveRuntime(session) !== 'cursor'
+    || session.runtime?.cursor?.sessionProvider === 'acp'
     || transport !== 'desktop'
     || (session.runtime?.cursor?.transport === 'desktop' && session.runtime.cursor.provider === 'tmux')
   ) {

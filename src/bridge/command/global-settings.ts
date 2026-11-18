@@ -594,14 +594,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime.cursor',
     aliases: ['cursorDefaultProvider'],
     label: 'provider',
-    usage: '/set cursorProvider tmux',
+    usage: '/set cursorProvider tmux|acp',
     control: 'select',
-    options: [selectOption('tmux')],
+    options: [selectOption('tmux'), selectOption('acp')],
     read: (config) => config.runtime.cursor.provider || 'tmux',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'tmux') return patch({ runtime: { cursor: { provider: 'tmux' } } });
-      return { ok: false, message: 'Cursor Provider 当前只支持 tmux。' };
+      if (token === 'tmux' || token === 'acp') return patch({ runtime: { cursor: { provider: token } } });
+      return { ok: false, message: 'Cursor Provider 必须是 tmux 或 acp。' };
     },
   },
   {

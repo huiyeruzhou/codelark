@@ -25,6 +25,10 @@ export class PendingPermissions {
     });
   }
 
+  has(permissionRequestId: string): boolean {
+    return this.pending.has(permissionRequestId);
+  }
+
   resolve(permissionRequestId: string, resolution: PermissionResolution): boolean {
     const entry = this.pending.get(permissionRequestId);
     if (!entry) return false;

@@ -147,7 +147,7 @@
           "type": "string"
         },
         "provider": {
-          "const": "tmux"
+          "enum": ["tmux", "acp"]
         },
         "reasoning_effort": {
           "enum": ["", "low", "medium", "high", "xhigh", "max"]

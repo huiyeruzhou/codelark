@@ -102,6 +102,7 @@ describe('published JSON schemas', () => {
     assert.deepEqual(schema.$defs.claude.properties.executable.enum, ['claude', 'ccr']);
     assert.equal(schema.$defs.kimi.properties.provider.const, 'tmux');
     assert.deepEqual(schema.$defs.kimi.properties.thinking_mode.enum, ['default', 'on', 'off']);
+    assert.deepEqual(schema.$defs.cursor.properties.provider.enum, ['tmux', 'acp']);
     assert.deepEqual(schema.$defs.cursor.properties.reasoning_effort.enum, ['', 'low', 'medium', 'high', 'xhigh', 'max']);
     assert.equal(schema.$defs.zcode.properties.provider.const, 'tmux');
     assert.deepEqual(schema.$defs.zcode.properties.mode.enum, ['build', 'edit', 'plan', 'yolo']);
@@ -188,7 +189,8 @@ describe('published JSON schemas', () => {
     assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.claude, { not: {} });
     assert.deepEqual(sessionsSchema.$defs.kimiSessionRuntime.properties.kimi.properties.provider.enum, ['tmux']);
     assert.equal(sessionsSchema.$defs.cursorSessionRuntime.properties.activeRuntime.const, 'cursor');
-    assert.equal(sessionsSchema.$defs.cursorSessionRuntime.properties.cursor.properties.provider.const, 'tmux');
+    assert.deepEqual(sessionsSchema.$defs.cursorSessionRuntime.properties.cursor.properties.provider.enum, ['tmux', 'acp']);
+    assert.deepEqual(sessionsSchema.$defs.cursorSessionRuntime.properties.cursor.properties.sessionProvider.enum, ['tmux', 'acp']);
     assert.equal(sessionsSchema.$defs.zcodeSessionRuntime.properties.activeRuntime.const, 'zcode');
     assert.equal(sessionsSchema.$defs.zcodeSessionRuntime.properties.zcode.properties.provider.const, 'tmux');
     assert.deepEqual(sessionsSchema.$defs.zcodeSessionRuntime.properties.zcode.properties.mode.enum, ['build', 'edit', 'plan', 'yolo']);

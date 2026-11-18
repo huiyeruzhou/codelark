@@ -13,6 +13,7 @@ import type { ChannelAddress, OutboundMessage, OutboundRichCard, PermissionLinkR
 import type { BaseChannelAdapter } from '../../channels/contracts.js';
 import { deliver, enqueueDelivery } from '../../channels/delivery/deliver.js';
 import { getBridgeContext } from '../host/context.js';
+import { forwardCursorAcpQuestion } from './cursor-acp-questions.js';
 
 function escapeHtml(text: string): string {
   return text
@@ -548,6 +549,11 @@ export function forwardPermissionRequest(
   replyToMessageId?: string,
 ): void {
   const { store, permissions } = getBridgeContext();
+  if (permissionRequestId.startsWith('cursor-acp:') && toolName === 'Cursor AskQuestion' && sessionId) {
+    void forwardCursorAcpQuestion(adapter, address, permissionRequestId, toolInput, sessionId, store, permissions, replyToMessageId)
+      .catch(error => console.warn('[permission-broker] Cursor ACP 问卷发送失败:', error instanceof Error ? error.message : String(error)));
+    return;
+  }
 
   // Dedup: prevent duplicate forwarding of the same permission request
   const now = Date.now();

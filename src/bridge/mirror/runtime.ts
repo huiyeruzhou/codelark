@@ -74,6 +74,8 @@ export interface MirrorRuntimeSession {
       cwd?: string | null;
     };
     cursor?: {
+      provider?: 'tmux' | 'desktop' | 'acp';
+      sessionProvider?: 'tmux' | 'acp';
       transport?: 'cli' | 'desktop';
       sessionId?: string | null;
       cwd?: string | null;

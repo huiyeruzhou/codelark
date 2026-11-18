@@ -207,6 +207,20 @@ describe('agent message manual ingress', () => {
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);
     assert.equal(adapter.agentMessageEvents.length, 1, 'same persistent key must not enqueue input or events twice');
 
+    const explicitTopic = await fetch(`${service.descriptor.endpoint}/v1/input`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${service.descriptor.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ targetInternalChatId: target.id, text: '保留话题继续',
+        idempotencyKey: 'topic-continuation', replyToMessageId: 'om_explicit_topic',
+        source: { codelarkHome: CODELARK_HOME, internalChatId: source.id, platformChatId: source.chatId,
+          bridgeSessionId: source.bridgeSessionId, chatName: '来源群', botName: 'qaq' } }),
+    });
+    assert.equal(explicitTopic.status, 202);
+    const topicInput = await adapter.consumeOne();
+    assert.equal(topicInput?.messageId, 'manual:topic-continuation', 'delivery identity remains unique');
+    assert.equal(topicInput?.outputReplyToMessageId, 'om_explicit_topic');
+    assert.equal(topicInput?.text, '保留话题继续');
+
     await sendAgentMessageFromBinding(source.id, { target: 'current', text: '/then-form' });
     const selfInput = await adapter.consumeOne();
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);

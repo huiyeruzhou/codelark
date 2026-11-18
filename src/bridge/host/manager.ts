@@ -1,3 +1,4 @@
+import { ensureScheduledTaskReplyTarget } from '../automation/task-reply-target.js';
 /**
  * Bridge Manager — singleton orchestrator for the multi-IM bridge system.
  *
@@ -61,6 +62,7 @@ import {
   kimiTmuxSessionName,
 } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
+import { closeCursorAcpSessions } from '../../runtime/cursor/acp-provider.js';
 import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
 import {
   sanitizeInput,
@@ -210,6 +212,7 @@ import {
   closeAppServerRequestObservers, releaseAppServerRequestObserver, hasAppServerQuestion,
 } from '../permission/app-server.js';
 import { reconcileCursorQuestion, handleCursorQuestionCallback, answerCursorQuestionText, hasCursorQuestion, clearCursorQuestions } from '../permission/cursor-questions.js';
+import { answerCursorAcpQuestion, handleCursorAcpQuestionCallback, clearCursorAcpQuestions, hasCursorAcpQuestion } from '../permission/cursor-acp-questions.js';
 import {
   coordinateRuntimeTmuxSelection,
   sendRuntimeTmuxInput,
@@ -387,13 +390,13 @@ function tmuxSelectionUpdateExitProbeDelayMs(): number {
 function addInboundGetReaction(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
-  reason: 'command_received' | 'tmux_input_actions_completed' | 'app_server_input_accepted' | 'cursor_desktop_input_accepted',
+  reason: 'command_received' | 'tmux_input_actions_completed' | 'app_server_input_accepted' | 'cursor_desktop_input_accepted' | 'runtime_input_accepted',
   outputStream?: { streamKey: string; requestMessageId?: string },
 ): void {
   const raw = msg.raw as { manualIngress?: unknown } | undefined;
   const syntheticManualIngress = raw?.manualIngress === true || msg.messageId?.startsWith('manual:');
   if (syntheticManualIngress || !msg.messageId) return;
-  if (reason === 'app_server_input_accepted' || reason === 'tmux_input_actions_completed') {
+  if (reason === 'app_server_input_accepted' || reason === 'tmux_input_actions_completed' || reason === 'runtime_input_accepted') {
     const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
     const task = binding ? getState().activeTasks.get(binding.bridgeSessionId) : undefined;
     const stream = outputStream || (task ? { streamKey: task.streamKey, requestMessageId: task.requestMessageId } : undefined);
@@ -1384,6 +1387,7 @@ function enqueueManualInput(request: ManualInputRequest): boolean {
   if (idempotencyKey && !claimAgentInputReceipt(idempotencyKey)) return false;
   adapter.enqueueManualInboundMessage({
     messageId: idempotencyKey ? `manual:${idempotencyKey}` : `manual:${crypto.randomUUID()}`,
+    outputReplyToMessageId: request.replyToMessageId,
     address: targetAddress,
     text: request.text,
     contextText: formatAgentSourceXml(request.source, target.bridgeSessionId),
@@ -1901,6 +1905,8 @@ const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
     }
     const state = getState();
     const runtime = getSessionActiveRuntime(session) || 'codex';
+    // ACP has one bridge-owned executor; it has no external TUI writer to probe.
+    if (runtime === 'cursor' && resolveEffectiveRuntimeProvider(session).provider === 'acp') return 'idle';
     const subscriptions = runtime === 'claude' ? state.claudeMirrorSubscriptions
       : runtime === 'kimi' ? state.kimiMirrorSubscriptions
       : runtime === 'cursor' ? state.cursorMirrorSubscriptions
@@ -2421,6 +2427,8 @@ const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   getCodexSessionByThreadIdSafe: () => null,
   hasSessionMirrorSource: (session) => Boolean(
     getSessionActiveRuntime(session) === 'cursor'
+    && session?.runtime?.cursor?.provider !== 'acp'
+    && session?.runtime?.cursor?.sessionProvider !== 'acp'
     && getSessionCursorSessionId(session)
     && (getSessionCursorCwd(session) || getSessionWorkingDirectory(session)),
   ),
@@ -2653,6 +2661,7 @@ function isHighPriorityControlCommandText(rawText: string): boolean {
 function isHighPriorityControlCallback(callbackData: string): boolean {
   if (
     callbackData.startsWith('app-server-request:')
+    || callbackData.startsWith('cursor-acp-question:')
     || callbackData.startsWith('cursor-question:')
     ||
     callbackData.startsWith('perm:')
@@ -2746,7 +2755,50 @@ function sessionMutatingCallbackLane(callbackData: string): { jobKind: string; s
 }
 
 function shouldBypassSessionLock(msg: InboundMessage): boolean {
-  return Boolean(codexThreadControlForMessage(msg)) || isPendingClearConfirmationReply(msg.address, msg.text) || shouldRouteTerminalAppendInline(msg);
+  return Boolean(cursorAcpInputSession(msg)) || Boolean(codexThreadControlForMessage(msg)) || isPendingClearConfirmationReply(msg.address, msg.text) || shouldRouteTerminalAppendInline(msg);
+}
+
+/** ACP input must reach cancellation before waiting on the active turn's lock. */
+function cursorAcpInputSession(msg: InboundMessage): string | undefined {
+  if (msg.callbackData || msg.channelEvent || isBridgeCommandText(msg.text)
+    || (!msg.text.trim() && !msg.attachments?.length)
+    || isPendingClearConfirmationReply(msg.address, msg.text)
+    || isPendingAttachmentConfirmationReply(msg.address, msg.text)) return undefined;
+  const store = getBridgeContext().store;
+  const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+  const session = binding && store.getSession(binding.bridgeSessionId);
+  const effective = resolveEffectiveRuntimeProvider(session, binding);
+  return binding && effective.runtime === 'cursor' && effective.provider === 'acp' ? binding.bridgeSessionId : undefined;
+}
+
+const pendingCursorAcpInputs = new Map<string, { messages: InboundMessage[]; completion: Promise<void> }>();
+
+function enqueueCursorAcpInput(adapter: BaseChannelAdapter, msg: InboundMessage, sessionId: string): Promise<void> {
+  const pending = pendingCursorAcpInputs.get(sessionId);
+  if (pending) {
+    if (!pending.messages.some(input => input.messageId === msg.messageId)) pending.messages.push(msg);
+    return pending.completion;
+  }
+  const entry = { messages: [msg], completion: Promise.resolve() };
+  pendingCursorAcpInputs.set(sessionId, entry);
+  INTERACTIVE_RUNTIME.getActiveTask(sessionId)?.abortController.abort('codelark:cursor-acp-follow-up');
+  entry.completion = INTERACTIVE_RUNTIME.processWithSessionLock(sessionId, async () => {
+    // Inputs received while cancellation was pending share one next prompt, in
+    // arrival order. Its card belongs to the latest input's reply target.
+    pendingCursorAcpInputs.delete(sessionId);
+    const last = entry.messages.at(-1)!;
+    const combined: InboundMessage = entry.messages.length === 1 ? last : {
+      ...last,
+      text: entry.messages.map(input => appendModelContextText(input.text, input.contextText)).join('\n\n'),
+      contextText: undefined,
+      attachments: entry.messages.flatMap(input => input.attachments || []),
+    };
+    await handleMessage(adapter, combined, sessionId, entry.messages);
+  }, { jobKind: 'interactive-turn:cursor-acp' }).finally(() => {
+    if (pendingCursorAcpInputs.get(sessionId) === entry) pendingCursorAcpInputs.delete(sessionId);
+    for (const input of entry.messages) if (input.updateId != null) adapter.acknowledgeUpdate?.(input.updateId);
+  });
+  return entry.completion;
 }
 
 function codexThreadControlForMessage(msg: InboundMessage): 'interrupt' | 'unsupported' | undefined {
@@ -2764,6 +2816,10 @@ function codexThreadControlForMessage(msg: InboundMessage): 'interrupt' | 'unsup
 }
 
 function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | 'callback' | 'command' | 'bypass' | 'regular'): AdapterImmediateLane | null {
+  if (cursorAcpInputSession(msg)) {
+    return { laneKey: `control:cursor-acp:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`,
+      laneKind: 'control', jobKind: 'control:cursor-acp-input' };
+  }
   if (category === 'callback' && msg.callbackData?.startsWith('cursor-question:')) {
     return { laneKey: `control:append:${msg.address.channelType}:${msg.address.chatId}`, laneKind: 'control', jobKind: 'control:cursor-answer', serialize: true };
   }
@@ -3082,8 +3138,10 @@ export async function stop(): Promise<void> {
 
   // Stop all adapters
   await closeCodexAppServerSessions();
+  await closeCursorAcpSessions();
   closeAppServerRequestObservers();
   clearCursorQuestions();
+  clearCursorAcpQuestions();
   for (const type of Array.from(state.adapters.keys())) {
     await ADAPTER_RUNTIME.stopAdapterInstance(type);
   }
@@ -3933,10 +3991,20 @@ async function sendAgentMessageToSession(options: {
 
   const address = agentMessageTaskAddress(options.task);
   const syntheticBinding = buildAgentMessageTaskBinding(options.source, options.task, options.session);
+  let outputReplyToMessageId: string | undefined;
+  try {
+    outputReplyToMessageId = await ensureScheduledTaskReplyTarget({
+      adapter, address, source: options.source, prompt: options.prompt,
+      bridgeSessionId: options.session.id,
+    });
+  } catch (error) {
+    return { ok: false, error: describeUnknownError(error) };
+  }
   const msg: InboundMessage = {
     address,
     text: options.prompt,
     messageId: options.messageId,
+    outputReplyToMessageId,
     timestamp: Date.now(),
   };
   const effectiveRuntimeProvider = resolveEffectiveRuntimeProvider(options.session, syntheticBinding);
@@ -3947,7 +4015,10 @@ async function sendAgentMessageToSession(options: {
       if (effectiveRuntimeProvider.provider === 'tmux') {
         void scheduleCodexAppServerView({ store: getBridgeContext().store, binding: syntheticBinding, session: options.session, handle: protocol,
           notify: (text) => { enqueueBridgeNotice(adapter, address, text); } });
-        await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: options.prompt }], codexAppServerTurnOptions(syntheticBinding, options.session));
+        await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: options.prompt }],
+          codexAppServerTurnOptions(syntheticBinding, options.session),
+          outputReplyToMessageId ? { channelType: address.channelType, chatId: address.chatId,
+            messageId: outputReplyToMessageId, rootMessageId: outputReplyToMessageId } : undefined);
         void reconcileMirrorSubscriptions().catch((error) => console.warn('[bridge-manager] app-server mirror:', error));
         return { ok: true };
       }
@@ -3957,6 +4028,13 @@ async function sendAgentMessageToSession(options: {
     await handleCommand(adapter, msg, `/tmux ${options.prompt}`, {
       scopedBinding: syntheticBinding,
       tmuxProviderAutoForward: true,
+      onTmuxProviderAutoForwarded: () => {
+        if (outputReplyToMessageId && effectiveRuntimeProvider.runtime === 'cursor') {
+          CURSOR_MIRROR_RUNTIME.updateDirectMirrorReplyTarget(options.session.id, {
+            channelType: address.channelType, chatId: address.chatId, messageId: outputReplyToMessageId,
+          });
+        }
+      },
     });
     return { ok: true };
   }
@@ -3981,10 +4059,16 @@ async function sendAgentMessageToSession(options: {
     claimDirectMirrorTurn,
     abortMirrorSuppression,
     settleMirrorSuppression,
-    releaseInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskStateId),
+    releaseInteractiveTask: (sessionId, taskStateId) => {
+      if (effectiveRuntimeProvider.runtime === 'cursor' && effectiveRuntimeProvider.provider === 'acp'
+        && INTERACTIVE_RUNTIME.isCurrentInteractiveTask(sessionId, taskStateId)) {
+        clearCursorAcpQuestions(getBridgeContext().store, sessionId);
+      }
+      INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskStateId);
+    },
     releaseBridgeTurn: (sessionId, taskStateId) => TURN_COORDINATOR.releaseSessionTurn(sessionId, taskStateId),
-    deliverResponse: (targetAdapter, targetAddress, responseText, sessionId, _replyToMessageId, attachments) => (
-      deliverResponse(targetAdapter, targetAddress, responseText, sessionId, undefined, attachments)
+    deliverResponse: (targetAdapter, targetAddress, responseText, sessionId, replyToMessageId, attachments) => (
+      deliverResponse(targetAdapter, targetAddress, responseText, sessionId, outputReplyToMessageId ? replyToMessageId : undefined, attachments)
     ),
     deliverManualInput: sendAgentMessageFromBinding,
     persistCodexThreadUpdate,
@@ -4020,6 +4104,7 @@ async function sendAgentMessageToSession(options: {
 
 function buildAgentMessageTaskBinding(source: 'every' | 'then', task: AgentMessageTask, session: BridgeSession): ChannelChat {
   const timestamp = nowIso();
+  const existingBinding = getBridgeContext().store.getChannelChat(task.channelType, task.chatId);
   return {
     id: `${source}:${task.id}`,
     channelType: task.channelType,
@@ -4028,6 +4113,7 @@ function buildAgentMessageTaskBinding(source: 'every' | 'then', task: AgentMessa
     chatId: task.chatId,
     chatUserId: task.chatUserId,
     bridgeSessionId: session.id,
+    ...(existingBinding?.bridgeSessionId === session.id ? { feishuTopic: existingBinding.feishuTopic } : {}),
     createdAt: task.createdAt || timestamp,
     updatedAt: timestamp,
   };
@@ -4615,8 +4701,35 @@ function buildDoctorPromptMessage(msg: InboundMessage, prompt: string): InboundM
 async function handleMessage(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
+  acpQueuedSessionId?: string,
+  acpInputBatch?: InboundMessage[],
 ): Promise<void> {
   const { store } = getBridgeContext();
+  if ((msg.raw as { manualIngress?: boolean } | undefined)?.manualIngress
+    && !msg.outputReplyToMessageId && !isBridgeCommandText(msg.text) && !msg.callbackData) {
+    const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
+    if (binding) {
+      try {
+        const target = await ensureScheduledTaskReplyTarget({ adapter, address: msg.address,
+          bridgeSessionId: binding.bridgeSessionId, source: 'manual', prompt: msg.text,
+        });
+        if (target) msg = { ...msg, outputReplyToMessageId: target };
+      } catch (error) {
+        enqueueBridgeNotice(adapter, msg.address, `未提交输入：${describeUnknownError(error)}`);
+        if (msg.updateId != null) adapter.acknowledgeUpdate?.(msg.updateId);
+        return;
+      }
+    }
+  }
+  const acpSessionId = cursorAcpInputSession(msg);
+  if (acpSessionId) hasCursorAcpQuestion(acpSessionId);
+  if (acpQueuedSessionId && acpSessionId !== acpQueuedSessionId) {
+    enqueueBridgeNotice(adapter, msg.address, '排队期间聊天已切换会话，本条输入尚未提交。', { replyToMessageId: msg.messageId });
+    return;
+  }
+  if (acpSessionId && !acpQueuedSessionId && !store.getSession(acpSessionId)?.pending_user_input) {
+    return enqueueCursorAcpInput(adapter, msg, acpSessionId);
+  }
 
   // Update lastMessageAt for this adapter
   const adapterState = getState();
@@ -4655,6 +4768,8 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    const acpReply = await handleCursorAcpQuestionCallback(msg);
+    if (acpReply !== undefined) { enqueueBridgeNotice(adapter, msg.address, acpReply); ack(); return; }
     if (msg.callbackData.startsWith('cursor-question:')) {
       const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
       const session = binding && store.getSession(binding.bridgeSessionId);
@@ -5052,7 +5167,8 @@ async function handleMessage(
     const session = store.getSession(binding.bridgeSessionId);
     if (session) {
       if (!threadControl && getSessionActiveRuntime(session) === 'cursor') await reconcileCursorQuestion(session, binding, adapter, store);
-      const questionReply = threadControl ? undefined : (await answerCursorQuestionText(msg, session.id, store)) ?? answerAppServerQuestion(msg, session.id, store);
+      const questionReply = threadControl ? undefined : (await answerCursorAcpQuestion(msg, session.id, store))
+        ?? (await answerCursorQuestionText(msg, session.id, store)) ?? answerAppServerQuestion(msg, session.id, store);
       if (questionReply !== undefined) {
         enqueueBridgeNotice(adapter, msg.address, questionReply);
         ack();
@@ -5422,8 +5538,8 @@ async function handleMessage(
       onInputAccepted: () => {
         const inputBinding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
         const task = inputBinding && getState().activeTasks.get(inputBinding.bridgeSessionId);
-        if (task?.requestMessageId === msg.messageId) rememberCursorInputReplyTarget(msg, task);
-        addInboundGetReaction(adapter, msg, 'tmux_input_actions_completed');
+        if (task?.requestMessageId === msg.messageId && !acpSessionId) rememberCursorInputReplyTarget(msg, task);
+        for (const input of acpInputBatch || [msg]) addInboundGetReaction(adapter, input, 'runtime_input_accepted');
       },
       registerInteractiveTask: (task) => INTERACTIVE_RUNTIME.registerInteractiveTask(task),
       registerBridgeTurn: (turn) => TURN_COORDINATOR.registerInteractiveTurn(turn),
@@ -5443,7 +5559,10 @@ async function handleMessage(
       claimDirectMirrorTurn,
       abortMirrorSuppression,
       settleMirrorSuppression,
-      releaseInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskId),
+      releaseInteractiveTask: (sessionId, taskId) => {
+        if (acpSessionId && INTERACTIVE_RUNTIME.isCurrentInteractiveTask(sessionId, taskId)) clearCursorAcpQuestions(store, sessionId);
+        INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskId);
+      },
       releaseBridgeTurn: (sessionId, taskId) => TURN_COORDINATOR.releaseSessionTurn(sessionId, taskId),
       deliverResponse,
       deliverManualInput: sendAgentMessageFromBinding,
@@ -5594,6 +5713,8 @@ function resetStateForTests(): void {
   ADAPTER_RUNTIME.clearWarningCache();
   state.loopAborts.clear();
   state.activeTasks.clear();
+  pendingCursorAcpInputs.clear();
+  clearCursorAcpQuestions();
   stopAllEveryTasks();
   stopAllConditionMonitors();
   stopAllThenTasks();

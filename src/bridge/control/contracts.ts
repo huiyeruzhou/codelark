@@ -29,6 +29,8 @@ export interface ManualInputRequest {
   text: string;
   source: AgentMessageSource;
   idempotencyKey?: string;
+  /** Real platform message that owns this input's output topic. */
+  replyToMessageId?: string;
 }
 
 export interface AgentSendInstruction {

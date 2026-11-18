@@ -8,7 +8,7 @@ export type ZcodeMode = 'build' | 'edit' | 'plan' | 'yolo';
 export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type KimiProviderChoice = 'tmux';
-export type CursorProviderChoice = 'tmux';
+export type CursorProviderChoice = 'tmux' | 'acp';
 export type CursorTransport = 'cli' | 'desktop';
 export type ZcodeProviderChoice = 'tmux';
 export type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
@@ -203,6 +203,16 @@ export interface BridgeSessionKimiRuntimeState {
 
 export interface BridgeSessionCursorRuntimeState {
   sessionId?: string;
+  /** 该原生 ID 所属协议；缺失表示历史 tmux / Desktop 会话。 */
+  sessionProvider?: CursorProviderChoice;
+  /** 切换协议前的原生绑定，仅保存身份，便于回查原历史。 */
+  previousSession?: {
+    sessionId: string;
+    provider: CursorProviderChoice;
+    cwd?: string;
+    transport?: CursorTransport;
+    tmuxSessionName?: string;
+  };
   cwd?: string;
   model?: string;
   /** `desktop` is accepted only when reading legacy session state. */

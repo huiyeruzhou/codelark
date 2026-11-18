@@ -25,6 +25,7 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 - 修改全局默认值用 `/set`；卡片按 TOML section 写入 `~/.codelark/config.toml`。
 - `/reasoning` 会按当前 runtime 展示有效选项：Codex 到 `ultra`、Claude 到 `max`、Kimi 为 on/off、Cursor 为模型 effort；ZCode 不映射该命令，使用 ZCode 自己的原生命令。
 - `/every` 用于按固定间隔重复发送 prompt；`/then` 用于在当前会话 completed/interrupted 后发送一次后续 prompt。两者都支持列表卡片和卡片操作，`/then` 还支持通过卡片新建、修改和取消。
+- 开启 `/thread-mode` 后，`/every` 和 `/then` 每次触发都先发送一条新的文字标题，本次输入展示、模型卡片和最终回复都进入该标题的话题。重复定时任务每次创建新标题。自动创建新话题目前支持普通群共享会话的 thread 模式；隔离客服话题会在创建标题前明确拒绝，保持原会话。标题发送失败或没有返回消息 ID 时，本次不提交模型。关闭 thread 模式后继续按原方式在群中输出。
 - `/doctor` 可不带参数；也可使用 `/doctor bridge_id:d3c20e05 2026-06-04 17:48` 或 `/doctor d3c20e05 2026-06-04 17:48`，让当前会话读取结构化 JSONL `bridge.log` 时优先用目标 id 和时间点搜索，并优先检查 `level=ERROR/WARN`、`event`、`msg`、`chat`、`lane` 等字段。
 
 ## 设计模块
@@ -60,3 +61,5 @@ IM 内 `/h` 的文案由 [src/bridge/command/help.ts](https://github.com/huiyeru
 `/customer` 查看当前群客服模式，`/customer on|off` 开启或关闭；已有话题内执行也修改所属群。`/whitelist` 查看客服管理员，`/whitelist add|remove @成员` 管理名单。两者均要求客服控制权限，空名单默认 bot 创始人，是否需要 @ 仍遵循群设置。详见 [客服模式](./customer-service.md)。
 
 飞书附件在对应消息或富文本图片位置显示本地路径。合并转发会按子消息的原始 message_id 自动读取有权限访问的原消息，取得可下载的 key；无法读取时保留资源标识、限制原因和 lark-cli 恢复步骤。自动下载预算为每条消息累计 20 MiB、最多 20 个附件；已知大小或响应 Content-Length 超限时不读取正文，大小未知时有界读取并及时停止。未下载的附件保留 message_id、file_key、类型、名称、已知大小与按需下载命令。
+
+通过本机 `/v1/input` 注入的 monitor/Agent 消息也支持显式 `replyToMessageId`。thread 模式下未提供目标时，机器人先发送纯文本标题，再将该条输入的模型卡片和最终答复放到标题下；内部 `manual:` ID 仍只用于执行去重。标题发送失败时不提交模型输入。

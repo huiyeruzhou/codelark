@@ -35,5 +35,6 @@ export interface PermissionResolution {
 }
 
 export interface PermissionGateway {
+  hasPendingPermission?(permissionRequestId: string): boolean;
   resolvePendingPermission(permissionRequestId: string, resolution: PermissionResolution): boolean;
 }

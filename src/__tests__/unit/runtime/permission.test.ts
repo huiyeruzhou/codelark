@@ -9,10 +9,12 @@ describe('PendingPermissions', () => {
     const allowPromise = pp.waitFor('req-1');
     const denyPromise = pp.waitFor('req-2');
     assert.equal(pp.size, 2);
+    assert.equal(pp.has('req-1'), true);
 
     assert.equal(pp.resolve('req-1', { behavior: 'allow' }), true);
     assert.equal(pp.resolve('req-2', { behavior: 'deny', message: 'Not allowed' }), true);
     assert.equal(pp.resolve('unknown', { behavior: 'allow' }), false);
+    assert.equal(pp.has('req-1'), false);
 
     const [allowResult, denyResult] = await Promise.all([allowPromise, denyPromise]);
     assert.equal(allowResult.behavior, 'allow');
@@ -45,6 +47,7 @@ describe('PendingPermissions', () => {
     const result = await pp.waitFor('req-timeout');
     assert.equal(result.behavior, 'deny');
     assert.match(result.message!, /timed out/i);
+    assert.equal(pp.has('req-timeout'), false);
     assert.equal(pp.size, 0);
   });
 });

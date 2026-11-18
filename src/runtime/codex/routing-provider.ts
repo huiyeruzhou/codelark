@@ -7,6 +7,7 @@ import { ClaudeSdkProvider } from '../claude/sdk-provider.js';
 import { ClaudeTmuxProvider } from '../claude/tmux-provider.js';
 import { KimiTmuxProvider } from '../kimi/tmux-provider.js';
 import { CursorTmuxProvider } from '../cursor/provider.js';
+import { CursorAcpProvider } from '../cursor/acp-provider.js';
 import { ZcodeTmuxProvider } from '../zcode/tmux-provider.js';
 import { CodexTmuxProvider } from './tmux-provider.js';
 import { streamCodexAppServer } from './app-server-provider.js';
@@ -22,6 +23,7 @@ export class CodexRoutingProvider implements LLMProvider {
   private readonly claudeTmuxProvider: LLMProvider;
   private readonly kimiTmuxProvider: LLMProvider;
   private readonly cursorTmuxProvider: LLMProvider;
+  private readonly cursorAcpProvider: LLMProvider;
   private readonly zcodeTmuxProvider: LLMProvider;
 
   constructor(pendingPerms?: PendingPermissions, _legacyDefaultProvider?: unknown) {
@@ -31,6 +33,7 @@ export class CodexRoutingProvider implements LLMProvider {
     this.claudeTmuxProvider = new ClaudeTmuxProvider(pendingPerms);
     this.kimiTmuxProvider = new KimiTmuxProvider();
     this.cursorTmuxProvider = new CursorTmuxProvider();
+    this.cursorAcpProvider = new CursorAcpProvider(pendingPerms);
     this.zcodeTmuxProvider = new ZcodeTmuxProvider();
   }
 
@@ -47,10 +50,10 @@ export class CodexRoutingProvider implements LLMProvider {
       console.log('[codex-routing-provider] Route Cursor Agent request:', {
         bridge_session_id: params.sessionId,
         runtime: params.runtime,
-        provider: 'tmux',
+        provider: params.cursorProvider || 'tmux',
         transport: params.cursorTransport || 'cli',
       });
-      return this.cursorTmuxProvider.streamChat(params);
+      return (params.cursorProvider === 'acp' ? this.cursorAcpProvider : this.cursorTmuxProvider).streamChat(params);
     }
     if (params.runtime === 'kimi') {
       console.log('[codex-routing-provider] Route Kimi Code request:', {

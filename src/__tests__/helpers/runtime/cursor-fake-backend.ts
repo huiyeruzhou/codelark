@@ -32,21 +32,32 @@ function fields(bytes: Uint8Array): Map<number, Buffer[]> {
 }
 const get = (bytes: Uint8Array, no: number) => fields(bytes).get(no)?.[0] || Buffer.alloc(0);
 export interface FakeCursorAnswer { questionId: string; selectedOptionIds: string[]; freeformText: string }
+export type FakeCursorStreamEvent = { type: 'text'; text: string }
+  | { type: 'execute_shell'; id: string; command: string; cwd: string }
+  | { type: 'tool_started' | 'tool_completed'; id: string; command: string; output?: string };
 export interface FakeCursorModel {
+  /** Populate the native conversation graph used by ACP history replay. */
+  persistConversationSteps?: boolean;
+  allowQuestionCancellation?: boolean;
   authenticated?(): boolean;
-  call(prompt: string): CursorPendingQuestion | { waitingForSteer: true; beforeCheckpoint?: Promise<void> } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean; toolProgress?: Promise<void> };
+  call(prompt: string): CursorPendingQuestion | { waitingForSteer: true; beforeCheckpoint?: Promise<void> } | { final: string; beforeFinish?: Promise<void>; beforeCheckpoint?: Promise<void>; deferModelContext?: boolean; toolProgress?: Promise<void>; stream?: AsyncIterable<FakeCursorStreamEvent> };
   continue?(answers: FakeCursorAnswer[]): string;
   steer?(text: string): string | { waitingForSteer: true };
 }
 
 export async function startFakeCursorBackend(model: FakeCursorModel) {
   const prompts: string[] = [], answers: FakeCursorAnswer[][] = [], errors: string[] = [];
+  const requests: string[] = [];
+  const streamEvents: Array<{ type: FakeCursorStreamEvent['type']; at: number }> = [];
+  const shellResults: Array<{ command: string; stdout: string; stderr: string; exitCode: number }> = [];
   const steers: Array<{ text: string; injectionId: string; expectedRunId: string }> = [];
   const completedMessages: unknown[] = [];
   const acceptedInputs: string[] = [];
+  const completedSteps = new Map<number, Buffer[]>();
   let nativeSessionId = '';
   const sessions = new Set<http2.ServerHttp2Session>();
   const unary = http.createServer((req, res) => {
+    requests.push(req.url || '');
     req.resume(); let out: Buffer = Buffer.alloc(0);
     if (model.authenticated?.() === false) {
       res.writeHead(401, { 'content-type': 'application/json' });
@@ -54,7 +65,8 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
       return;
     }
     if (/\/(GetUsableModels|GetDefaultModelForCli)$/.test(req.url || '')) out = field(1, join(field(1, 'regression-fake'), field(3, 'regression-fake'), field(4, 'Regression Fake')));
-    if (req.url?.endsWith('/AvailableModels')) out = join(field(1, 'regression-fake'), field(2, join(field(1, 'regression-fake'), field(2, 1), field(5, 1), field(17, 'Regression Fake'))));
+    if (req.url?.endsWith('/AvailableModels')) out = join(field(1, 'regression-fake'), field(2, join(field(1, 'regression-fake'), field(2, 1), field(5, 1), field(17, 'Regression Fake'),
+      field(30, join(field(2, 'Regression Fake'), field(9, 'regression-fake'))))));
     res.writeHead(200, { 'content-type': 'application/proto' }); res.end(out);
   });
   const agent = http2.createServer();
@@ -66,6 +78,7 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
     const send = (bytes: Buffer, flag = 0) => { const header = Buffer.alloc(5); header[0] = flag; header.writeUInt32BE(bytes.length, 1); stream.write(join(header, bytes)); };
     let request: CursorPendingQuestion, args: Buffer, prompt = '', runId = '', nextBlob = 10;
     const blobAcks = new Map<number, () => void>();
+    const execReplies = new Map<number, (result: Buffer) => void>();
     const persist = (messages: unknown[], pending: unknown[], then: () => void) => {
       const blobs: Array<{ ref: Buffer; data: Buffer }> = [];
       const put = (data: Buffer) => {
@@ -74,7 +87,7 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
       const refs = messages.map(message => put(Buffer.from(JSON.stringify(message))));
       const turns = acceptedInputs.map((text, index) => {
         const user = put(join(field(1, text), field(2, `user-${index}`)));
-        return put(field(1, field(1, user)));
+        return put(field(1, join(field(1, user), ...(completedSteps.get(index) || []).map(step => field(2, put(step))))));
       });
       let remaining = blobs.length;
       const checkpoint = () => { send(field(3, join(...refs.map(ref => field(1, ref)), ...turns.map(ref => field(8, ref)), ...pending.map(p => field(4, JSON.stringify(p)))))); then(); };
@@ -98,6 +111,7 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
             const run = message.get(1)![0]!; nativeSessionId = get(run, 5).toString();
             prompt = get(get(get(get(run, 2), 1), 1), 1).toString(); prompts.push(prompt);
             acceptedInputs.push(prompt);
+            const turnIndex = acceptedInputs.length - 1;
             runId = get(run, 25).toString();
             const response = model.call(prompt);
             if ('final' in response) {
@@ -108,13 +122,62 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
               ] : [];
               const progress = { role: 'assistant', content: [{ type: 'text', text: 'NATIVE_TOOL_PROGRESS' }] };
               const finish = () => {
+                if (model.persistConversationSteps) {
+                  const steps = completedSteps.get(turnIndex) || [];
+                  completedSteps.set(turnIndex, [...steps, field(1, field(1, response.final))]);
+                }
                 completedMessages.push(user, ...toolMessages, ...(response.toolProgress ? [progress] : []), { role: 'assistant', content: [{ type: 'text', text: response.final }] });
                 persist(completedMessages, [], () => {
-                  send(field(1, field(1, field(1, response.final))));
+                  if (!response.stream) send(field(1, field(1, field(1, response.final))));
                   send(field(1, field(14, Buffer.alloc(0)))); send(Buffer.from('{}'), 2); stream.end();
                 });
               };
               const start = () => {
+                if (response.stream) {
+                  // Model events reach the real CLI before its final SQLite
+                  // checkpoint. The test controls each yield, so polling the
+                  // persisted transcript cannot accidentally satisfy realtime.
+                  void (async () => {
+                    for await (const event of response.stream!) {
+                      if (stream.closed || stream.destroyed) return;
+                      streamEvents.push({ type: event.type, at: Date.now() });
+                      if (event.type === 'text') send(field(1, field(1, field(1, event.text))));
+                      else if (event.type === 'execute_shell') {
+                        // Only the model/orchestration server is fake: ask the
+                        // real Cursor runtime to execute the isolated command.
+                        await new Promise<void>(resolve => persist([...completedMessages, user], [], resolve));
+                        const [command, ...argv] = event.command.split(/\s+/);
+                        const parsed = field(2, join(field(1, command!), ...argv.map(value => field(2, join(field(1, 'word'), field(2, value)))), field(3, event.command)));
+                        const shellArgs = join(field(1, event.command), field(2, event.cwd), field(3, 5_000), field(4, event.id), field(8, parsed), field(12, 1));
+                        send(field(1, field(2, join(field(1, event.id), field(2, field(1, field(1, shellArgs)))))));
+                        const result = await new Promise<Buffer>(resolve => {
+                          const id = 100; execReplies.set(id, resolve);
+                          send(field(2, join(field(1, id), field(15, event.id), field(2, shellArgs))));
+                        });
+                        const success = get(result, 1);
+                        if (!success.length) throw Error(`real Cursor shell failed: ${result.toString('hex').slice(0, 160)}`);
+                        shellResults.push({ command: event.command, stdout: get(success, 5).toString(), stderr: get(success, 6).toString(), exitCode: get(success, 3)[0] || 0 });
+                        const tool = field(1, join(field(1, shellArgs), field(2, result)));
+                        send(field(1, field(3, join(field(1, event.id), field(2, tool)))));
+                        if (model.persistConversationSteps) completedSteps.set(turnIndex, [...(completedSteps.get(turnIndex) || []), field(2, tool)]);
+                      }
+                      else {
+                        const shellArgs = join(field(1, event.command), field(4, event.id));
+                        const result = event.type === 'tool_completed'
+                          ? field(2, field(1, join(field(1, event.command), field(3, 0), field(5, event.output || '')))) : Buffer.alloc(0);
+                        send(field(1, field(event.type === 'tool_started' ? 2 : 3,
+                          join(field(1, event.id), field(2, field(1, join(field(1, shellArgs), result)))))));
+                        if (model.persistConversationSteps && event.type === 'tool_completed') {
+                          const steps = completedSteps.get(turnIndex) || [];
+                          completedSteps.set(turnIndex, [...steps, field(2, field(1, join(field(1, shellArgs), result)))]);
+                        }
+                      }
+                    }
+                    await response.beforeFinish;
+                    if (!stream.closed && !stream.destroyed) finish();
+                  })().catch(error => errors.push(String(error)));
+                  return;
+                }
                 if (response.beforeFinish) {
                   // Model context can lag a persisted input; beforeCheckpoint
                   // separately delays the entire first checkpoint, as in production.
@@ -147,12 +210,18 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
               send(field(7, join(field(1, 1), field(3, join(field(1, args), field(2, request.toolCallId))))));
             });
           }
+          if (message.has(2)) {
+            const result = message.get(2)![0]!;
+            const id = get(result, 1)[0];
+            if (id !== undefined) { execReplies.get(id)?.(get(result, 2)); execReplies.delete(id); }
+          }
           if (message.has(3)) {
             const kv = fields(message.get(3)![0]!); const id = kv.get(1)?.[0]?.[0];
             if (id !== undefined && kv.has(3)) { blobAcks.get(id)?.(); blobAcks.delete(id); }
           }
           if (message.has(6)) {
             const result = get(get(message.get(6)![0]!, 3), 1), success = get(result, 1);
+            if (!success.length && model.allowQuestionCancellation) continue;
             if (!success.length) throw Error('fake model received rejected/empty AskQuestion result');
             const received = (fields(success).get(1) || []).map(row => ({ questionId: get(row, 1).toString(), selectedOptionIds: (fields(row).get(2) || []).map(v => v.toString()), freeformText: get(row, 3).toString() }));
             answers.push(received); const final = model.continue!(received);
@@ -198,7 +267,7 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
   });
   await Promise.all([new Promise<void>(r => unary.listen(0, '127.0.0.1', r)), new Promise<void>(r => agent.listen(0, '127.0.0.1', r))]);
   return {
-    prompts, answers, steers, errors, get nativeSessionId() { return nativeSessionId; },
+    prompts, answers, steers, errors, requests, streamEvents, shellResults, get nativeSessionId() { return nativeSessionId; },
     args: ['--endpoint', `http://127.0.0.1:${(unary.address() as { port: number }).port}`, '--agent-endpoint', `http://127.0.0.1:${(agent.address() as { port: number }).port}`, '--auth-token', 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJyZWdyZXNzaW9uLXVzZXIiLCJleHAiOjQxMDI0NDQ4MDB9.test', '--http-version', '2'],
     async close() { for (const session of sessions) session.destroy(); unary.closeAllConnections(); await Promise.all([new Promise<void>(r => unary.close(() => r())), new Promise<void>(r => agent.close(() => r()))]); },
   };

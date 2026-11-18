@@ -1,5 +1,5 @@
 import { requestDirectoryCreation, consumeDirectoryCreation } from './directory-confirmation.js';
-import { mappedRuntimeSessionId, sessionHasActiveRuntimeTurn } from './runtime-session.js';
+import { buildRuntimeSwitchWhileRunningResponse, mappedRuntimeSessionId, sessionHasActiveRuntimeTurn } from './runtime-session.js';
 import fs from 'node:fs';
 import {
   resolveCommandAlias,
@@ -80,8 +80,8 @@ import { createConfigService } from '../../configuration/service.js';
 import { mergePatch } from '../../configuration/merge.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields.js';
-import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath } from '../session/support.js';
-import { getSessionActiveRuntime, getSessionWorkingDirectory } from '../../domain/session-runtime.js';
+import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath, scopedConfigForRuntime } from '../session/support.js';
+import { getSessionActiveRuntime, getSessionWorkingDirectory, setSessionCursorProviderUpdate } from '../../domain/session-runtime.js';
 import { listCursorAvailableModels } from '../../runtime/cursor/models.js';
 import {
   attachCursorDesktopModelNotice,
@@ -471,6 +471,23 @@ async function handleCurrentConfigFormCommand(options: {
     mergePatch(currentConfig, written.patch);
     updatedSettings.push(definition);
   }
+  const cursorProviderDefinition = definitions.find(definition => definition.key === 'cursorProvider');
+  const cursorProviderValue = cursorProviderDefinition ? currentSettingFormValue(formValue, cursorProviderDefinition) : undefined;
+  const nextCursorProvider = cursorProviderValue === 'tmux' || cursorProviderValue === 'acp' ? cursorProviderValue
+    : cursorProviderValue === '' ? scopedConfigForRuntime(binding).config.runtime.cursor.provider : undefined;
+  const cursorSession = options.store.getSession(targetSessionId) || session;
+  if (nextCursorProvider && getSessionActiveRuntime(cursorSession) === 'cursor'
+    && (nextCursorProvider !== resolveEffectiveRuntimeProvider(cursorSession, binding).provider
+      || nextCursorProvider !== (cursorSession.runtime?.cursor?.sessionProvider || 'tmux'))
+    && sessionHasActiveRuntimeTurn(options.deps, cursorSession)) {
+    let richCard: OutboundRichCard | undefined;
+    const response = buildRuntimeSwitchWhileRunningResponse({
+      sessionId: cursorSession.id, commandLabel: '/current-config cursor', runtime: 'cursor',
+      provider: resolveEffectiveRuntimeProvider(cursorSession, binding).provider, markdown: options.markdown,
+      richCard: card => { richCard = card; },
+    });
+    return { response, richCard };
+  }
   if (missingDirectory) return requestDirectoryCreation({ address: options.msg.address, binding, session,
     directory: missingDirectory, command: `/current-config ${submittedSection}`, formValue: { ...formValue, clk_cwd: missingDirectory } });
   try {
@@ -487,6 +504,12 @@ async function handleCurrentConfigFormCommand(options: {
     return { response: `配置未保存：${formatCurrentConfigWriteError(error)}` };
   }
   currentConfig = service.snapshot(scope).config;
+  if (nextCursorProvider) {
+    const savedCursorSession = options.store.getSession(scope.sessionId);
+    if (savedCursorSession && getSessionActiveRuntime(savedCursorSession) === 'cursor') {
+      options.store.updateSession(savedCursorSession.id, setSessionCursorProviderUpdate(savedCursorSession, nextCursorProvider));
+    }
+  }
   if (name && name !== (session.name || '').trim()) {
     options.threadDisplay.renameBinding(binding, name);
     responses.push(`name: ${name}`);

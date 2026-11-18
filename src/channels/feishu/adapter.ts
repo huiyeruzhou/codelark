@@ -2483,7 +2483,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private rememberStreamReplyTarget(chatId: string, streamKey: string, messageId?: string): void {
     // 无平台来源也是明确的路由，后续刷新不能借用群里最后一条输入。
     if (!this.streamReplyTargets.has(streamKey)) {
-      if (messageId?.startsWith('manual:')) messageId = undefined;
+      if (messageId && /^(?:manual|every|then):/.test(messageId)) messageId = undefined;
       this.streamReplyTargets.set(streamKey, { chatId, messageId, inThread: Boolean(messageId) && this.isThreadReplyChat(chatId) });
     }
   }
@@ -6285,7 +6285,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   // ── Send ────────────────────────────────────────────────────
 
   async send(message: OutboundMessage): Promise<SendResult> {
-    if (!message.replyToMessageId && this.isThreadReplyChat(message.address.chatId)) {
+    if (!message.startNewThread && !message.replyToMessageId && this.isThreadReplyChat(message.address.chatId)) {
       const cards = [...this.activeCards.values()].filter(card => card.chatId === message.address.chatId && card.replyInThread);
       if (cards.length === 1) message = { ...message, replyToMessageId: cards[0]!.messageId };
     }
@@ -7203,7 +7203,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         previous.rootId = anchor.root_id || anchor.message_id;
         previous.threadId = anchor.thread_id;
       }
-      if ((previous.rootId && (msg.threadRootMessageId === previous.rootId || msg.replyToMessageId === previous.rootId))
+      if ((previous.rootId && (msg.messageId === previous.rootId || msg.threadRootMessageId === previous.rootId || msg.replyToMessageId === previous.rootId))
         || (msg.threadId && msg.threadId === previous.threadId)) return false;
       const target = { chatId: msg.address.chatId, messageId: msg.messageId,
         rootId: msg.threadRootMessageId || msg.messageId, threadId: msg.threadId, inThread: true };

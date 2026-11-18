@@ -73,7 +73,7 @@ export interface StreamChatParams {
   kimiSessionId?: string;
   kimiThinking?: boolean;
   cursorSessionId?: string;
-  cursorProvider?: 'tmux';
+  cursorProvider?: 'tmux' | 'acp';
   /** Internal connection selected from the bound conversation, not a provider preference. */
   cursorTransport?: CursorTransport;
   cursorForce?: boolean;

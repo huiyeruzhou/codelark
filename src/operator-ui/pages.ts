@@ -415,8 +415,8 @@ export const configPageHtml = `        <section class="page" data-page="config">
                 <p class="panel-subtitle">Cursor 默认值</p>
                 <div class="field-row triple">
                   <label>
-                    <span class="field-title">默认 Cursor Provider <span class="help-tip" tabindex="0" data-tip="Cursor Agent 当前直接运行官方 TUI，只支持 tmux。">?</span></span>
-                    <select id="cursorProvider"><option value="tmux">tmux</option></select>
+                    <span class="field-title">默认 Cursor Provider <span class="help-tip" tabindex="0" data-tip="tmux 运行官方 TUI；ACP 直接接收实时文字和工具事件，运行中新消息会中断当前生成。">?</span></span>
+                    <select id="cursorProvider"><option value="tmux">tmux</option><option value="acp">acp</option></select>
                   </label>
                   <label>
                     <span class="field-title">Cursor 默认模型 <span class="help-tip" tabindex="0" data-tip="留空则跟随 Cursor Agent 默认模型。">?</span></span>

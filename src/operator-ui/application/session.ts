@@ -27,7 +27,10 @@ import {
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionSystemPromptUpdate,
+  setSessionCursorProviderUpdate,
 } from '../../domain/session-runtime.js';
+import { resolveCursorRuntimeConfig } from '../../bridge/session/support.js';
+import { sessionLooksRunning } from '../../bridge/command/session-args.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import {
   createUiSessionRegistry,
@@ -250,7 +253,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         (model) => ({ runtime: { cursor: { model } } }),
       );
     }
-    if (payload.cursorProvider === 'tmux' || payload.cursorProvider === '') {
+    if (payload.cursorProvider === 'tmux' || payload.cursorProvider === 'acp' || payload.cursorProvider === '') {
       setOrUnsetSessionConfig(
         bridgeSessionId,
         'runtime.cursor.provider',
@@ -671,10 +674,23 @@ export class UiSessionApplication {
   updateConfig(bridgeSessionId: string, payload: Record<string, unknown>) {
     assertSupportedCodexProviderPayload(payload);
     const registry = this.createSessionRegistry();
+    const before = registry.getVisibleBridgeSession(bridgeSessionId);
+    const cursorProvider = payload.cursorProvider === 'tmux' || payload.cursorProvider === 'acp'
+      ? payload.cursorProvider
+      : payload.cursorProvider === '' ? createConfigService({ migrate: false }).get<'tmux' | 'acp'>('runtime.cursor.provider') : undefined;
+    if (getSessionActiveRuntime(before) === 'cursor' && cursorProvider
+      && (cursorProvider !== resolveCursorRuntimeConfig(before).provider || cursorProvider !== (before.runtime?.cursor?.sessionProvider || 'tmux'))
+      && sessionLooksRunning(before)) {
+      throw new Error('当前 Cursor 会话仍在运行或排队，请先停止后再切换 Provider。');
+    }
     const updates = sanitizeSessionConfig(payload);
-    const updated = registry.updateBridgeSessionConfig(bridgeSessionId, updates);
+    registry.updateBridgeSessionConfig(bridgeSessionId, updates);
     applySessionConfigToml(bridgeSessionId, payload);
-    return sessionConfigPayload(updated);
+    const saved = this.store.getSession(bridgeSessionId)!;
+    if (getSessionActiveRuntime(saved) === 'cursor' && cursorProvider) {
+      this.store.updateSession(bridgeSessionId, setSessionCursorProviderUpdate(saved, cursorProvider));
+    }
+    return sessionConfigPayload(this.store.getSession(bridgeSessionId)!);
   }
 
   deleteSession(identity: UiSessionIdentity): { deleted: UiSessionSummary; deletedBridgeSessionIds: string[] } {

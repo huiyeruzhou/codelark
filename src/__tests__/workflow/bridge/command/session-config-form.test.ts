@@ -9,13 +9,13 @@ import { parseCommandCallbackData } from '../../../../bridge/command/callbacks.j
 import { _testOnlyWaitForDeliveryQueuesForTests } from '../../../../channels/delivery/deliver.js';
 
 beforeEach(() => resetBridgeTestState());
-function fixture() {
+function fixture(active = true) {
   const store = initBridgeTestContext();
   const service = createConfigService({ migrate: false, env: {} });
   const session = store.createSession('form', 'gpt-5.4', '', os.tmpdir());
   const scope = { kind: 'session' as const, sessionId: session.id };
   service.set(scope, { runtime: { agent: 'codex', claude: { model: 'before', provider: 'sdk' } } });
-  store.updateSession(session.id, { runtime_status: 'running', health_status: 'running_active' });
+  store.updateSession(session.id, { runtime_status: active ? 'running' : 'idle', health_status: active ? 'running_active' : 'idle' });
   const address = { channelType: 'feishu', chatId: `form-${session.id}` };
   store.upsertChannelChat({ ...address, bridgeSessionId: session.id });
   const adapter = new RecordingAdapter();
@@ -24,7 +24,7 @@ function fixture() {
     const msg = inboundMessage(address, text, `form-${adapter.sent.length}`);
     if (form) msg.raw = { action: { form_value: form } };
     await handleBridgeCommand(adapter, msg, text, {
-      getActiveTask: () => ({ abortController }),
+      getActiveTask: () => active ? { abortController } : undefined,
       diagnoseSessionHealth: async () => null, diagnoseAllActiveSessions: async () => [],
       restartCursorTmuxSession: async () => assert.fail('Desktop commands must never start a CLI TUI'),
     });
@@ -105,4 +105,28 @@ it('Desktop /p tmux keeps the active conversation and public provider without a 
     assert.equal(result.richCard, undefined);
     assert.deepEqual(f.store.getSession(f.session.id)?.runtime, before);
   }
+});
+
+
+it('Cursor provider form changes keep the active task and all submitted settings until stop', async () => {
+  const f = fixture();
+  f.store.updateSession(f.session.id, { runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'tui-active' } } });
+  const before = f.service.snapshot(f.scope).config;
+  const result = await f.command('/current-config cursor', { cursorProvider: 'acp', cursorForce: 'true' });
+  assert.match(result.text, /请先停止当前对话/);
+  const stop = result.richCard?.actions?.flat().find(action => action.text === '停止');
+  assert.ok(stop);
+  assert.deepEqual(parseCommandCallbackData(stop.callbackData), { commandText: '/stop', scopeSessionId: f.session.id });
+  assert.deepEqual(f.service.snapshot(f.scope).config, before);
+  assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionId, 'tui-active');
+});
+
+it('an idle Cursor provider form switches protocols while preserving the previous native identity', async () => {
+  const f = fixture(false);
+  f.store.updateSession(f.session.id, { runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'tui-idle' } } });
+  const result = await f.command('/current-config cursor', { cursorProvider: 'acp' });
+  assert.match(result.text, /已保存/);
+  assert.equal(f.service.get('runtime.cursor.provider', f.scope), 'acp');
+  assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionId, undefined);
+  assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.previousSession?.sessionId, 'tui-idle');
 });

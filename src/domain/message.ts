@@ -24,6 +24,8 @@ export interface InboundMessage {
   messageId: string;
   /** Platform message explicitly replied to by the sender. */
   replyToMessageId?: string;
+  /** Explicit destination for generated input; messageId remains its execution identity. */
+  outputReplyToMessageId?: string;
   /** Incoming platform topic metadata; never changes the shared conversation binding. */
   threadRootMessageId?: string;
   threadId?: string;
@@ -50,6 +52,8 @@ export interface OutboundMessage {
   richCard?: OutboundRichCard;
   richCardUpdateMessageId?: string;
   replyToMessageId?: string;
+  /** Create an intentional root message without inheriting an active card target. */
+  startNewThread?: boolean;
   platformMessage?: OutboundPlatformMessage;
 }
 

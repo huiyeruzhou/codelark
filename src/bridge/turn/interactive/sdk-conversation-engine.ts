@@ -54,6 +54,7 @@ import {
   getSessionCodexThreadId,
   getSessionKimiSessionId,
   getSessionCursorSessionId,
+  getSessionCursorSessionIdForProvider,
   getSessionZcodeSessionId,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
@@ -226,6 +227,10 @@ export async function processMessage(
     const cursorRuntimeConfig = activeRuntime === 'cursor' ? resolveCursorRuntimeConfig(session, binding) : null;
     const zcodeRuntimeConfig = activeRuntime === 'zcode' ? resolveZcodeRuntimeConfig(session, binding) : null;
 
+    if (cursorRuntimeConfig && getSessionCursorSessionId(session)
+      && !getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider)) {
+      throw new Error(`当前 Cursor 历史属于另一种接入方式，请先用 /p ${cursorRuntimeConfig.provider} 切换；尚未提交本条输入。`);
+    }
     const { savedContent, llmFiles, persistedFileMeta } = prepareMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
 
@@ -245,7 +250,7 @@ export async function processMessage(
     const codexThreadId = getSessionCodexThreadId(session);
     const claudeSessionId = getSessionClaudeSessionId(session);
     const kimiSessionId = getSessionKimiSessionId(session);
-    const cursorSessionId = getSessionCursorSessionId(session);
+    const cursorSessionId = cursorRuntimeConfig ? getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider) : undefined;
     const zcodeSessionId = getSessionZcodeSessionId(session);
 
     // Effective model
@@ -335,6 +340,7 @@ export async function processMessage(
       onStatusNote,
       { ...options, isCurrentTask },
       activeRuntime,
+      cursorRuntimeConfig?.provider,
     );
   } finally {
     clearInterval(renewalInterval);
@@ -372,6 +378,7 @@ async function consumeStream(
     onNativeTurn?: (threadId: string, turnId: string, completed: boolean) => Promise<void>;
   },
   activeRuntime: RuntimeAgent = 'codex',
+  cursorProvider: 'tmux' | 'acp' = 'tmux',
 ): Promise<ConversationResult> {
   const { store } = runtime;
   const contentBlocks: MessageContentBlock[] = [];
@@ -577,6 +584,7 @@ async function consumeStream(
                 store.updateSession(sessionId, setSessionCursorIdentityUpdate(
                   statusData.session_id,
                   typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
+                  cursorProvider,
                 ));
                 await options?.onRuntimeIdentity?.({
                   runtime: 'cursor',
@@ -743,6 +751,7 @@ async function consumeStream(
                 store.updateSession(sessionId, setSessionCursorIdentityUpdate(
                   resultData.session_id,
                   typeof resultData.cwd === 'string' ? resultData.cwd : undefined,
+                  cursorProvider,
                 ));
                 await options?.onRuntimeIdentity?.({
                   runtime: 'cursor',

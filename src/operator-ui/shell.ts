@@ -132,7 +132,7 @@ ${logsPageHtml}      </main>
           </div>
           <div class="field-row triple" id="sessionConfigCursorBlock" hidden>
             <label>Cursor 模型<input id="sessionConfigCursorModel" placeholder="留空跟随全局 Cursor 默认模型" /></label>
-            <label>Cursor Provider<select id="sessionConfigCursorProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
+            <label>Cursor Provider<select id="sessionConfigCursorProvider"><option value="">跟随全局</option><option value="tmux">tmux</option><option value="acp">acp</option></select></label>
             <label>Cursor 思考级别<select id="sessionConfigCursorReasoning"><option value="">跟随全局</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
             <label>Cursor force<select id="sessionConfigCursorForce"><option value="">跟随全局</option><option value="on">启用</option><option value="off">关闭</option></select></label>
           </div>

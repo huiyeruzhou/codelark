@@ -1,4 +1,5 @@
 import { stopCursorDesktopThread } from '../../runtime/cursor/desktop-bridge-client.js';
+import { interruptCursorAcpSession } from '../../runtime/cursor/acp-provider.js';
 import { resolveCursorTransport } from './cursor-transport.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
 import { getSessionCursorSessionId, getSessionClaudeSessionId, getSessionCodexThreadId, getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
@@ -22,7 +23,7 @@ export interface StopRunningSessionDeps {
 export interface StopRunningSessionResult {
   /** A stop action was requested, not proof that the runtime reached a terminal state. */
   stopped: boolean;
-  method: 'active_task' | 'tmux_interrupt' | 'app_server_interrupt' | 'desktop_interrupt' | 'idle';
+  method: 'active_task' | 'tmux_interrupt' | 'app_server_interrupt' | 'acp_interrupt' | 'desktop_interrupt' | 'idle';
   detail: string;
   tmuxSessionName?: string;
   command?: string;
@@ -102,6 +103,13 @@ export async function stopRunningSession(options: {
   }
   options.deps.cancelQueuedSessionMessages?.(options.binding.bridgeSessionId);
   const session = options.store.getSession(options.binding.bridgeSessionId);
+  if (session && resolveEffectiveRuntimeProvider(session, options.binding).identity === 'cursor:acp') {
+    const task = options.deps.getActiveTask(session.id);
+    task?.abortController.abort();
+    const interrupted = await interruptCursorAcpSession(session.id);
+    return { stopped: interrupted || Boolean(task), method: interrupted || task ? 'acp_interrupt' : 'idle',
+      detail: interrupted ? 'Cursor ACP 已确认中断当前轮次。' : task ? '已取消本次输入，等待连接收尾。' : 'Cursor ACP 当前没有正在运行的轮次。' };
+  }
   if (session && resolveCursorTransport(session) === 'desktop') {
     const threadId = getSessionCursorSessionId(session);
     if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，未发送停止请求。');

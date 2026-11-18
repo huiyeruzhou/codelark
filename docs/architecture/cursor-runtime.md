@@ -2,11 +2,27 @@
 
 ## 目标
 
-Cursor Agent CLI 会话由 CodeLark 在 provider-owned tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入原生会话库与 transcript JSONL，CodeLark 用原生记录恢复思考摘要和工具结果，并与 transcript 的消息、正式终态对齐，回答正文、思考摘要和工具结果不依赖终端屏幕的 ANSI/局部重绘。原生问卷的题号和输入确认使用当前终端界面。
+Cursor 支持两种独立 provider：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择，运行中切换仍需先停止。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。
+
+Cursor 的 `tmux` provider 在 CodeLark 持有的 tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入原生会话库与 transcript JSONL，CodeLark 用原生记录恢复思考摘要和工具结果，并与 transcript 的消息、正式终态对齐，回答正文、思考摘要和工具结果不依赖终端屏幕的 ANSI/局部重绘。原生问卷的题号和输入确认使用当前终端界面。
 
 Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `desktop`：CodeLark 只通过 Cursor 自带 Desktop Bridge 向同一条可见对话提交输入，从同一对话的原生 SQLite bubbles 读取输出，并通过 Desktop Bridge 实时状态确认终态；旧版本原生库不可读时才使用 transcript。一个 Bridge session 固定绑定一个 Cursor chat UUID、cwd 和来源 transport；不处理 TUI 内 `/new`、`/fork`、`/resume` 导致的 chat ID 变化。
 
-## 进程恢复与手动同步
+## ACP 实时输出
+
+`cursor:acp` 启动官方 `agent acp`，通过 stdio JSON-RPC 运行 `initialize → authenticate → session/new|load → session/prompt`。正文、工具开始/结果直接更新当前卡片，不等待 SQLite/JSONL checkpoint，也不依赖 tmux。恢复时 `session/load` 的历史事件仅用于原生上下文，不能当作本轮新输出再次发到群里。模型内部 thought chunk 只对应“正在思考”状态，不把原始 thought 当回答或摘要。
+
+本版原生 ACP 不支持 TUI 的原位 steer。运行中收到普通追加时，CodeLark 先请求 `session/cancel`，等待原生 prompt 确认结束，再提交新输入。确认期间收到的多条追加按到达顺序合并到下一次 prompt，保留每条消息的 Get 确认；后续卡片使用最后一条输入的回复位置，因此话题内继续留在话题，话题外输入按现有规则开新话题。每个 bridge session 只有一个执行者，取消超时或进程断开要明确报错，不能重放旧 prompt 猜测恢复。
+
+`session/request_permission` 使用现有审批卡。`cursor/ask_question` 逐题显示选项，支持单选、多选和自由文本。当前 Cursor ACP adapter 会丢弃 `freeformText`，因此只要回答包含自由文本，CodeLark 就取消问卷所在轮、等待确认，再把完整问答作为新用户消息继续同一会话；不会把文字伪装成选项 ID。问题过期、连接结束或会话改绑后，旧问题卡不再接受回答。
+
+ACP 使用 `<Cursor配置根>/acp-sessions/<id>/store.db`，与 TUI 的 `chats/...` 分离。运行状态保存 `sessionProvider`，避免混用两个来源的 UUID。`/p` 切换保留 `previousSession` 供回退，但不会自动把旧 TUI 正文当作新消息发送。需要保留整段原生上下文的迁移必须先停止旧执行，再调用 `cloneCursorCliSessionForAcp` 将 SQLite 一致快照复制到新的 ACP UUID，验证 `session/load` 后再改绑定；源库不修改，两个进程不共用一个库。
+
+Bridge 持有 ACP 子进程。Bridge 停止/热更新会中断并关闭这些子进程，之后从已保存的 ACP ID 恢复上下文；不宣称热更新期间原生任务仍继续。没有完成确认的输入不会自动重发。执行模式 `cursorForce` 受原生持久化权限限制，不能把重连时省略 `--force` 描述为已经撤销旧库里的 Run Everything。
+
+回归使用真实 Cursor CLI 与隔离模型后端：在最终 checkpoint 前验证两段正文及真实执行 `printf` 的工具结果已抵达；覆盖中断、多次输入、恢复去重、问卷选项与自由文本续接、TUI 快照导入。Bridge 工作流另验中断确认前不启动新轮、连续追加不丢失、用户输入出现在卡片、回复目标和 Get 归属。
+
+## tmux 进程恢复与手动同步
 
 普通群消息提交前检查 tmux 的 `pane_dead`。窗口存在但 Cursor 已退出时，使用原 `--resume <chatId>` 自动拉起；存活进程继续复用，原生接收确认前不报告输入成功。输入进入 follow-ups 后，即使旧编辑框文字仍可见，也不能重试提交；仅在原生界面明确提供 `enter steer` 时推进一次。粘贴后先等本条内容出现在原生编辑框，再发送一次 Enter；确认阶段不依据残留草稿或缺失的运行提示补交普通 Enter。旧输入的延迟落盘不能否定本条输入；只有本条内容新增的原生记录才能确认接收。停止请求立即取消输入确认循环。收到本条输入的原生确认前，旧轮次的外部终态不能结束本条请求。
 

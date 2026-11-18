@@ -146,6 +146,7 @@ async function main(): Promise<void> {
   console.log(`${LOG_PREFIX} Codex provider: tmux (app-server preferred)`);
 
   const gateway = {
+    hasPendingPermission: (id: string) => pendingPerms.has(id),
     resolvePendingPermission: (id: string, resolution: { behavior: 'allow' | 'deny'; message?: string }) =>
       pendingPerms.resolve(id, resolution),
   };

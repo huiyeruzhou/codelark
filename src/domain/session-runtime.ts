@@ -210,7 +210,8 @@ export function getSessionCursorModel(session: SessionRuntimeLike | null | undef
 
 export function getSessionCursorProvider(session: SessionRuntimeLike | null | undefined): CursorProviderChoice | undefined {
   if (!isCursorRuntime(session)) return undefined;
-  return 'tmux';
+  const provider = getSessionTomlOverride<string>(session, 'runtime.cursor.provider');
+  return provider === 'acp' ? 'acp' : provider === 'tmux' ? 'tmux' : undefined;
 }
 
 export function getSessionZcodeSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
@@ -256,7 +257,7 @@ export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | 
       ? session?.runtime?.kimi?.provider
       : isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
   if (isZcodeRuntime(session)) return provider === 'tmux' ? 'zcode:tmux' : undefined;
-  if (isCursorRuntime(session)) return 'cursor:tmux';
+  if (isCursorRuntime(session)) return provider === 'acp' ? 'cursor:acp' : 'cursor:tmux';
   if (isKimiRuntime(session)) return provider === 'tmux' ? 'kimi:tmux' : undefined;
   if (!isRuntimeProviderChoice(provider)) return undefined;
   if (!provider) return undefined;
@@ -268,7 +269,7 @@ export function buildRuntimeProviderIdentity(
   provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice,
 ): RuntimeProviderIdentity {
   if (runtime === 'zcode') return 'zcode:tmux';
-  if (runtime === 'cursor') return 'cursor:tmux';
+  if (runtime === 'cursor') return provider === 'acp' ? 'cursor:acp' : 'cursor:tmux';
   if (runtime === 'kimi') return 'kimi:tmux';
   return `${runtime}:${provider as RuntimeProviderChoice}`;
 }
@@ -411,11 +412,46 @@ export function setSessionKimiIdentityUpdate(
 export function setSessionCursorIdentityUpdate(
   sessionId: string | undefined,
   cwd: string | undefined,
+  provider: CursorProviderChoice = 'tmux',
 ): BridgeSessionRuntimeUpdate {
   return { runtime: { activeRuntime: 'cursor', cursor: {
-    sessionId, cwd,
-    ...(!sessionId ? { provider: 'tmux', transport: undefined } as const : {}),
+    sessionId, cwd, sessionProvider: provider,
+    ...(provider === 'acp' ? { provider, transport: 'cli' } as const : {}),
+    ...(!sessionId ? { provider, transport: undefined } : {}),
   } } };
+}
+
+/** 原生 ID 只可交给创建它的协议，避免将 TUI 历史当作 ACP 会话恢复。 */
+export function getSessionCursorSessionIdForProvider(
+  session: SessionRuntimeLike | null | undefined,
+  provider: CursorProviderChoice,
+): string | undefined {
+  const nativeProvider = session?.runtime?.cursor?.sessionProvider || 'tmux';
+  return nativeProvider === provider ? getSessionCursorSessionId(session) : undefined;
+}
+
+export function setSessionCursorProviderUpdate(
+  session: BridgeSession,
+  provider: CursorProviderChoice,
+): BridgeSessionRuntimeUpdate {
+  const current = session.runtime?.cursor;
+  const nativeProvider = current?.sessionProvider || 'tmux';
+  if (nativeProvider === provider) return { runtime: { cursor: { provider } } };
+  return {
+    runtime: {
+      cursor: {
+        provider, sessionProvider: provider, sessionId: undefined, transport: undefined,
+        ...(current?.sessionId ? { previousSession: {
+          sessionId: current.sessionId, provider: nativeProvider, cwd: current.cwd,
+          transport: current.transport, tmuxSessionName: session.runtime?.general?.tmuxSessionName,
+        } } : {}),
+      },
+      general: { tmuxSessionName: undefined },
+    },
+    mirror_read_position: undefined,
+    mirror_history_sync: undefined,
+    mirror_status: 'inactive',
+  };
 }
 
 export function setSessionZcodeIdentityUpdate(

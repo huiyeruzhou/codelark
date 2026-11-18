@@ -6,6 +6,7 @@ import { getSessionActiveRuntime, getSessionCursorSessionId, getSessionWorkingDi
 import { findCursorSessionFileById } from '../../runtime/cursor/session-index.js';
 import { readCursorPendingQuestion } from '../../runtime/cursor/cli-store.js';
 import { answerCursorQuestion, inspectCursorQuestion, type CursorQuestionTarget, type CursorQuestionView, type CursorQuestionAnswer } from '../../runtime/cursor/questions.js';
+import { resolveEffectiveRuntimeProvider } from '../session/support.js';
 
 const PREFIX = 'cursor-question:';
 interface Pending { id: string; sessionId: string; bindingId: string; address: ChannelAddress; target: CursorQuestionTarget; view: CursorQuestionView; messageId?: string; busy: boolean }
@@ -34,7 +35,7 @@ export function buildCursorQuestionCard(view: CursorQuestionView, id: string): O
 export async function reconcileCursorQuestion(
   session: BridgeSession, binding: ChannelChat, adapter: BaseChannelAdapter, store: BridgeStore,
 ): Promise<void> {
-  if (getSessionActiveRuntime(session) !== 'cursor' || scanning.has(binding.id)) return;
+  if (getSessionActiveRuntime(session) !== 'cursor' || resolveEffectiveRuntimeProvider(session, binding).provider === 'acp' || scanning.has(binding.id)) return;
   scanning.add(binding.id);
   try {
     const nativeId = getSessionCursorSessionId(session);
