@@ -19,7 +19,24 @@ export interface CursorAcpProviderOptions {
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
   cancelTimeoutMs?: number;
+  retryDelayMs?: number;
 }
+
+// Cursor CLI 2026.11 sends caught exceptions as one diagnostic text chunk,
+// followed by end_turn. Interpret only that native envelope, never arbitrary
+// answer text or tool output containing an error example.
+function nativeErrorChunk(text: string): string | undefined {
+  return /^\n\nError: ((?:(?:RetriableError|ConnectError|Error):|\[unauthenticated\])[^\r\n]+)$/.exec(text)?.[1];
+}
+
+function retryableTransportError(message: string): boolean {
+  const detail = message.replace(/^Cursor ACP \(-?\d+\): /, '');
+  return /^RetriableError: \[(?:unavailable|deadline_exceeded)\] /.test(detail)
+    || detail === 'RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
+}
+
+const RETRY_LIMIT = 2;
+const RETRY_PROMPT = '上一次请求因临时连接错误中断。请继续本会话中尚未完成的任务，先核对已保存的进度和工具结果，不要重复已完成的操作。';
 interface Session {
   bridgeId: string;
   nativeId?: string;
@@ -285,6 +302,8 @@ export class CursorAcpProvider implements LLMProvider {
         let unsubscribe = () => {};
         let continuationText: string | undefined;
         let accepted = false;
+        let nativeFailure: string | undefined;
+        let retryWake: (() => void) | undefined;
         const waitingPermissions = new Set<string>();
         const cancelPermissions = () => {
           for (const id of waitingPermissions) pendingPerms?.resolve(id, { behavior: 'deny', message: 'Cursor 请求已中断。' });
@@ -307,7 +326,7 @@ export class CursorAcpProvider implements LLMProvider {
           })();
           return cancellation;
         };
-        cancel = async () => { interrupted = true; await cancelPrompt(); };
+        cancel = async () => { interrupted = true; retryWake?.(); await cancelPrompt(); };
         const turn: Turn = { cancel, done };
         turns.set(params.sessionId, turn);
         const onAbort = () => { void cancel().catch(() => {}); };
@@ -421,7 +440,11 @@ export class CursorAcpProvider implements LLMProvider {
             markAccepted();
             if (update.sessionUpdate === 'agent_message_chunk') {
               const content = record(update.content);
-              if (content.type === 'text' && typeof content.text === 'string') emit('text', content.text);
+              if (content.type === 'text' && typeof content.text === 'string') {
+                const failure = nativeErrorChunk(content.text);
+                if (failure) nativeFailure = failure;
+                else emit('text', content.text);
+              }
             } else if (update.sessionUpdate === 'agent_thought_chunk') {
               emit('status', { reasoning: 'Cursor 正在思考。' });
             } else if (typeof update.toolCallId === 'string') {
@@ -454,18 +477,42 @@ export class CursorAcpProvider implements LLMProvider {
           let prompt = prepareTextAttachmentPrompt(params);
           if (!params.cursorSessionId && params.systemPrompt) prompt = `${params.systemPrompt}\n\n${prompt}`;
           let stopReason = 'cancelled';
+          let retries = 0;
           while (!interrupted) {
             acceptingUpdates = true;
             cancellation = undefined;
+            nativeFailure = undefined;
             promptPromise = client.request<Record<string, any>>('session/prompt', {
               sessionId: session.nativeId, prompt: [{ type: 'text', text: prompt }],
             }, 0);
             if (params.abortController?.signal.aborted) onAbort();
-            const result = await promptPromise;
+            let result: Record<string, any> | undefined;
+            let failure: string | undefined;
+            try { result = await promptPromise; }
+            catch (error) { failure = errorMessage(error); }
             acceptingUpdates = false;
             if (cancellation) await cancellation;
             promptPromise = undefined;
-            stopReason = typeof result.stopReason === 'string' ? result.stopReason : 'unknown';
+            if (interrupted) break;
+            failure ||= nativeFailure;
+            if (failure) {
+              // The old prompt has settled. Never retry an unconfirmed tool,
+              // disconnected executor, or the user's cancellation.
+              if (!retryableTransportError(failure) || retries >= RETRY_LIMIT || !client.connected
+                || [...tools.values()].some(tool => !tool.complete) || waitingPermissions.size) throw new Error(failure);
+              retries++;
+              const delayMs = Math.max(0, options.retryDelayMs ?? 1000) * retries;
+              emit('status', { reasoning: `Cursor 连接临时中断，${Math.ceil(delayMs / 1000)} 秒后自动续接（${retries}/${RETRY_LIMIT}）。` });
+              await new Promise<void>(resolve => {
+                const timer = setTimeout(resolve, delayMs);
+                retryWake = () => { clearTimeout(timer); resolve(); };
+              });
+              retryWake = undefined;
+              if (interrupted) break;
+              prompt = RETRY_PROMPT;
+              continue;
+            }
+            stopReason = typeof result?.stopReason === 'string' ? result.stopReason : 'unknown';
             if (continuationText && !interrupted) {
               prompt = continuationText; continuationText = undefined; tools.clear();
               emit('status', { reasoning: '自由文本回答已保留，正在作为新消息继续原任务。' });
@@ -473,6 +520,7 @@ export class CursorAcpProvider implements LLMProvider {
             }
             break;
           }
+          if (interrupted) stopReason = 'cancelled';
           if (stopReason !== 'cancelled') markAccepted();
           if (!['end_turn', 'cancelled'].includes(stopReason)) emit('error', `Cursor ACP 本轮未正常完成：${stopReason}`);
           emit('result', { session_id: session.nativeId, outcome: stopReason === 'cancelled' ? 'aborted' : stopReason === 'end_turn' ? 'completed' : 'failed', stop_reason: stopReason });

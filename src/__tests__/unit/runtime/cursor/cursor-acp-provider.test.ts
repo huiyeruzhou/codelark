@@ -85,7 +85,7 @@ async function until(check: () => boolean): Promise<void> {
 }
 function setup(perms?: PendingPermissions) {
   const client = new FakeAcp();
-  const provider = new CursorAcpProvider(perms, {clientFactory:async options=>{client.startArgs=options.args;return client;},cancelTimeoutMs:100});
+  const provider = new CursorAcpProvider(perms, {clientFactory:async options=>{client.startArgs=options.args;return client;},cancelTimeoutMs:100,retryDelayMs:0});
   const sessionId = `bridge-${randomUUID()}`;
   return {client,provider,sessionId};
 }
@@ -93,6 +93,69 @@ function setup(perms?: PendingPermissions) {
 afterEach(async () => { await closeAllCursorAcpSessions(); });
 
 describe('Cursor ACP direct provider', () => {
+  const transient = 'RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
+  const nativeError = (client: FakeAcp, message = transient) => {
+    client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:`\n\nError: ${message}`}});
+    client.end();
+  };
+
+  it('resumes the same native session after a diagnostic error plus end_turn without repeating completed tools or the original input', async () => {
+    const {client,provider,sessionId}=setup();
+    client.onPrompt=(_params,index)=>{
+      if(index===1){
+        client.update({sessionUpdate:'tool_call',toolCallId:'once',kind:'execute',rawInput:{command:'side effect'}});
+        client.update({sessionUpdate:'tool_call_update',toolCallId:'once',status:'completed',rawOutput:'done'});
+        nativeError(client);
+      }else{client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'已续接完成'}});client.end();}
+    };
+    let accepted=0;
+    const events=await collect(provider.streamChat({sessionId,prompt:'original input',onInputAccepted:()=>accepted++}));
+    const prompts=client.calls.filter(call=>call.method==='session/prompt');
+    assert.equal(prompts.length,2);assert.equal(new Set(prompts.map(call=>call.params.sessionId)).size,1);
+    assert.equal(prompts[0].params.prompt[0].text,'original input');assert.match(prompts[1].params.prompt[0].text,/不要重复已完成/);
+    assert.equal(accepted,1);assert.equal(events.filter(e=>e.type==='tool_use').length,1);
+    assert.equal(events.filter(e=>e.type==='text').map(e=>e.data).join(''),'已续接完成');
+    assert.equal(events.filter(e=>e.type==='error').length,0);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'completed');
+    assert.ok(events.some(e=>e.type==='status'&&/自动续接（1\/2）/.test(e.data.reasoning||'')));
+  });
+
+  it('exhausts two continuations and reports failure despite native end_turn', async () => {
+    const {client,provider,sessionId}=setup();client.onPrompt=()=>nativeError(client);
+    const events=await collect(provider.streamChat({sessionId,prompt:'original'}));
+    assert.equal(client.count,3);assert.equal(events.filter(e=>e.type==='result').length,1);
+    assert.equal(events.find(e=>e.type==='result')?.data.outcome,'failed');
+    assert.equal(events.find(e=>e.type==='error')?.data,transient);assert.equal(events.filter(e=>e.type==='text').length,0);
+  });
+
+  for(const reason of ['authentication','unfinished tool']) it(`does not retry ${reason}`,async()=>{
+    const {client,provider,sessionId}=setup();client.onPrompt=()=>{
+      if(reason==='unfinished tool')client.update({sessionUpdate:'tool_call',toolCallId:'pending',kind:'execute'});
+      nativeError(client,reason==='authentication'?'[unauthenticated] Backend rejected authentication.':transient);
+    };
+    const events=await collect(provider.streamChat({sessionId,prompt:'original'}));
+    assert.equal(client.count,1);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'failed');
+  });
+
+  it('cancels retry backoff promptly and accepts the next user input without an automatic stale continuation', async()=>{
+    const client=new FakeAcp();const sessionId=randomUUID();
+    const provider=new CursorAcpProvider(undefined,{clientFactory:async()=>client,retryDelayMs:60_000});
+    client.onPrompt=()=>nativeError(client);const events:Event[]=[];
+    const running=collect(provider.streamChat({sessionId,prompt:'old'}),e=>events.push(e));
+    await until(()=>events.some(e=>e.type==='status'&&/自动续接/.test(e.data.reasoning||'')));
+    assert.equal(await interruptCursorAcpSession(sessionId),true);await running;
+    assert.equal(client.count,1);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'aborted');
+    client.onPrompt=()=>client.end();await collect(provider.streamChat({sessionId,cursorSessionId:client.nativeId,prompt:'new'}));
+    assert.deepEqual(client.calls.filter(c=>c.method==='session/prompt').map(c=>c.params.prompt[0].text),['old','new']);
+  });
+
+  it('leaves quoted diagnostic examples and tool output as ordinary content', async()=>{
+    const {client,provider,sessionId}=setup();const example=`示例：\n\nError: ${transient}`;
+    client.onPrompt=()=>{client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:example}});client.end();};
+    const events=await collect(provider.streamChat({sessionId,prompt:'explain'}));
+    assert.equal(client.count,1);assert.equal(events.find(e=>e.type==='text')?.data,example);
+    assert.equal(events.find(e=>e.type==='result')?.data.outcome,'completed');
+  });
+
   it('normalizes native Todo titles and merges partial updates by ID without dropping earlier tasks', async () => {
     const {client,provider,sessionId}=setup();
     const result=collect(provider.streamChat({sessionId,prompt:'track tasks'}));
