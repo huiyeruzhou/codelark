@@ -7,6 +7,7 @@ export interface FeishuChannelConfig {
   site?: FeishuSite;
   allowedUsers?: string[];
   customerServiceChats?: string[];
+  threadReplyChats?: string[];
   customerServiceControlUsers?: string[];
   streamingEnabled?: boolean;
   feedbackMarkdownEnabled?: boolean;

@@ -974,6 +974,11 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/thread-mode': {
+      response = adapter.manageThreadReplyMode?.(msg, args) || '当前通道不支持话题回复模式。';
+      break;
+    }
+
     case '/customer': {
       await adapter.prepareControlAuthorization?.(msg.address, '/customer');
       response = adapter.manageCustomerServiceMode?.(msg, args) || '当前通道不支持客服模式管理。';

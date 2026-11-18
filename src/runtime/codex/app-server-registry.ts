@@ -171,6 +171,8 @@ export async function prepareCodexAppServerSession(options: AppServerThreadOptio
         saveSubmission: (threadId, submission) => save(`submission:${backendKey}:${threadId}`, submission),
         loadActiveTurn: (threadId) => read<string>(`active:${backendKey}:${threadId}`),
         saveActiveTurn: (threadId, turnId) => save(`active:${backendKey}:${threadId}`, turnId),
+        loadReplyTargets: (threadId) => read(`reply-targets:${backendKey}:${threadId}`),
+        saveReplyTargets: (threadId, targets) => save(`reply-targets:${backendKey}:${threadId}`, targets),
         resumeConfig: { 'shell_environment_policy.set.CODELARK_HOME': CODELARK_HOME },
       });
       backends.set(endpoint, lifecycle);

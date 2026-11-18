@@ -218,6 +218,7 @@ export function hasActiveToolState(session: BridgeSession | null | undefined): b
 
 export function shouldTrackSession(session: BridgeSession): boolean {
   return Boolean(session.pending_user_input) || isRunningRuntimeStatus(session.runtime_status)
+    || session.runtime_status === 'unknown'
     || isRunningHealthStatus(session.health_status)
     || hasActiveToolState(session);
 }
@@ -267,7 +268,7 @@ export function computeBaseDiagnosis(
   const previousStatus = session.health_status || 'idle';
 
   if (
-    !isRunningRuntimeStatus(runtimeStatus)
+    runtimeStatus !== 'unknown' && !isRunningRuntimeStatus(runtimeStatus)
     && isRunningHealthStatus(previousStatus)
     && !activeToolName
     && !session.pending_user_input
@@ -296,7 +297,7 @@ export function computeBaseDiagnosis(
     };
   }
 
-  if (!lastProgressMs && !session.pending_user_input) {
+  if (runtimeStatus !== 'unknown' && !lastProgressMs && !session.pending_user_input) {
     const fallbackStatus = isRunningRuntimeStatus(runtimeStatus) ? 'running_active' : previousStatus;
     return {
       sessionId: session.id,
@@ -333,6 +334,9 @@ export function computeBaseDiagnosis(
   if (session.pending_user_input) {
     healthStatus = 'waiting_input';
     healthReason = `正在等待你的回答：${session.pending_user_input}`;
+  } else if (runtimeStatus === 'unknown') {
+    healthStatus = 'suspected_detached';
+    healthReason = '原生会话状态尚未确认，不能据此认定空闲或重新提交输入。';
   } else if (previousStatus === 'completed' || previousStatus === 'failed' || previousStatus === 'aborted') {
     healthStatus = previousStatus;
     healthReason = session.health_reason?.trim() || buildProgressReason(
@@ -387,7 +391,7 @@ export function applyProcessProbeDiagnosis(
   diagnosis: Omit<SessionHealthDiagnosis, 'processProbe'>,
   processProbe: ThreadProcessProbeResult | null,
 ): SessionHealthDiagnosis {
-  if (!processProbe || diagnosis.healthStatus === 'waiting_input') {
+  if (!processProbe || diagnosis.healthStatus === 'waiting_input' || diagnosis.runtimeStatus === 'unknown') {
     return {
       ...diagnosis,
       processProbe,

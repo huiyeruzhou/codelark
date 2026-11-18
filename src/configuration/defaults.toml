@@ -63,6 +63,7 @@ app_secret = ""
 site = "feishu"
 allowed_users = []
 customer_service_chats = []
+thread_reply_chats = []
 customer_service_control_users = []
 streaming_enabled = true
 feedback_markdown_enabled = true

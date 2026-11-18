@@ -24,6 +24,9 @@ export interface InboundMessage {
   messageId: string;
   /** Platform message explicitly replied to by the sender. */
   replyToMessageId?: string;
+  /** Incoming platform topic metadata; never changes the shared conversation binding. */
+  threadRootMessageId?: string;
+  threadId?: string;
   address: ChannelAddress;
   text: string;
   timestamp: number;

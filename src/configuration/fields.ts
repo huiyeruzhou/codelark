@@ -473,6 +473,12 @@ export const configFields = [
     formatEnv: (value) => Array.isArray(value) ? value.join(',') : undefined,
   },
   {
+    path: 'channels[].config.threadReplyChats',
+    tomlPath: 'channels[].config.thread_reply_chats',
+    scopes: homeOnlyScopes,
+    schema: z.array(z.string().regex(/^oc_[a-zA-Z0-9]+$/)),
+  },
+  {
     path: 'channels[].config.customerServiceChats',
     tomlPath: 'channels[].config.customer_service_chats',
     scopes: homeOnlyScopes,

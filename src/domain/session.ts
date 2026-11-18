@@ -81,7 +81,7 @@ export interface BridgeSession {
   hidden?: boolean;
   parent_session_id?: string;
   expires_at?: string;
-  runtime_status?: 'idle' | 'running' | 'queued';
+  runtime_status?: 'idle' | 'running' | 'queued' | 'unknown';
   queued_count?: number;
   last_runtime_update_at?: string;
   health_status?: BridgeSessionHealthStatus;

@@ -14,7 +14,7 @@ export interface BridgeInteractiveRuntimeState {
 export interface CreateInteractiveRuntimeDeps {
   getStore(): Pick<BridgeStore, 'getSession' | 'listSessions' | 'updateSession'>;
   nowIso(): string;
-  isExternalThreadActive?(session: BridgeSession): boolean;
+  getExternalThreadActivity?(session: BridgeSession): 'idle' | 'active' | 'unknown';
   sessionTurnCooldownMs?: number;
   /** Injectable clock/wait for deterministic cooldown tests; defaults to real time. */
   nowMs?(): number;
@@ -90,12 +90,13 @@ export function createInteractiveRuntime(
     if (!session) return;
 
     const queuedCount = getQueuedCount(sessionId);
-    const isRunning = getState().activeTasks.has(sessionId) || deps.isExternalThreadActive?.(session);
+    const external = deps.getExternalThreadActivity?.(session) ?? 'idle';
+    const isRunning = getState().activeTasks.has(sessionId) || Boolean(session.pending_user_input) || external === 'active';
     const runtimeStatus: BridgeSession['runtime_status'] = queuedCount > 0
       ? 'queued'
       : isRunning
         ? 'running'
-        : 'idle';
+        : external === 'unknown' ? 'unknown' : 'idle';
 
     if (
       session.queued_count === queuedCount
@@ -167,7 +168,14 @@ export function createInteractiveRuntime(
   async function reconcileTerminalSessionRuntimeState(): Promise<void> {
     const store = deps.getStore();
     for (const session of store.listSessions()) {
-      if (deps.isExternalThreadActive?.(session)) continue;
+      if (session.pending_user_input || (deps.getExternalThreadActivity?.(session) ?? 'idle') !== 'idle') {
+        syncSessionRuntimeState(session.id);
+        continue;
+      }
+      if (session.runtime_status === 'unknown') {
+        syncSessionRuntimeState(session.id);
+        continue;
+      }
       if (!isTerminalSessionHealthStatus(session.health_status)) continue;
 
       if (getState().activeTasks.has(session.id)) continue;
@@ -194,12 +202,13 @@ export function createInteractiveRuntime(
       const queuedCount = session.queued_count && session.queued_count > 0
         ? session.queued_count
         : 0;
-      if (queuedCount === 0 && session.runtime_status !== 'running' && session.runtime_status !== 'queued') {
-        continue;
-      }
+      const external = deps.getExternalThreadActivity?.(session) ?? 'idle';
+      const runtimeStatus = session.pending_user_input || external === 'active' ? 'running'
+        : external === 'unknown' ? 'unknown' : 'idle';
+      if (queuedCount === 0 && session.runtime_status === runtimeStatus) continue;
       store.updateSession(session.id, {
         queued_count: 0,
-        runtime_status: deps.isExternalThreadActive?.(session) ? 'running' : 'idle',
+        runtime_status: runtimeStatus,
         last_runtime_update_at: deps.nowIso(),
       });
     }

@@ -472,6 +472,7 @@ describe('v1 config migration e2e', () => {
         site: 'lark',
         allowedUsers: ['env-user-1', 'env-user-2'],
         customerServiceChats: [],
+        threadReplyChats: [],
         customerServiceControlUsers: [],
         streamingEnabled: true,
         feedbackMarkdownEnabled: true,

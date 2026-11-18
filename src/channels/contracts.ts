@@ -119,9 +119,12 @@ export abstract class BaseChannelAdapter {
   prepareControlAuthorization?(_address: ChannelAddress, _commandText?: string): Promise<void>;
   isControlAuthorized(_address: ChannelAddress, _commandText?: string): boolean { return true; }
   manageCustomerServiceWhitelist?(_msg: InboundMessage, _args: string): string;
+  manageThreadReplyMode?(_msg: InboundMessage, _args: string): string;
   manageCustomerServiceMode?(_msg: InboundMessage, _args: string): string;
 
-  onMessageStart?(_chatId: string, _streamKey?: string): void;
+  /** Delivery evidence; submitting terminal keys does not prove model acceptance. */
+  onInputDelivery?(_msg: InboundMessage, _status: 'submitted' | 'accepted' | 'queued', _detail?: string): Promise<boolean>;
+  onMessageStart?(_chatId: string, _streamKey?: string, _requestMessageId?: string): void;
   onMessageEnd?(_chatId: string, _streamKey?: string): void;
   acknowledgeUpdate?(_updateId: number): void;
   getPreviewCapabilities?(_chatId: string): PreviewCapabilities | null;
@@ -136,7 +139,7 @@ export abstract class BaseChannelAdapter {
   getStructuredStreamingUiSnapshot?(_chatId: string, _streamKey?: string): StructuredStreamingUiSnapshot | null;
   getStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): string | null;
   waitForStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): Promise<string | null>;
-  onMirrorStreamStart?(_chatId: string, _streamKey?: string): void;
+  onMirrorStreamStart?(_chatId: string, _streamKey?: string, _requestMessageId?: string): void;
   onStreamHistory?(_chatId: string, _items: StreamingHistoryItem[], _streamKey?: string): void;
   onRuntimeNotice?(_chatId: string, _notice: RuntimeNoticeInfo, _streamKey?: string): void;
   /** Merge a successful cross-Agent send into the latest active conversation card for this chat. */

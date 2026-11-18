@@ -74,7 +74,7 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
   readonly streamedActions: StructuredStreamingUiActionButton[][][] = [];
   readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
   readonly streamMetadata: StructuredStreamingUiMetadata[] = [];
-  readonly messageStarts: Array<{ chatId: string; streamKey?: string }> = [];
+  readonly messageStarts: Array<{ chatId: string; streamKey?: string; requestMessageId?: string }> = [];
   readonly messageEnds: Array<{ chatId: string; streamKey?: string }> = [];
   readonly sentMessages: OutboundMessage[] = [];
   streamEndResult = false;
@@ -99,8 +99,9 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
     return this.streamUiActive;
   }
 
-  onMessageStart(chatId: string, streamKey?: string): void {
-    this.messageStarts.push({ chatId, streamKey });
+  onMessageStart(chatId: string, streamKey?: string, requestMessageId?: string): void {
+    assert.ok(requestMessageId, 'direct turns must carry their exact source message');
+    this.messageStarts.push({ chatId, streamKey, requestMessageId });
   }
 
   onMessageEnd(chatId: string, streamKey?: string): void {

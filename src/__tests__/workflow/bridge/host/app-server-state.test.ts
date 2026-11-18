@@ -2,6 +2,8 @@ import '../../../setup/test-setup.js';
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createInteractiveRuntime } from '../../../../bridge/host/interactive-runtime.js';
+import { computeBaseDiagnosis, applyProcessProbeDiagnosis, shouldTrackSession } from '../../../../bridge/health/reducer.js';
+import { formatRuntimeStatus } from '../../../../bridge/command/presentation.js';
 import { createSessionHealthRuntime } from '../../../../bridge/health/runtime.js';
 import type { CodexAppServerLifecycle } from '../../../../runtime/codex/app-server-lifecycle.js';
 import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -35,7 +37,7 @@ it('does not reset a live external thread to idle after Bridge restart or stale 
   store.updateSession(session.id, { runtime_status: 'running', queued_count: 2, health_status: 'completed' });
   let active = true;
   const state = { activeTasks: new Map(), queuedCounts: new Map(), sessionLocks: new Map() };
-  const runtime = createInteractiveRuntime(() => state, { getStore: () => store, nowIso: () => new Date().toISOString(), isExternalThreadActive: () => active });
+  const runtime = createInteractiveRuntime(() => state, { getStore: () => store, nowIso: () => new Date().toISOString(), getExternalThreadActivity: () => active ? 'active' : 'idle' });
   runtime.resetPersistedInteractiveRuntimeState();
   await runtime.reconcileTerminalSessionRuntimeState();
   assert.equal(store.getSession(session.id)?.runtime_status, 'running');
@@ -59,4 +61,34 @@ it('uses protocol activity and connection for health even when no local process 
   assert.equal((await health.diagnoseSessionHealth(session.id))?.healthStatus, 'waiting_tool');
   snapshot = { ...snapshot, activity: 'idle' };
   assert.equal((await health.diagnoseSessionHealth(session.id))?.healthStatus, 'idle');
+});
+
+
+it('keeps unknown after observer restart and stale completion until native evidence arrives', async () => {
+  const store = initBridgeTestContext();
+  const session = store.createSession('restore-unknown', 'test', undefined, '/tmp/project', 'code');
+  store.updateSession(session.id, { runtime_status: 'running', queued_count: 2, health_status: 'completed' });
+  let activity: 'idle' | 'active' | 'unknown' = 'unknown';
+  const state = { activeTasks: new Map(), queuedCounts: new Map(), sessionLocks: new Map() };
+  const runtime = createInteractiveRuntime(() => state, { getStore: () => store, nowIso: () => new Date().toISOString(), getExternalThreadActivity: () => activity });
+  runtime.resetPersistedInteractiveRuntimeState(); await runtime.reconcileTerminalSessionRuntimeState();
+  assert.equal(store.getSession(session.id)?.runtime_status, 'unknown');
+  assert.equal(shouldTrackSession(store.getSession(session.id)!), true);
+  assert.equal(formatRuntimeStatus(store.getSession(session.id)), '状态待确认');
+  const diagnosis = computeBaseDiagnosis(store.getSession(session.id)!, Date.now());
+  assert.equal(diagnosis.healthStatus, 'suspected_detached');
+  assert.match(diagnosis.healthReason, /尚未确认/);
+  assert.equal(applyProcessProbeDiagnosis(diagnosis, { status: 'alive' } as never).healthStatus, 'suspected_detached');
+  assert.equal(store.getSession(session.id)?.queued_count, 0);
+  store.updateSession(session.id, { pending_user_input: '选择方案' }); runtime.syncSessionRuntimeState(session.id);
+  assert.equal(store.getSession(session.id)?.runtime_status, 'running', 'a pending question is never idle');
+  store.updateSession(session.id, { pending_user_input: undefined });
+  activity = 'active'; runtime.syncSessionRuntimeState(session.id);
+  assert.equal(store.getSession(session.id)?.runtime_status, 'running');
+  activity = 'unknown'; runtime.syncSessionRuntimeState(session.id);
+  assert.equal(store.getSession(session.id)?.runtime_status, 'unknown');
+  activity = 'idle'; runtime.syncSessionRuntimeState(session.id);
+  assert.equal(store.getSession(session.id)?.runtime_status, 'idle');
+  activity = 'unknown'; runtime.resetPersistedInteractiveRuntimeState();
+  assert.equal(store.getSession(session.id)?.runtime_status, 'unknown', 'persisted idle also needs native evidence after restart');
 });

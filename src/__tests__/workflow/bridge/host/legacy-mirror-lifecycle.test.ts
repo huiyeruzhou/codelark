@@ -32,6 +32,9 @@ it('legacy mirror restores a manual active turn without replaying history and cl
   const state = (globalThis as any).__bridge_manager__;
   state.running = true;
   state.adapters.set(address.channelType, adapter);
+  store.updateSession(binding.bridgeSessionId, { runtime_status: 'running', health_status: 'completed' });
+  await manager.reconcileTerminalSessionRuntimeState();
+  assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'unknown', 'absent native observer cannot prove idle after restart');
   await manager.reconcileMirrorSubscriptions();
   assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'running');
   assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'running_active');
@@ -44,6 +47,15 @@ it('legacy mirror restores a manual active turn without replaying history and cl
   await manager.reconcileMirrorSubscriptions();
   assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'idle');
   assert.equal(store.getSession(binding.bridgeSessionId)?.health_status, 'completed');
+  const subscription = state.mirrorSubscriptions.get(binding.id);
+  assert(subscription);
+  subscription.consecutiveFailures = 1;
+  await manager.reconcileTerminalSessionRuntimeState();
+  assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'unknown', 'an earlier successful baseline cannot hide a later failed observation');
+  subscription.consecutiveFailures = 0;
+  subscription.cursor.initialized = false;
+  await manager.reconcileTerminalSessionRuntimeState();
+  assert.equal(store.getSession(binding.bridgeSessionId)?.runtime_status, 'unknown', 'refreshing the path is not a completed baseline read');
 });
 
 it('late records from another turn or thread cannot terminate the current turn or restore old tools', () => {

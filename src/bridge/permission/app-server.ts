@@ -128,8 +128,10 @@ export function observeAppServerRequests(
       if (actions.length) sections.push({ actions: [actions] });
       if (questions.length) sections.push({ markdown: '可点击选项；也可直接发送文字回答当前第一个尚未回答的问题。' });
       if (!actions.length && !questions.length) sections.push({ markdown: '此请求需要在 Codex 客户端处理，CodeLark 尚未支持该请求类型，未自动批准。' });
+      const origin = request.turnId ? handle.lifecycle.replyTarget?.(handle.threadId, request.turnId) : undefined;
       const delivery = enqueueDelivery(adapter, address, () => deliver(adapter, {
         address,
+        ...(origin?.channelType === address.channelType && origin.chatId === address.chatId ? { replyToMessageId: origin.messageId } : {}),
         text: questions.length ? questions.map((q) => q.question).join('\n\n') : requestDescription(request, handle),
         richCard: { title: questions.length ? 'Codex 需要你的回答' : 'Codex 请求确认', sections },
       }, { sessionId }), { queueClass: 'interactive' });

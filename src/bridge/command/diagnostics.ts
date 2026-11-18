@@ -476,7 +476,7 @@ export function buildCurrentCommandRichCard(options: {
       runtimeConfig,
       configService.resolve(settingConfigPath(definition), configScope).source === 'session',
     ));
-  const statusColor = session.runtime_status === 'running' || session.runtime_status === 'queued' ? 'yellow' : 'green';
+  const statusColor = session.runtime_status === 'unknown' ? 'grey' : session.runtime_status === 'running' || session.runtime_status === 'queued' ? 'yellow' : 'green';
   const mirrorColor = session.mirror_status === 'watching' ? 'blue' : 'grey';
   const sessionKind = session.session_type === 'draft' ? '临时草稿线程' : '普通会话';
   const runtimeSelect: NonNullable<OutboundRichCard['selects']>[number] = {

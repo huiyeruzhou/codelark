@@ -321,7 +321,7 @@ export async function runInteractiveMessage(
   const ensureMessageStarted = () => {
     if (!useMessageLifecycle) return;
     if (messageStartCalled) return;
-    adapter.onMessageStart?.(msg.address.chatId, streamKey);
+    adapter.onMessageStart?.(msg.address.chatId, streamKey, msg.messageId);
     messageStartCalled = true;
   };
 

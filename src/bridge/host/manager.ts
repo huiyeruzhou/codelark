@@ -339,7 +339,7 @@ const BACKGROUND_INPUT_LIMIT = 64_000;
 const SESSION_SETTINGS_COMMANDS = new Set([
   '/mkdir-confirm', '/mkdir-cancel',
   '/current-config', '/current-runtime', '/cd', '/cwd', '/model', '/mode', '/yolo',
-  '/sandbox', '/network', '/reasoning', '/require-at', '/whitelist', '/customer', '/tmux-set',
+  '/sandbox', '/network', '/reasoning', '/require-at', '/whitelist', '/customer', '/thread-mode', '/tmux-set',
 ]);
 const SESSION_CONFIG_BARRIER_COMMANDS = new Set([
   '/provider',
@@ -390,7 +390,13 @@ function addInboundGetReaction(
 ): void {
   const raw = msg.raw as { manualIngress?: unknown } | undefined;
   const syntheticManualIngress = raw?.manualIngress === true || msg.messageId?.startsWith('manual:');
-  if (syntheticManualIngress || !msg.messageId || typeof adapter.addMessageReaction !== 'function') return;
+  if (syntheticManualIngress || !msg.messageId) return;
+  if (reason === 'app_server_input_accepted' || reason === 'tmux_input_actions_completed') {
+    void adapter.onInputDelivery?.(msg, reason === 'app_server_input_accepted' ? 'accepted' : 'submitted').catch((error) => {
+      console.warn('[bridge-manager] Input delivery notice failed:', describeUnknownError(error));
+    });
+  }
+  if (typeof adapter.addMessageReaction !== 'function') return;
   void adapter.addMessageReaction(msg.messageId, INBOUND_GET_REACTION).catch((error) => {
     console.warn('[bridge-manager] Failed to add inbound Get reaction:', {
       reason,
@@ -1866,11 +1872,12 @@ function getZcodeMirrorState(): BridgeMirrorRuntimeState {
 const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getStore: () => getBridgeContext().store,
   nowIso,
-  isExternalThreadActive: (session) => {
+  getExternalThreadActivity: (session) => {
     if (session.runtime?.codex?.appServerEndpoint) {
       const handle = getCodexAppServerSession(session.id);
       const snapshot = handle?.lifecycle.snapshot(handle.threadId);
-      return !snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle';
+      if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity === 'unknown' || snapshot.submission) return 'unknown';
+      return snapshot.activity === 'idle' ? 'idle' : 'active';
     }
     const state = getState();
     const runtime = getSessionActiveRuntime(session) || 'codex';
@@ -1882,8 +1889,16 @@ const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
       : runtime === 'kimi' ? getSessionKimiSessionId(session)
       : runtime === 'cursor' ? getSessionCursorSessionId(session)
       : runtime === 'zcode' ? getSessionZcodeSessionId(session) : getSessionCodexThreadId(session);
-    return [...subscriptions.values()].some((subscription) => subscription.sessionId === session.id
-      && subscription.threadId === threadId && subscription.status === 'watching' && Boolean(subscription.activeMirrorTurnId));
+    if (!threadId) return 'idle';
+    const matching = [...subscriptions.values()].filter(subscription => subscription.sessionId === session.id && subscription.threadId === threadId);
+    if (matching.some(subscription => subscription.status === 'watching' && (subscription.activeMirrorTurnId || subscription.pendingTurn))) return 'active';
+    if (matching.some(subscription => subscription.status === 'watching' && subscription.lastReconciledAt
+      && subscription.cursor.initialized && subscription.fileIdentity && !subscription.consecutiveFailures && !subscription.suspendedUntil)) return 'idle';
+    // A subscription that has not read its native baseline is not evidence of idle.
+    // SDK-only conversations are owned by the direct task and have no external writer.
+    if ((runtime === 'codex' || runtime === 'claude') && !getSessionRuntimeTmuxSessionName(session)
+      && resolveEffectiveRuntimeProvider(session).provider === 'sdk') return 'idle';
+    return 'unknown';
   },
 });
 
@@ -2128,6 +2143,15 @@ const CODEX_TUI_DIAGNOSTICS = createCodexTuiDiagnostics({
 
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
   buildStopCallbackData: (sessionId) => buildCommandCallbackData('/stop', sessionId),
+  getReplyToMessageId: (subscription, turn) => {
+    const protocol = getCodexAppServerSession(subscription.sessionId);
+    if (protocol && turn.turnId) {
+      const target = protocol.lifecycle.replyTarget(protocol.threadId, turn.turnId);
+      return target?.channelType === subscription.channelType && target.chatId === subscription.chatId ? target.messageId : undefined;
+    }
+    const task = getState().activeTasks.get(subscription.sessionId);
+    return task?.address.channelType === subscription.channelType && task.address.chatId === subscription.chatId ? task.requestMessageId : undefined;
+  },
   getPendingUserInput: (sessionId) => getBridgeContext().store.getSession(sessionId)?.pending_user_input,
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
   getThreadTitle: getMirrorThreadTitle,
@@ -3638,11 +3662,11 @@ function isThenSessionReadyForPrompt(sessionId: string): boolean {
   if (session.runtime?.codex?.appServerEndpoint) {
     const handle = getCodexAppServerSession(sessionId);
     const snapshot = handle?.lifecycle.snapshot(handle.threadId);
-    if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle') return false;
+    if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle' || snapshot.submission) return false;
   }
   if (INTERACTIVE_RUNTIME.getActiveTask(sessionId)) return false;
   if (INTERACTIVE_RUNTIME.getQueuedCount(sessionId) > 0) return false;
-  if (session.runtime_status === 'running' || session.runtime_status === 'queued') return false;
+  if (session.runtime_status === 'running' || session.runtime_status === 'queued' || session.runtime_status === 'unknown') return false;
   if (session.health_status === 'failed') return false;
   if (session.health_status === 'running_active' || session.health_status === 'waiting_tool') return false;
   return true;
@@ -3657,7 +3681,7 @@ function recordInteractiveHealthEndAndScheduleThen(
   if (session?.runtime?.codex?.appServerEndpoint) {
     const handle = getCodexAppServerSession(sessionId);
     const snapshot = handle?.lifecycle.snapshot(handle.threadId);
-    if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle') return;
+    if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle' || snapshot.submission) return;
   }
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail);
   if (outcome !== 'completed' && outcome !== 'aborted') return;
@@ -5037,7 +5061,9 @@ async function handleMessage(
                 modelText || (hasAttachments ? '请查看用户发送的附件。' : ''), msg.contextText), prepared.persistedFileMeta)).text;
               if (prompt) {
                 await protocol.lifecycle.submit(protocol.threadId, [{ type: 'text', text: prompt },
-                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session));
+                  ...prepared.persistedFileMeta.filter((file) => file.type.startsWith('image/')).map((file) => ({ type: 'localImage' as const, path: file.filePath }))], codexAppServerTurnOptions(binding, session), {
+                    channelType: msg.address.channelType, chatId: msg.address.chatId, messageId: msg.messageId,
+                  });
                 addInboundGetReaction(adapter, msg, 'app_server_input_accepted');
               }
               void reconcileMirrorSubscriptions().catch((error) => console.warn('[bridge-manager] app-server mirror:', error));
@@ -5245,9 +5271,15 @@ async function handleMessage(
         },
       });
       addInboundGetReaction(adapter, msg, 'cursor_desktop_input_accepted');
-      if (sent.status === 'queued' || sent.warning) {
-        enqueueBridgeNotice(adapter, msg.address, sent.warning || 'Cursor 未完成 steer，消息已在同一对话排队。', { replyToMessageId: msg.messageId });
-      }
+      void (async () => {
+        const notified = await adapter.onInputDelivery?.(msg, sent.status === 'queued' ? 'queued' : 'accepted', sent.warning).catch((error) => {
+          console.warn('[bridge-manager] Input delivery notice failed:', describeUnknownError(error));
+          return false;
+        });
+        if (!notified && (sent.status === 'queued' || sent.warning)) {
+          enqueueBridgeNotice(adapter, msg.address, sent.warning || 'Cursor 未完成 steer，消息已在同一对话排队。', { replyToMessageId: msg.messageId });
+        }
+      })();
       store.insertAuditLog({ channelType: adapter.channelType, chatId: msg.address.chatId,
         direction: 'inbound', messageId: msg.messageId,
         summary: `Cursor Desktop append provider=tmux delivery=${sent.actualDelivery} thread=${threadId}` });

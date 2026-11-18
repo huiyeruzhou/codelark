@@ -97,6 +97,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/require-at',
   '/whitelist',
   '/customer',
+  '/thread-mode',
   '/model',
   '/status',
   '/current',

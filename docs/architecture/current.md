@@ -609,3 +609,12 @@ Codex 自有数据仍位于 `~/.codex`，Claude Code 自有 JSONL 由 Claude Cod
 - 用户文案可以使用“本地 Codex 会话”或“Codex 线程”。
 - 内部业务模型围绕 `BridgeSession`、`ChannelChat`、`IMChannel` 和 `codex_thread_id` 表达。
 - `ChannelChat` 是 chat 到 BridgeSession 的关系，不是 chat 到 Codex thread 的关系。
+
+
+### 话题回复的来源与运行状态
+
+普通群的话题回复由 `channels[].config.threadReplyChats`（TOML `thread_reply_chats`）控制，不改变 `ChannelAddress.chatId`，不复用客服模式的虚拟会话键。交互轮次显式传递 `requestMessageId`；CardKit 初次创建前保存回复目的地与开关值，创建重试、续卡及静态恢复沿用同一目的地。
+
+Codex app-server 的 `turn/start` 提交在既有持久提交记录中携带回复来源。原生 `userMessage.clientId` 或提交响应确认实际 turn 后保存对应关系；最多保留最近 128 轮，`turn/steer` 不覆盖来源。原生 start 通知可能早于输入确认，因此该间隙暂不向 mirror 发布尚未关联的记录，确认后按原游标正常消费。不同群的订阅只使用自身来源，不把另一个群的消息 ID 当回复目标。
+
+普通 `runtime_status` 汇总任务队列与原生观察证据，现包含 `unknown`。legacy tmux 在重启后尚未恢复观察、协议断连或提交尚未对账时，保留“状态待确认”；旧的 completed 健康状态和进程存活均不能把它改为空闲。等待问卷计为活动任务，`/then` 在状态未知时不自动提交。话题路由不据此新增 start/steer 判断；协议继续使用自身的 `unknown/idle/active/waiting` 和未确认提交对账。飞书 Get 表情仍只表达现有传输边界，不提升为原生 steer 成功证据。

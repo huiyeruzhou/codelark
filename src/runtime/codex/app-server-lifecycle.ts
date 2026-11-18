@@ -21,7 +21,8 @@ export interface AppServerThreadOptions {
   config?: Record<string, unknown>;
   developerInstructions?: string;
 }
-export interface AppServerSubmission { id: string; method: string; turnId?: string }
+export interface AppServerReplyTarget { channelType: string; chatId: string; messageId: string }
+export interface AppServerSubmission { id: string; method: string; turnId?: string; replyTarget?: AppServerReplyTarget }
 export interface AppServerPendingRequest {
   /** Includes connection generation: a callback from an old connection cannot answer a replay. */
   key: string;
@@ -47,6 +48,8 @@ export interface AppServerLifecycleOptions {
   saveSubmission?: (threadId: string, submission: AppServerSubmission | undefined) => void;
   loadActiveTurn?: (threadId: string) => string | undefined;
   saveActiveTurn?: (threadId: string, turnId: string | undefined) => void;
+  loadReplyTargets?: (threadId: string) => Record<string, AppServerReplyTarget> | undefined;
+  saveReplyTargets?: (threadId: string, targets: Record<string, AppServerReplyTarget>) => void;
   resumeConfig?: Record<string, unknown>;
 }
 interface ThreadState {
@@ -94,6 +97,7 @@ export class CodexAppServerLifecycle {
   private identity = randomUUID();
   private disposed = false;
   private threads = new Map<string, ThreadState>();
+  private replyTargets = new Map<string, Record<string, AppServerReplyTarget>>();
   private listeners = new Set<(threadId: string) => void>();
   private requestListeners = new Set<(request: AppServerPendingRequest) => void>();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -126,9 +130,25 @@ export class CodexAppServerLifecycle {
     const item = this.threads.get(threadId)?.items.get(`${turnId}:${itemId}`);
     return item ? structuredClone(item) : undefined;
   }
+  replyTarget(threadId: string, turnId: string): AppServerReplyTarget | undefined {
+    if (!this.replyTargets.has(threadId)) this.replyTargets.set(threadId, this.options.loadReplyTargets?.(threadId) || {});
+    return this.replyTargets.get(threadId)?.[turnId];
+  }
+
+  private rememberReplyTarget(threadId: string, turnId: string, submission?: AppServerSubmission): void {
+    if (!submission?.replyTarget || submission.method !== 'turn/start' || this.replyTarget(threadId, turnId)) return;
+    const targets = this.replyTargets.get(threadId)!;
+    targets[turnId] = submission.replyTarget;
+    for (const key of Object.keys(targets).slice(0, -128)) delete targets[key];
+    this.options.saveReplyTargets?.(threadId, targets);
+  }
+
   recordsAfter(threadId: string, cursor = 0): { records: BridgeMirrorRecord[]; cursor: number } {
     const state = this.threads.get(threadId);
     if (!state) return { records: [], cursor };
+    // A start notification can precede input acceptance. Keep output buffered until
+    // the native turn has been correlated with its initiating IM message.
+    if (state.snapshot.submission?.replyTarget && state.snapshot.submission.method === 'turn/start') return { records: [], cursor };
     return { records: [...state.records.values()].filter((entry) => entry.sequence > cursor)
       .sort((a, b) => a.sequence - b.sequence).map((entry) => entry.record), cursor: state.sequence };
   }
@@ -239,7 +259,7 @@ export class CodexAppServerLifecycle {
     await this.resume(threadId);
   }
 
-  async submit(threadId: string, input: AppServerInput[], turnOptions: Record<string, unknown> = {}): Promise<string> {
+  async submit(threadId: string, input: AppServerInput[], turnOptions: Record<string, unknown> = {}, replyTarget?: AppServerReplyTarget): Promise<string> {
     const state = this.requireThread(threadId);
     const operation = state.serial.catch(() => {}).then(async () => {
       await this.connect();
@@ -254,7 +274,7 @@ export class CodexAppServerLifecycle {
       if (state.snapshot.activity === 'unknown') throw new Error('尚未确认线程状态，未发送输入。');
       const active = state.snapshot.turnId;
       const method = active ? 'turn/steer' : 'turn/start';
-      const submission: AppServerSubmission = { id: randomUUID(), method, turnId: active };
+      const submission: AppServerSubmission = { id: randomUUID(), method, turnId: active, ...(replyTarget ? { replyTarget } : {}) };
       this.saveSubmission(state, submission); // persisted BEFORE sending a side effect
       // A correlated userMessage proves acceptance even if the RPC response is lost.
       // Consume its native turn immediately, so a direct consumer never drops buffered output.
@@ -278,11 +298,13 @@ export class CodexAppServerLifecycle {
           // Bind to the observed native turn or the client's accepted userMessage correlation.
           const turnId = active || await this.acceptedTurn(state, submission.id, responseId);
           this.assertAttached(state);
+          this.rememberReplyTarget(threadId, turnId, submission);
           if (!state.turns.has(turnId)) this.applyTurn(threadId, result.turn || { id: turnId, status: 'inProgress' });
           return turnId;
         });
         const turnId = await Promise.race([accepted, response]);
         this.assertAttached(state);
+        this.rememberReplyTarget(threadId, turnId, submission);
         this.saveSubmission(state, undefined);
         return turnId;
       } catch (error) {
@@ -330,6 +352,7 @@ export class CodexAppServerLifecycle {
         if (accepted) {
           // Correlation is independent of UI/history replay and current activity.
           // An old completed turn must not become the current turn or a new card.
+          this.rememberReplyTarget(threadId, accepted.turnId, submission);
           state.acceptedInputs.set(submission.id, accepted.turnId);
           state.snapshot.error = undefined;
           this.saveSubmission(state, undefined);
@@ -529,7 +552,10 @@ export class CodexAppServerLifecycle {
     // Acceptance may arrive after turn/completed. Settle it without reviving output.
     if (item.type === 'userMessage' && item.clientId) {
       state.acceptedInputs.set(item.clientId, turnId);
-      if (state.snapshot.submission?.id === item.clientId) this.saveSubmission(state, undefined);
+      if (state.snapshot.submission?.id === item.clientId) {
+        this.rememberReplyTarget(threadId, turnId, state.snapshot.submission);
+        this.saveSubmission(state, undefined);
+      }
     }
     // A terminal turn is immutable from the Bridge's point of view. Some
     // app-server versions can emit a delayed item completion after

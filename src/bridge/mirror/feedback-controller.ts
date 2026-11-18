@@ -62,6 +62,7 @@ export interface MirrorStructuredStreamStatusConfig {
 }
 
 export interface MirrorFeedbackControllerDeps {
+  getReplyToMessageId?(subscription: BridgeMirrorSubscription, turn: BridgeMirrorTurnState): string | undefined;
   buildStopCallbackData?(sessionId: string): string;
   getPendingUserInput?(sessionId: string): string | undefined;
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
@@ -341,7 +342,7 @@ export function createMirrorFeedbackController(
 
     try {
       adapter.onStreamMetadata?.(subscription.chatId, getMirrorStreamMetadata(subscription), turnState.streamKey);
-      adapter.onMirrorStreamStart?.(subscription.chatId, turnState.streamKey);
+      adapter.onMirrorStreamStart?.(subscription.chatId, turnState.streamKey, deps.getReplyToMessageId?.(subscription, turnState));
       deps.onMirrorStreamStart?.(subscription, turnState);
       if (!adapter.onMirrorStreamStart) {
         adapter.onStreamText?.(subscription.chatId, '', turnState.streamKey);

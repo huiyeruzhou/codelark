@@ -699,3 +699,46 @@ for (const operationName of ['refresh', 'resume']) test(`detach rejects a late $
   assert.deepEqual(f.runtime.recordsAfter('thread', 5), { records: [], cursor: 5 });
   assert.equal(f.runtime.snapshot('thread').attached, false);
 });
+
+test('routes a native turn to its initiating message through double steer, late acceptance and a completed boundary', async (t) => {
+  const f = await fixture(t);
+  const origin = { channelType: 'feishu', chatId: 'oc_group', messageId: 'om_first' };
+  let firstRequest: any;
+  f.handle(m => {
+    if (m.method !== 'turn/start') return false;
+    firstRequest = m;
+    const turn: AppServerTurn = { id: 'delayed', status: 'inProgress', items: [] };
+    f.thread.turns!.push(turn); f.send('turn/started', { turn });
+    return true;
+  });
+  const pending = f.runtime.submit('thread', text, {}, origin);
+  await until(() => f.runtime.snapshot('thread').turnId === 'delayed');
+  assert.equal(f.runtime.snapshot('thread').activity, 'active');
+  assert.equal(f.runtime.recordsAfter('thread').records.length, 0, 'start notification cannot publish to an uncorrelated topic');
+  f.send('item/completed', { turnId: 'delayed', item: { id: 'user', type: 'userMessage', clientId: firstRequest.params.clientUserMessageId, content: text } });
+  assert.equal(await pending, 'delayed');
+  assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), origin);
+  assert(f.runtime.recordsAfter('thread').records.length > 0);
+  f.respond(firstRequest, { turnId: 'delayed' }); f.handle(undefined);
+  await Promise.all(['om_second', 'om_third'].map(messageId => f.runtime.submit('thread', text, {}, { ...origin, messageId })));
+  assert.equal(f.received.filter(m => m.method === 'turn/steer').length, 2);
+  assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), origin);
+  f.send('turn/completed', { turn: { id: 'delayed', status: 'completed' } });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+  const next = { ...origin, messageId: 'om_next' };
+  const nextId = await f.runtime.submit('thread', text, {}, next);
+  assert.notEqual(nextId, 'delayed');
+  assert.deepEqual(f.runtime.replyTarget('thread', nextId), next);
+  assert.deepEqual(f.runtime.replyTarget('thread', 'delayed'), origin);
+});
+
+
+test('restores persisted reply destinations without using the current activity or latest message', async () => {
+  const target = { channelType: 'feishu', chatId: 'oc_group', messageId: 'om_origin' };
+  const runtime = new CodexAppServerLifecycle('ws://unused', { loadReplyTargets: () => ({ 'native-old-turn': target }) });
+  try {
+    assert.deepEqual(runtime.replyTarget('thread', 'native-old-turn'), target);
+    assert.equal(runtime.replyTarget('thread', 'different-turn'), undefined);
+    assert.equal(runtime.connectionSnapshot().connection, 'unknown');
+  } finally { runtime.close(); }
+});

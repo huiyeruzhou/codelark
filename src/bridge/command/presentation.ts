@@ -910,6 +910,7 @@ export function formatRuntimeStatus(session: BridgeSession | null | undefined): 
     ? session.queued_count
     : 0;
 
+  if (status === 'unknown') return '状态待确认';
   if (status === 'queued') {
     return queuedCount > 0 ? `排队中（${queuedCount}）` : '排队中';
   }

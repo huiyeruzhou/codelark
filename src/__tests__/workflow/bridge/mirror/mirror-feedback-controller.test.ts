@@ -40,6 +40,7 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly sent: OutboundMessage[] = [];
   readonly metadata: Array<{ chatId: string; streamKey?: string; metadata: StructuredStreamingUiMetadata }> = [];
   streamEndResult = true;
+  readonly origins: Array<string | undefined> = [];
   private active = false;
 
   async start(): Promise<void> {}
@@ -65,7 +66,8 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
     return this.active ? 'mirror-stream-message-1' : null;
   }
 
-  onMirrorStreamStart(): void {
+  onMirrorStreamStart(_chatId: string, _streamKey?: string, requestMessageId?: string): void {
+    this.origins.push(requestMessageId);
     this.active = true;
   }
 
@@ -133,6 +135,7 @@ describe('mirror-feedback-controller', () => {
   for (const status of ['completed', 'interrupted', 'error'] as const) it(`exposes a scoped stop action during mirror output and settles it on ${status}`, async () => {
     const adapter = new FakeMirrorFeishuAdapter();
     const controller = createMirrorFeedbackController({
+      getReplyToMessageId: () => 'om_origin',
       getAdapter: () => adapter, getThreadTitle: () => 'tb-science',
       buildStopCallbackData: sessionId => buildCommandCallbackData('/stop', sessionId),
       nowIso: () => '2026-11-14T00:00:00Z', eventBatchLimit: 10,
@@ -147,6 +150,7 @@ describe('mirror-feedback-controller', () => {
       timestamp: '2026-11-14T00:00:00Z', turnId: 'turn-stop',
     }], controller.hooks);
     const action = adapter.actions.at(-1)?.[0]?.[0];
+    assert.deepEqual(adapter.origins, ['om_origin']);
     assert.ok(action, 'mirrored output must offer the same stop action as a direct turn');
     assert.equal(action.text, '停止');
     assert.equal(action.disabled, false);

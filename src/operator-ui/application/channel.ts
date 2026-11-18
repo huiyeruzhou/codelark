@@ -146,6 +146,7 @@ export function mergeChannelInstanceV2(
       appSecret: parsed.appSecret ?? existing?.config.appSecret ?? '',
       site: parsed.site ?? existing?.config.site ?? template.site,
       allowedUsers: parsed.allowedUsers ?? existing?.config.allowedUsers ?? template.allowedUsers,
+      threadReplyChats: existing?.config.threadReplyChats ?? [],
       customerServiceChats: parsed.customerServiceChats ?? existing?.config.customerServiceChats ?? [],
       customerServiceControlUsers: parsed.customerServiceControlUsers ?? existing?.config.customerServiceControlUsers ?? [],
       streamingEnabled: parsed.streamingEnabled ?? existing?.config.streamingEnabled ?? template.streamingEnabled,

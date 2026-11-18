@@ -132,6 +132,7 @@ interface FeishuCardState {
   cardId: string;
   messageId: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   sequence: number;
   /** CardKit streaming lifetime ended; keep updating this message as a normal card. */
   streamingModeExpired?: boolean;
@@ -365,6 +366,7 @@ interface StreamingCardRolloverOffsets {
 }
 
 interface StreamingCardInitialState {
+  replyInThread?: boolean;
   content: string;
   tasksText: string;
   statusText: string;
@@ -392,6 +394,7 @@ interface InjectedStreamingHistoryItem {
 }
 
 interface PendingStreamingCardCreateState {
+  replyTarget?: { messageId?: string; inThread: boolean };
   text?: string;
   statusText?: string;
   tasks?: TaskProgressInfo[];
@@ -3386,9 +3389,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Create the streaming card as early as possible.
    * Called by bridge-manager via onMessageStart().
    */
-  onMessageStart(chatId: string, streamKey?: string): void {
+  onMessageStart(chatId: string, streamKey?: string, requestMessageId?: string): void {
     if (this.isCloudDocumentChatId(chatId)) return;
-    const messageId = this.lastIncomingMessageId.get(chatId);
+    const messageId = requestMessageId ?? this.lastIncomingMessageId.get(chatId);
 
     // Create streaming card (fire-and-forget — fallback to traditional if fails)
     if (messageId && this.isStreamingEnabled()) {
@@ -3547,6 +3550,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (!this.restClient || this.activeCards.has(cardKey)) return Promise.resolve(false);
 
+    // Capture once per turn, before any API call. Later messages and retries cannot move it.
+    const pending = this.pendingCardCreateState(cardKey);
+    pending.replyTarget ??= { messageId: replyToMessageId, inThread: this.isThreadReplyChat(chatId) };
+    replyToMessageId = pending.replyTarget.messageId;
+
     // In-flight guard: if creation is already in progress, return the existing promise
     const existing = this.cardCreatePromises.get(cardKey);
     if (existing) return existing;
@@ -3683,6 +3691,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
   ): Promise<boolean> {
     if (!this.restClient) return false;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const replyInThread = initialState?.replyInThread
+      ?? this.pendingCardCreateStates.get(cardKey)?.replyTarget?.inThread
+      ?? this.isThreadReplyChat(chatId);
     const cardkit = (this.restClient as any).cardkit?.v1;
     if (!cardkit?.card) {
       console.warn('[feishu-adapter] CardKit v1 API is unavailable in the current Feishu SDK client');
@@ -3755,7 +3766,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // Step 2: Send card as IM message
       const cardContent = JSON.stringify({ type: 'card', data: { card_id: cardId } });
       const sendStartedAt = Date.now();
-      const msgResp = await this.createImMessage(chatId, 'interactive', cardContent, replyToMessageId);
+      const msgResp = await this.createImMessage(chatId, 'interactive', cardContent, replyToMessageId, undefined, replyInThread);
       const sendMessageMs = Date.now() - sendStartedAt;
 
       const messageId = msgResp?.data?.message_id;
@@ -3792,6 +3803,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         cardId,
         messageId,
         replyToMessageId,
+        replyInThread,
         sequence: 0,
         continuationIndex: initialState?.continuationIndex ?? 1,
         startTime: initialState?.startTime ?? now,
@@ -4128,6 +4140,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     const initialRevision = state.desiredRevision;
     const nextInitialState: StreamingCardInitialState = {
+      replyInThread: state.replyInThread,
       content,
       tasksText,
       statusText,
@@ -5344,6 +5357,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       // 排空过程中可能已成功续页；恢复只能从当前未完成页开始。
       const recovery = this.pendingCardCreateStates.get(cardKey);
       if (recovery) Object.assign(recovery, {
+        replyTarget: { messageId: state.replyToMessageId, inThread: state.replyInThread === true },
         historyItems: state.historyItems,
         historyItemOffset: state.historyItemOffset,
         historyToolCallOffset: state.historyToolCallOffset,
@@ -6001,11 +6015,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.updateCardContent(chatId, fullText, cardKey);
   }
 
-  onMirrorStreamStart(chatId: string, streamKey?: string): void {
+  onMirrorStreamStart(chatId: string, streamKey?: string, requestMessageId?: string): void {
     if (!this.supportsStructuredStreamingUi(chatId)) return;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     if (this.activeCards.has(cardKey)) return;
-    this.createStreamingCard(chatId, undefined, cardKey).catch(() => {});
+    this.createStreamingCard(chatId, requestMessageId, cardKey).catch(() => {});
   }
 
   onToolEvent(chatId: string, tools: ToolCallInfo[], streamKey?: string): void {
@@ -6195,8 +6209,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
           historyItems: recovery.history, ...recovery.cursor,
         });
         render.body.config = { wide_screen_mode: true };
-        const result = await this.sendStructuredMessage(chatId, 'interactive', JSON.stringify(render.body), undefined,
-          crypto.createHash('sha256').update(`stream-recovery:${cardKey}:${recovery.page}`).digest('hex').slice(0, 32));
+        const result = await this.sendStructuredMessage(chatId, 'interactive', JSON.stringify(render.body), recovery.pending.replyTarget?.messageId,
+          crypto.createHash('sha256').update(`stream-recovery:${cardKey}:${recovery.page}`).digest('hex').slice(0, 32),
+          recovery.pending.replyTarget?.inThread);
         if (!result.ok) throw new Error(result.error || 'Structured stream recovery failed');
         recovery.page += 1;
         if (!render.hasMore || !render.next) break;
@@ -6214,6 +6229,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
   // ── Send ────────────────────────────────────────────────────
 
   async send(message: OutboundMessage): Promise<SendResult> {
+    if (!message.replyToMessageId && this.isThreadReplyChat(message.address.chatId)) {
+      const cards = [...this.activeCards.values()].filter(card => card.chatId === message.address.chatId && card.replyInThread);
+      if (cards.length === 1) message = { ...message, replyToMessageId: cards[0]!.messageId };
+    }
     if (message.address.cloudDocument) {
       const attachmentCount = message.attachments?.length || 0;
       const text = [
@@ -6771,7 +6790,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   /** All IM output (including streaming and permission cards) shares topic routing. */
-  private async createImMessage(chatId: string, msgType: string, content: string, replyToMessageId?: string, uuid?: string) {
+  private async createImMessage(chatId: string, msgType: string, content: string, replyToMessageId?: string, uuid?: string, replyInThread?: boolean) {
     if (msgType === 'interactive') content = await this.cardMath.json(content);
     const topic = parseTopicConversationId(chatId);
     const targetMessageId = topic?.rootMessageId || replyToMessageId;
@@ -6779,7 +6798,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (targetMessageId) {
       return this.withFeishuRequestTimeout(chatId, `im.message.reply:${msgType}`, () => this.restClient!.im.message.reply({
         path: { message_id: targetMessageId },
-        data: { ...data, ...(topic ? { reply_in_thread: true } : {}) },
+        data: { ...data, ...(topic || (replyInThread ?? this.isThreadReplyChat(chatId)) ? { reply_in_thread: true } : {}) },
       }));
     }
     return this.withFeishuRequestTimeout(chatId, `im.message.create:${msgType}`, () => this.restClient!.im.message.create({
@@ -6794,9 +6813,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     content: string,
     replyToMessageId?: string,
     uuid?: string,
+    replyInThread?: boolean,
   ): Promise<SendResult> {
     try {
-      const res = await this.createImMessage(chatId, msgType, content, replyToMessageId, uuid);
+      const res = await this.createImMessage(chatId, msgType, content, replyToMessageId, uuid, replyInThread);
 
       const target = replyToMessageId ? `im.message.reply:${msgType}` : `im.message.create:${msgType}`;
       const apiError = feishuApiErrorFromResponse(res, target);
@@ -7106,6 +7126,52 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return !isCustomerServiceChat(config, address.chatId) || canControlCustomerService(config, userId, this.botCreatorOpenId);
   }
 
+  async onInputDelivery(msg: InboundMessage, status: 'submitted' | 'accepted' | 'queued', detail?: string): Promise<boolean> {
+    if (!this.isThreadReplyChat(msg.address.chatId)) return false;
+    // A concrete live card owns this notice. Never infer model idleness from card absence.
+    const cards = [...this.activeCards.values()].filter(card => card.chatId === msg.address.chatId && card.replyInThread);
+    if (cards.length !== 1) return false;
+    const card = cards[0]!;
+    if (!card.replyToMessageId || card.replyToMessageId === msg.messageId) return false;
+    const anchor = await this.getTopicMessage(card.replyToMessageId);
+    if (anchor.chat_id && anchor.chat_id !== msg.address.chatId) return false;
+    const rootId = anchor.root_id || anchor.message_id;
+    if (msg.threadRootMessageId === rootId || msg.replyToMessageId === rootId
+      || msg.replyToMessageId === card.messageId || (msg.threadId && msg.threadId === anchor.thread_id)) return false;
+    const delivery = detail || (status === 'accepted' ? '模型已接收补充消息' : status === 'queued' ? '补充消息已排队' : '补充消息已送入终端，接收状态待确认');
+    const host = this.site === 'lark' ? 'applink.larksuite.com' : 'applink.feishu.cn';
+    const link = `https://${host}/client/message/open?message_id=${encodeURIComponent(card.messageId)}`;
+    const result = await this.send({ address: msg.address, replyToMessageId: msg.messageId, parseMode: 'Markdown',
+      text: `${delivery}；回复继续在[当前任务话题](${link})更新。` });
+    if (!result.ok) throw new Error(result.error || '补充消息提示发送失败');
+    return true;
+  }
+
+  private isThreadReplyChat(chatId: string): boolean {
+    return this.customerServiceConfig().threadReplyChats?.includes(chatId) === true;
+  }
+
+  manageThreadReplyMode(msg: InboundMessage, args: string): string {
+    if (msg.address.chatKind !== 'group' || !/^oc_[a-zA-Z0-9]+$/.test(msg.address.chatId)) {
+      return '请在普通飞书群中使用 /thread-mode on|off|status。';
+    }
+    const action = args.trim().toLowerCase() || 'status';
+    if (!['on', 'off', 'status'].includes(action)) return '用法：/thread-mode on|off|status';
+    if (!this.isControlAuthorized(msg.address, '/thread-mode')) return '你没有此群的配置权限。';
+    const chats = new Set(this.customerServiceConfig().threadReplyChats || []);
+    if (action !== 'status') {
+      if (action === 'on') chats.add(msg.address.chatId); else chats.delete(msg.address.chatId);
+      const threadReplyChats = [...chats];
+      createConfigService({ migrate: false }).set({ kind: 'home' }, {
+        channels: [{ id: this.channelType, config: { threadReplyChats } }],
+      });
+      this.channelConfig.threadReplyChats = threadReplyChats;
+    }
+    return chats.has(msg.address.chatId)
+      ? '话题回复已开启：沿用当前群会话，新一轮卡片回复到发起消息的话题；运行中补充不会移动原卡片。'
+      : '话题回复已关闭：新一轮卡片显示在群主时间线。';
+  }
+
   manageCustomerServiceMode(msg: InboundMessage, args: string): string {
     const result = editCustomerServiceMode({ config: this.customerServiceConfig(),
       address: msg.address, args, creatorId: this.botCreatorOpenId });
@@ -7361,6 +7427,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const inbound: InboundMessage = {
       messageId: msg.message_id,
       replyToMessageId: msg.parent_id,
+      threadRootMessageId: msg.root_id,
+      threadId: msg.thread_id,
       address,
       text: text.trim(),
       timestamp,

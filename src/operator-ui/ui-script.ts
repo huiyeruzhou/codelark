@@ -1195,6 +1195,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
         if (backend && backend.backend === 'app-server') return backend.connection === 'ready'
           ? backend.activityLabel : backend.connectionLabel + ' · ' + backend.activityLabel;
         const status = binding.runtimeStatus || 'idle';
+        if (status === 'unknown') return '状态待确认';
         const queuedCount = Number(binding.queuedCount || 0);
         if (status === 'queued') {
           return queuedCount > 0 ? '排队中（' + queuedCount + '）' : '排队中';
