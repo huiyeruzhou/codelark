@@ -8,6 +8,8 @@ import { resolveCursorRuntimeConfig, resolveEffectiveRuntimeProvider } from '../
 import { migrateCursorDesktopSessionIdentities } from '../../../../bridge/session/cursor-transport.js';
 import { getSessionCursorSessionIdForProvider, getSessionRuntimeProviderIdentity, setSessionCursorIdentityUpdate } from '../../../../domain/session-runtime.js';
 import { createConfigService } from '../../../../configuration/service.js';
+import { tmuxCore } from '../../../../runtime/tmux/core.js';
+import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
 import { UiSessionApplication } from '../../../../operator-ui/application/session.js';
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
@@ -55,18 +57,71 @@ describe('Cursor ACP configuration and provider switching', () => {
   });
 
   for (const status of ['running', 'queued'] as const) {
-    it(`preserves the ${status} native task and exposes the existing stop button`, async () => {
+    it(`preserves the ${status} native task until an explicit ACP switch confirmation`, async () => {
       const f = fixture();
       f.store.updateSession(f.session.id, { runtime_status: status, queued_count: status === 'queued' ? 1 : 0 });
       const before = f.store.getSession(f.session.id)!;
       const result = await f.command('acp');
-      assert.match(result.response, /请先停止当前对话/);
-      const stop = result.richCard?.actions?.flat().find(action => parseCommandCallbackData(action.callbackData || '')?.commandText === '/stop');
-      assert.ok(stop, 'blocked provider switch must offer a working stop action');
+      assert.match(result.response, /结束并切换 ACP/);
+      const action = result.richCard?.actions?.flat().find(action => action.text === '结束并切换 ACP');
+      assert.match(parseCommandCallbackData(action?.callbackData || '')?.commandText || '', /^\/p acp --restart=/);
       assert.deepEqual(f.store.getSession(f.session.id), before);
       assert.equal(resolveCursorRuntimeConfig(before).provider, 'tmux');
     });
   }
+
+
+  for (const partial of [false, true]) it(`finishes a confirmed switch despite stale mirror state (partial config: ${partial})`, async (t) => {
+    const f = fixture();
+    const target = cursorTmuxSessionName(f.session.id);
+    f.store.updateSession(f.session.id, { runtime_status: 'running', runtime: { general: { tmuxSessionName: target } } });
+    if (partial) f.config.set({ kind: 'session', sessionId: f.session.id }, { runtime: { cursor: { provider: 'acp' } } });
+    const first = await f.command('acp');
+    const command = parseCommandCallbackData(first.richCard!.actions![0]![0]!.callbackData!)!.commandText;
+    const calls: string[] = [];
+    t.mock.method(tmuxCore, 'killSession', async (name: string) => { assert.equal(name, target); calls.push('cleanup'); return ''; });
+    const confirmed = await handleProviderCommand({ store: f.store, currentBinding: f.binding,
+      args: command.slice(3), markdown: true,
+      msg: { address: { channelType: 'feishu', chatId: f.binding.chatId }, messageId: 'confirm-switch', text: command, timestamp: Date.now() },
+      deps: { forceStopSession: async () => { calls.push('stop'); return true; } },
+    });
+    assert.match(confirmed.response, /已切换 Cursor Provider/);
+    assert.deepEqual(calls, ['stop', 'cleanup']);
+    const saved = f.store.getSession(f.session.id)!;
+    assert.equal(saved.runtime_status, 'idle');
+    assert.equal(saved.runtime?.cursor?.sessionProvider, 'acp');
+    assert.equal(saved.runtime?.cursor?.sessionId, undefined);
+    assert.equal(saved.runtime?.cursor?.previousSession?.sessionId, 'legacy-tui');
+    assert.equal(resolveEffectiveRuntimeProvider(saved, f.binding).identity, 'cursor:acp');
+    assert.match((await f.command(command.slice(3))).response, /已失效/);
+  });
+
+  it('does not commit ACP configuration or identity when the owned terminal cannot be stopped', async (t) => {
+    const f = fixture();
+    f.store.updateSession(f.session.id, { runtime_status: 'running', runtime: { general: { tmuxSessionName: cursorTmuxSessionName(f.session.id) } } });
+    const before = f.store.getSession(f.session.id)!;
+    const card = (await f.command('acp')).richCard!;
+    const command = parseCommandCallbackData(card.actions![0]![0]!.callbackData!)!.commandText;
+    t.mock.method(tmuxCore, 'killSession', async () => { throw new Error('cannot stop'); });
+    await assert.rejects(f.command(command.slice(3)), /尚未切换/);
+    assert.deepEqual(f.store.getSession(f.session.id), before);
+    assert.equal(resolveCursorRuntimeConfig(before).provider, 'tmux');
+  });
+
+  it('rejects an old switch button after a new task has started', async () => {
+    const f = fixture();
+    f.store.updateSession(f.session.id, { runtime_status: 'running' });
+    const card = (await f.command('acp')).richCard!;
+    const command = parseCommandCallbackData(card.actions![0]![0]!.callbackData!)!.commandText;
+    let stopped = false;
+    const result = await handleProviderCommand({ store: f.store, currentBinding: f.binding, args: command.slice(3), markdown: true,
+      msg: { address: { channelType: 'feishu', chatId: f.binding.chatId }, messageId: 'stale-switch', text: command, timestamp: Date.now() },
+      deps: { getActiveTask: () => ({ abortController: new AbortController() }), forceStopSession: async () => { stopped = true; return true; } },
+    });
+    assert.match(result.response, /已失效/);
+    assert.equal(stopped, false);
+    assert.equal(resolveCursorRuntimeConfig(f.store.getSession(f.session.id)).provider, 'tmux');
+  });
 
   it('lets a global ACP default affect new requests without making a legacy TUI ID resumable by ACP', () => {
     const f = fixture();

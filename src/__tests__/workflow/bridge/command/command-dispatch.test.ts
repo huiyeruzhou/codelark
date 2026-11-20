@@ -11624,20 +11624,16 @@ enabled = true
       const tmuxSession = `codex_${threadId}`;
       store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
 
-      await handleBridgeCommand(
-        adapter,
-        {
-          address,
-          text: '/tmux message should not be sent',
-          messageId: 'incoming-tmux-auto-forward-launch-failure',
-        } as any,
-        '/tmux message should not be sent',
-        deps,
-      );
+      const input = { address, text: '/tmux message should not be sent', messageId: 'incoming-tmux-auto-forward-launch-failure' } as any;
+      await assert.rejects(handleBridgeCommand(adapter, input, input.text, deps), /did not become ready after launch/);
+      assert.equal(sent.length, 0, 'auto-forward propagates failure to the host instead of reporting success');
+      // Explicit /tmux commands retain the detailed user-facing diagnostics.
+      await handleBridgeCommand(adapter, input, input.text, { ...deps, tmuxProviderAutoForward: false });
 
       assert.equal(autoForwarded, false);
-      assert.equal(sent.length, 1);
-      const responseText = sent[0]?.text || '';
+      const failures = sent.filter(message => /Codex tmux 启动失败/.test(message.text || ''));
+      assert.equal(failures.length, 1);
+      const responseText = failures[0]?.text || '';
       assert.match(responseText, /Codex tmux 启动失败/);
       assert.match(responseText, /未发送本次 tmux 输入/);
       assert.match(responseText, /原进程输出\*\*\s*```text[\s\S]*codex: command not found/);

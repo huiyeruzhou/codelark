@@ -1966,7 +1966,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
 
     return `未知 tmux 命令：${command}`;
   } catch (error) {
-    if (params.tmuxProviderAutoForward && protocolSelected) throw error;
+    if (params.tmuxProviderAutoForward) throw error;
     return formatTmuxError(error, markdown);
   }
 }

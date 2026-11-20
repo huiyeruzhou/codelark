@@ -75,7 +75,7 @@ import {
 } from './runtime-session.js';
 import * as router from '../session/channel-router.js';
 import type { SessionCommandResult } from '../session/command-use-cases/types.js';
-import { consumeTmuxRestart, requestTmuxRestart } from './tmux-restart-confirmation.js';
+import { consumeProviderTransition, requestProviderTransition } from './provider-transition-confirmation.js';
 import {
   CODEX_PROVIDER_OPTIONS_TEXT,
   CLAUDE_PROVIDER_OPTIONS_TEXT,
@@ -298,48 +298,69 @@ interface ProviderCommandOptions {
 }
 
 export async function handleProviderCommand(options: ProviderCommandOptions): Promise<SessionCommandResult> {
-  const confirmation = /^tmux --(restart|cancel-restart)=([a-f0-9-]+)$/i.exec(options.args.trim());
-  const isTmux = options.args.trim().toLowerCase() === 'tmux' || !!confirmation;
-  if (!isTmux) {
+  const confirmation = /^(tmux|acp) --(restart|cancel-restart)=([a-f0-9-]+)$/i.exec(options.args.trim());
+  const requested = confirmation?.[1]?.toLowerCase() || options.args.trim().toLowerCase();
+  const binding = options.currentBinding || router.resolve(options.msg.address);
+  const session = options.store.getSession(binding.bridgeSessionId);
+  if (!session) return { response: '当前会话不存在。' };
+  const runtime = getSessionActiveRuntime(session) || 'codex';
+  const isCursorAcp = runtime === 'cursor' && requested === 'acp';
+  if (requested !== 'tmux' && !isCursorAcp) {
     let richCard: OutboundRichCard | undefined;
     const response = await applyProviderCommand({ ...options, richCard: card => { richCard = card; } });
     return { response, richCard };
   }
-  const binding = options.currentBinding || router.resolve(options.msg.address);
-  const session = options.store.getSession(binding.bridgeSessionId);
-  if (!session) return { response: '当前会话不存在。' };
+  const provider = isCursorAcp ? 'acp' : 'tmux';
   const task = options.deps.getActiveTask?.(session.id)?.abortController;
-  const runtime = getSessionActiveRuntime(session) || 'codex';
-  if (runtime === 'cursor' && resolveCursorRuntimeConfig(session, binding).transport === 'desktop') {
+  if (provider === 'tmux' && runtime === 'cursor' && resolveCursorRuntimeConfig(session, binding).transport === 'desktop') {
     return { response: await applyProviderCommand({ ...options, args: 'tmux' }) };
   }
   if (confirmation) {
-    if (!consumeTmuxRestart(confirmation[2]!, binding, session, task)) {
-      return { response: '这个重启操作已失效，当前任务未受影响。' };
+    if (!consumeProviderTransition(confirmation[3]!, binding, session, provider, task)) {
+      return { response: provider === 'tmux' ? '这个重启操作已失效，当前任务未受影响。' : '这个切换操作已失效，当前任务未受影响。' };
     }
-    if (confirmation[1]!.toLowerCase() === 'cancel-restart') return { response: '已取消重启，当前对话保持不变。' };
+    if (confirmation[2]!.toLowerCase() === 'cancel-restart') return { response: provider === 'tmux' ? '已取消重启，当前对话保持不变。' : '已取消切换，当前对话保持不变。' };
     options.deps.cancelRuntimeWaits?.(session.id);
     options.deps.cancelQueuedSessionMessages?.(session.id);
-    if (options.deps.forceStopSession) await options.deps.forceStopSession(session.id, '用户确认 /p tmux，结束旧任务并重启当前对话。');
+    if (options.deps.forceStopSession) await options.deps.forceStopSession(session.id, `用户确认 /p ${provider}，结束旧任务并切换。`);
     else options.deps.getActiveTask?.(session.id)?.abortController.abort();
     if (options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== session.id
       || (getSessionActiveRuntime(options.store.getSession(session.id)) || 'codex') !== runtime) {
-      return { response: '当前聊天已切换会话，未重启旧对话。' };
+      return { response: '当前聊天已切换会话，未操作旧对话。' };
+    }
+    // ACP has a separate native store. Retire the bridge-owned TUI before
+    // committing the new owner; stale transcript state cannot block this choice.
+    if (isCursorAcp) {
+      const recordedTarget = session.runtime?.general?.tmuxSessionName;
+      const ownsOldTui = (session.runtime?.cursor?.sessionProvider || 'tmux') === 'tmux'
+        && session.runtime?.cursor?.transport !== 'desktop'
+        && recordedTarget === cursorTmuxSessionName(session.id);
+      if (ownsOldTui) {
+        const cleanup = await cleanupRuntimeTmuxSession({ runtime: 'cursor', sessionName: recordedTarget });
+        if (cleanup.error) throw new Error(`Cursor 原终端未能停止，尚未切换 Provider：${cleanup.error}`);
+      }
+      if (options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== session.id
+        || (getSessionActiveRuntime(options.store.getSession(session.id)) || 'codex') !== runtime
+        || (options.deps.getActiveTask?.(session.id)?.abortController && options.deps.getActiveTask?.(session.id)?.abortController !== task)) {
+        return { response: '停止期间会话已变化，未继续切换。' };
+      }
     }
   } else {
-    // A remote terminal is only a view: attaching it does not stop the shared turn.
     const shared = runtime === 'codex'
       && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id));
     const target = getProviderOwnedRuntimeTmuxTarget(session, binding);
-    if (!shared && (sessionHasActiveRuntimeTurn(options.deps, session)
-      || (target && (runtime !== 'cursor' || (await tmuxCore.hasSession(target.sessionName)).exists)))) {
-      return requestTmuxRestart(binding, session, task);
+    const changingCursor = isCursorAcp && (resolveCursorRuntimeConfig(session, binding).provider !== 'acp'
+      || (session.runtime?.cursor?.sessionProvider || 'tmux') !== 'acp');
+    if ((!isCursorAcp && !shared && (sessionHasActiveRuntimeTurn(options.deps, session)
+      || (target && (runtime !== 'cursor' || (await tmuxCore.hasSession(target.sessionName)).exists))))
+      || (changingCursor && sessionHasActiveRuntimeTurn(options.deps, session))) {
+      return requestProviderTransition(binding, session, provider, task);
     }
   }
-  return { response: await applyProviderCommand({ ...options, args: 'tmux' }) };
+  return { response: await applyProviderCommand({ ...options, args: provider }, Boolean(confirmation) && isCursorAcp) };
 }
 
-async function applyProviderCommand(options: ProviderCommandOptions): Promise<string> {
+async function applyProviderCommand(options: ProviderCommandOptions, confirmedCursorSwitch = false): Promise<string> {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) {
@@ -585,7 +606,7 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
       ? scopedConfigForRuntime(binding).config.runtime.cursor.provider : requested;
     const nativeProvider = session.runtime?.cursor?.sessionProvider || 'tmux';
     const changingProvider = nextProvider !== currentCursorConfig.provider || nextProvider !== nativeProvider;
-    if (changingProvider && sessionHasActiveRuntimeTurn(options.deps, session)) {
+    if (changingProvider && !confirmedCursorSwitch && sessionHasActiveRuntimeTurn(options.deps, session)) {
       return buildRuntimeSwitchWhileRunningResponse({
         sessionId: session.id, richCard: options.richCard, commandLabel: `/provider ${requested}`,
         runtime: 'cursor', provider: currentCursorConfig.provider, markdown: options.markdown,
@@ -594,7 +615,10 @@ async function applyProviderCommand(options: ProviderCommandOptions): Promise<st
     if (requested === 'default' || requested === 'acp') {
       if (requested === 'default') clearSessionCursorProviderToml(session.id);
       else setSessionCursorProviderToml(session.id, nextProvider);
-      options.store.updateSession(session.id, setSessionCursorProviderUpdate(session, nextProvider));
+      options.store.updateSession(session.id, {
+        ...setSessionCursorProviderUpdate(session, nextProvider),
+        ...(confirmedCursorSwitch ? { runtime_status: 'idle' as const, queued_count: 0, pending_user_input: undefined } : {}),
+      });
       scheduleMirrorSubscriptionsBestEffort(options.deps, `cursor provider ${requested}`);
       return buildCommandFields(
         requested === 'default' ? '已清除 Cursor Provider 配置覆盖' : '已切换 Cursor Provider',

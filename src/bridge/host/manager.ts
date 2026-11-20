@@ -339,7 +339,7 @@ const MIRROR_TURN_BUFFER_TIMEOUT_MS = 10 * 60_000;
 const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
 const STARTUP_NOTICE_CARD_TEMPLATE = 'turquoise';
 const BACKGROUND_INPUT_LIMIT = 64_000;
-// 保存下一次执行的配置不依赖当前任务结束；只有实际切换执行载体才进入执行队列。
+// 配置和切换命令必须立即进入控制通道；运行中是否可切换由命令的确认流程决定。
 const SESSION_SETTINGS_COMMANDS = new Set([
   '/mkdir-confirm', '/mkdir-cancel',
   '/current-config', '/current-runtime', '/cd', '/cwd', '/model', '/mode', '/yolo',
@@ -2890,9 +2890,9 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       ? parseCommandCallbackData(msg.callbackData)?.commandText
       : isPendingClearConfirmationReply(msg.address, msg.text) ? '/clear' : undefined;
   if (immediateJobCommandText) {
-    const { resolvedCommand, args } = splitInboundCommandText(immediateJobCommandText);
+    const { resolvedCommand } = splitInboundCommandText(immediateJobCommandText);
     if (SESSION_SETTINGS_COMMANDS.has(resolvedCommand)
-      || (!args && SESSION_CONFIG_BARRIER_COMMANDS.has(resolvedCommand))) {
+      || SESSION_CONFIG_BARRIER_COMMANDS.has(resolvedCommand)) {
       const binding = getBridgeContext().store.getChannelChat(msg.address.channelType, msg.address.chatId);
       return {
         laneKey: `job:settings:${binding?.bridgeSessionId || `${msg.address.channelType}:${msg.address.chatId}`}`,
@@ -2905,8 +2905,8 @@ function adapterImmediateLane(msg: InboundMessage, category: 'channel-event' | '
       };
     }
     const clear = resolvedCommand === '/clear' || resolvedCommand === '/clear-cancel';
-    if (clear || (resolvedCommand === '/provider' && args.split(/\s+/)[0]?.toLowerCase() === 'tmux')) {
-      const job = clear ? 'clear' : 'provider-tmux';
+    if (clear) {
+      const job = 'clear';
       return {
         laneKey: `job:${job}:${msg.address.channelType}:${msg.address.chatId}`,
         laneKind: 'job',

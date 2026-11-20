@@ -162,7 +162,7 @@ describe('Claude cold takeover through provider auto-forward', () => {
           const other = test.store.createSession('other', 'test', '', process.cwd());
           test.store.updateSession(other.id, { runtime: { activeRuntime: 'claude', claude: { sessionId }, general: { tmuxSessionName: `claude_${other.id}` } } });
         }
-        await test.send('do not lose or cross-bind my work');
+        await assert.rejects(test.send('do not lose or cross-bind my work'), /无法确认 Claude tmux|旧窗口仍在执行/);
         assert.equal(test.launches.length, 0);
         assert.equal(test.submitted.length, 0);
         assert.equal(test.forwarded(), 0);
@@ -172,9 +172,9 @@ describe('Claude cold takeover through provider auto-forward', () => {
 
   it('keeps a transcript-disabled window blocked on later input when no history can be recovered', async () => {
     const test = setup(`claude --resume ${sessionId}`, true, `${screen}\n⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`);
-    await test.send('first blocked message');
+    await assert.rejects(test.send('first blocked message'), /记录保存已关闭/);
     assert.equal(getRuntimeTmuxInputState('claude', sessionName).state, 'failed');
-    await test.send('still cannot save');
+    await assert.rejects(test.send('still cannot save'), /记录保存已关闭/);
     assert.equal(test.submitted.length, 0);
     assert.equal(test.launches.length, 0);
   });
@@ -205,11 +205,11 @@ describe('Claude cold takeover through provider auto-forward', () => {
   })) {
     it(`still rejects a ready existing pane with ${name} session identity`, async () => {
       const test = setup(launchCommand);
-      await test.send('must not send');
+      await assert.rejects(test.send('must not send'), /无法确认 Claude tmux|与保存的绑定/u);
       assert.ok(test.calls.includes('identity'), 'readiness must pass before checking identity');
       assert.equal(test.forwarded(), 0);
       assert.deepEqual(test.submitted, []);
-      assert.match(test.replies.join('\n'), /无法确认 Claude tmux|与保存的绑定/u);
+      assert.deepEqual(test.replies, [], 'auto-forward failure belongs to the host error handler');
     });
   }
 });

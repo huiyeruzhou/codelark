@@ -1052,7 +1052,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(_testOnly.toModelPromptText('//'), '/');
   });
 
-  it('keeps runtime switches behind conversation barriers and saves settings immediately', () => {
+  it('routes runtime switches and settings through the immediate control lane', () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -1089,8 +1089,7 @@ describe('bridge-manager resolveCommandAlias', () => {
       });
     }
 
-    for (const text of ['/p', '/provider@CodeLark ', '/runtime', '/m yolo', '/yolo', '/r 5', '/sb workspace-write', '/net on', '/model gpt-5.4', '/cd ~/work', '/require_at on']) {
-      assert.equal(_testOnly.adapterSessionLane(inbound(text) as any, 'command'), null);
+    for (const text of ['/p', '/p acp', '/provider sdk', '/provider@CodeLark ', '/runtime', '/runtime claude', '/m yolo', '/yolo', '/r 5', '/sb workspace-write', '/net on', '/model gpt-5.4', '/cd ~/work', '/require_at on']) {
       const lane = _testOnly.adapterImmediateLane(inbound(text) as any, 'command');
       assert.equal(lane?.laneKey, `job:settings:${binding.bridgeSessionId}`);
       assert.equal(lane?.waitForConversationBarrier, false);
@@ -1101,9 +1100,9 @@ describe('bridge-manager resolveCommandAlias', () => {
 
     assert.equal(_testOnly.adapterSessionLane(inbound('/provider tmux') as any, 'command'), null);
     assert.deepEqual(_testOnly.adapterImmediateLane(inbound('/provider tmux') as any, 'command'), {
-      laneKey: `job:provider-tmux:${address.channelType}:${address.chatId}`,
+      laneKey: `job:settings:${binding.bridgeSessionId}`,
       laneKind: 'job',
-      jobKind: 'command:provider-tmux',
+      jobKind: 'command:provider',
       waitForConversationBarrier: false,
       blocksConversation: false,
       serialize: true,

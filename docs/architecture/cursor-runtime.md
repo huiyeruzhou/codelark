@@ -2,7 +2,7 @@
 
 ## 目标
 
-Cursor 支持两种独立 provider：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择，运行中切换仍需先停止。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。
+Cursor 支持两种独立 provider：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择。切换命令走独立控制通道；运行中选择 ACP 会立即给出“结束并切换 ACP”按钮，确认后结束旧执行、保存旧身份并提交新配置，不必等待原任务结束后重发命令。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。
 
 Cursor 的 `tmux` provider 在 CodeLark 持有的 tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入原生会话库与 transcript JSONL，CodeLark 用原生记录恢复思考摘要和工具结果，并与 transcript 的消息、正式终态对齐，回答正文、思考摘要和工具结果不依赖终端屏幕的 ANSI/局部重绘。原生问卷的题号和输入确认使用当前终端界面。
 
@@ -17,6 +17,8 @@ Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `d
 本版原生 ACP 不支持 TUI 的原位 steer。运行中收到普通追加时，CodeLark 先请求 `session/cancel`，等待原生 prompt 确认结束，再提交新输入。确认期间收到的多条追加按到达顺序合并到下一次 prompt，保留每条消息的 Get 确认；后续卡片使用最后一条输入的回复位置，因此话题内继续留在话题，话题外输入按现有规则开新话题。每个 bridge session 只有一个执行者，取消超时或进程断开要明确报错，不能重放旧 prompt 猜测恢复。
 
 `session/request_permission` 使用现有审批卡。`cursor/ask_question` 逐题显示选项，支持单选、多选和自由文本。当前 Cursor ACP adapter 会丢弃 `freeformText`，因此只要回答包含自由文本，CodeLark 就取消问卷所在轮、等待确认，再把完整问答作为新用户消息继续同一会话；不会把文字伪装成选项 ID。问题过期、连接结束或会话改绑后，旧问题卡不再接受回答。
+
+切换按钮只适用于发卡时的绑定和活动任务；新任务开始、绑定改变或重复点击时不执行旧操作。清理原终端失败时不提交 ACP 配置和身份。只有配置改成 ACP、原生身份仍属于 tmux 的不完整切换，也通过同一确认流程修复；普通输入仍禁止将 TUI ID 交给 ACP。
 
 ACP 使用 `<Cursor配置根>/acp-sessions/<id>/store.db`，与 TUI 的 `chats/...` 分离。运行状态保存 `sessionProvider`，避免混用两个来源的 UUID。`/p` 切换保留 `previousSession` 供回退，但不会自动把旧 TUI 正文当作新消息发送。需要保留整段原生上下文的迁移必须先停止旧执行，再调用 `cloneCursorCliSessionForAcp` 将 SQLite 一致快照复制到新的 ACP UUID，验证 `session/load` 后再改绑定；源库不修改，两个进程不共用一个库。
 

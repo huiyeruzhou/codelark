@@ -15,13 +15,15 @@ async function until(check: () => boolean) {
   assert(check(), 'control operation was blocked by the old task');
 }
 
-for (const confirmation of ['text', 'button', 'tmux', 'stale-text', 'tmux-idle', 'clear-idle'] as const) it(`reset control bypasses an unfinished session job: ${confirmation}`, async (t) => {
+for (const confirmation of ['text', 'button', 'tmux', 'stale-text', 'tmux-idle', 'clear-idle', 'acp'] as const) it(`reset control bypasses an unfinished session job: ${confirmation}`, async (t) => {
   const store = initBridgeTestContext();
   const address = { channelType: 'feishu', chatId: `reset-control-${confirmation}` };
   const binding = router.createBinding(address, os.tmpdir());
   createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { codex: { provider: 'sdk' } } });
   store.updateSession(binding.bridgeSessionId, { health_status: 'running_active' });
   const tmuxCommand = confirmation.startsWith('tmux');
+  const acpCommand = confirmation === 'acp';
+  if (acpCommand) store.updateSession(binding.bridgeSessionId, { runtime_status: 'running', runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', sessionId: 'old-tui' } } });
   if (confirmation.endsWith('-idle')) {
     createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { codex: { provider: 'tmux' } } });
     store.updateSession(binding.bridgeSessionId, { runtime_status: 'idle', health_status: 'completed', runtime: { codex: { threadId: binding.bridgeSessionId }, general: { tmuxSessionName: `codex_${binding.bridgeSessionId}` } } });
@@ -52,12 +54,20 @@ for (const confirmation of ['text', 'button', 'tmux', 'stale-text', 'tmux-idle',
   const send = (text: string, messageId: string, extra: Partial<InboundMessage> = {}) => adapter.enqueueManualInboundMessage({ address, text, messageId, timestamp: Date.now(), ...extra });
   send('old task', 'old-job');
   await until(() => locks === 1);
-  send(tmuxCommand ? '/p tmux' : '/clear', 'reset-command');
+  send(acpCommand ? '/p acp' : tmuxCommand ? '/p tmux' : '/clear', 'reset-command');
   await until(() => adapter.sent.some((message) => !!message.richCard));
   const card = adapter.sent.find((message) => !!message.richCard)!.richCard!;
-  assert.match(card.actions![0]![0]!.text, tmuxCommand ? /结束并重启/ : /终止并新建/);
+  assert.match(card.actions![0]![0]!.text, acpCommand ? /结束并切换 ACP/ : tmuxCommand ? /结束并重启/ : /终止并新建/);
   assert.equal(locks, 1, 'confirmation card must appear while the old session lock is held');
   if (tmuxCommand || confirmation === 'clear-idle') return;
+  if (acpCommand) {
+    send('', 'confirm-acp', { callbackData: card.actions![0]![0]!.callbackData, callbackMessageId: 'switch-card' });
+    await until(() => adapter.sent.some(message => /已切换 Cursor Provider/.test(message.text)));
+    assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.cursor?.sessionProvider, 'acp');
+    assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.cursor?.previousSession?.sessionId, 'old-tui');
+    assert.equal(locks, 1, 'ACP switch confirmation must also bypass the old barrier');
+    return;
+  }
   if (confirmation === 'stale-text') {
     const replacement = router.createBinding(address, os.tmpdir());
     send('是', 'confirm-text');

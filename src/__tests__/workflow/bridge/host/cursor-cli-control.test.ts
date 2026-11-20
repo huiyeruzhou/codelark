@@ -140,7 +140,12 @@ for (const threadMode of [false, true]) it(`Cursor CLI ${threadMode ? 'Feishu th
   assert.equal(streams, 1, 'follow-up must reuse the original output stream');
   assert.equal(locks, 1, 'follow-up must bypass both session lock and conversation barrier');
   assert.ok(!finished.includes('first'));
+  const failedAudit: string[] = [];
+  const insertAudit = store.insertAuditLog.bind(store);
+  t.mock.method(store, 'insertAuditLog', (entry: Parameters<typeof store.insertAuditLog>[0]) => { if (entry.messageId === 'failed') failedAudit.push(entry.summary); insertAudit(entry); });
   await send('failed input', 'failed');
   await until(() => finished.includes('failed'));
   assert.ok(!adapter.reactions.includes('failed'));
+  assert.ok(!failedAudit.some(summary => summary.includes('input actions completed')),
+    'failed input must not be recorded as accepted');
 });
