@@ -4757,6 +4757,7 @@ describe('feishu-adapter structured streaming regions', () => {
   });
 
   it('updates the existing terminal status for history-driven cards when the final full-card update fails', async () => {
+    let failFinalUpdate = false;
     const cardUpdates: Array<Record<string, any>> = [];
     const elementUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
@@ -4782,7 +4783,7 @@ describe('feishu-adapter structured streaming regions', () => {
             settings: async () => ({}),
             update: async (payload: Record<string, any>) => {
               cardUpdates.push(payload);
-              return { code: 300305, msg: 'ErrMsg: element exceeds the limit;' };
+              return failFinalUpdate ? { code: 300305, msg: 'ErrMsg: element exceeds the limit;' } : {};
             },
           },
           cardElement: {
@@ -4818,7 +4819,13 @@ describe('feishu-adapter structured streaming regions', () => {
     ], 'stream-1');
     adapter.onStreamStatus('chat-1', '已运行 3秒，125k(63%) · ↑125k ↓4.6k', 'stream-1');
     adapter.onStreamStatus('chat-1', '✅ Completed · 3.0s', 'stream-1');
-    await waitForCondition(() => elementCreates.length >= 1);
+    // 必须等正文及状态真正送达；首次 create 还在进行不代表整次 flush 成功。
+    (adapter as any).enqueueCardFlush('stream-1');
+    const state = (adapter as any).activeCards.get('stream-1');
+    await waitForCondition(() => state.shadowRevision === state.desiredRevision);
+    await (adapter as any).awaitCardFlushCompletion('stream-1');
+    elementUpdates.length = 0;
+    failFinalUpdate = true;
 
     const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
 
@@ -4882,6 +4889,8 @@ describe('feishu-adapter structured streaming regions', () => {
 
     // 正文先确认送达，然后只让终态更新失败；未送达正文由恢复测试覆盖。
     (adapter as any).enqueueCardFlush('stream-1');
+    const state = (adapter as any).activeCards.get('stream-1');
+    await waitForCondition(() => state.shadowRevision === state.desiredRevision);
     await (adapter as any).awaitCardFlushCompletion('stream-1');
     failUpdates = true;
 
