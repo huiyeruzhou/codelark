@@ -618,6 +618,11 @@ function isCursorBackgroundFollowup(blocks: CursorTranscriptContentBlock[]): boo
     && /^<timestamp>[^<]+<\/timestamp>\s*<user_query>Briefly inform the user about the task result and perform any follow-up actions \(if needed\)\.<\/user_query>$/u.test(blocks[0].text?.trim() || '');
 }
 
+function isCursorInterruptedContinuation(blocks: CursorTranscriptContentBlock[]): boolean {
+  return blocks.length === 1 && blocks[0]?.type === 'text'
+    && blocks[0].text?.trim() === 'Your previous response was interrupted. Continue from where you left off.';
+}
+
 const CURSOR_INPUT_TURN_STATE_PREFIX = 'cursor-input-turn:';
 
 function stableAssistantTextSignature(turnId: string, text: string): string {
@@ -765,7 +770,8 @@ function readCursorNativeIndex(storePath: string): CursorNativeIndex | null {
     if (message.role === 'user') {
       const text = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
       const content = [{ type: 'text', text }];
-      if (isCursorMetadataOnlyUserRow(content)) continue;
+      if (isCursorMetadataOnlyUserRow(content) || isCursorCatalogUserRow(content)
+        || (turnId && isCursorInterruptedContinuation(content))) continue;
       const line = JSON.stringify({ role: 'user', message: { content } });
       const occurrence = nextCursorOccurrence(occurrences, line);
       turnId = cursorTurnId(line, occurrence, parseCursorUserTimestamp(content));
@@ -1019,6 +1025,10 @@ function parseCursorTranscriptRecordState(
     // activity. They carry no input and must not open cards or reset the
     // active turn's tool/snapshot/occurrence state. Keep non-text inputs.
     if (role === 'user' && isCursorMetadataOnlyUserRow(blocks)) continue;
+    // CLI automatic interruption recovery is part of the current input. It
+    // has no timestamp/user_query envelope; an actual user's quoted request
+    // remains a new turn. Keep pending tools and the card's completion owner.
+    if (role === 'user' && activeTurnId && isCursorInterruptedContinuation(blocks)) continue;
     const lineDigest = crypto.createHash('sha256').update(line).digest('hex').slice(0, 16);
     if (role === 'user' && isCursorCatalogUserRow(blocks)) {
       catalogRefreshed = true;

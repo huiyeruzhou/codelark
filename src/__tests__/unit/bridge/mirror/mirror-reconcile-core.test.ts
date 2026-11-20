@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { parseCursorTranscriptRecords } from '../../../../runtime/cursor/session-index.js';
+import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
+import { mirrorReadPosition } from '../../../../bridge/mirror/subscription-state.js';
 
 import { createMirrorSubscription } from '../../../../bridge/mirror/subscription-state.js';
 import {
@@ -10,6 +13,36 @@ import {
 } from '../../../../bridge/mirror/reconcile-core.js';
 
 describe('mirror-reconcile-core', () => {
+  it('delivers CLI revisions and an interrupted continuation once after a newer delivery watermark and restart', () => {
+    const row = (role: string, text: string) => JSON.stringify({ role, message: { content: [{ type: 'text', text }] } });
+    const lines = [row('user', '<timestamp>Friday, Nov 20, 2026, 5:32 AM (UTC)</timestamp>\n<user_query>继续</user_query>'), row('assistant', '正在检查')];
+    const options = { bindingId: 'b', sessionId: 's', channelType: 'feishu-default', chatId: 'chat', threadId: 'native', filePath: '/tmp/native.jsonl', lastDeliveredAt: null };
+    let subscription = createMirrorSubscription(options);
+    const source = { runtime: 'cursor' as const, readMode: 'snapshot' as const, findByThreadId: () => null,
+      readDelta: () => ({ records: parseCursorTranscriptRecords(lines.join('\n')), nextOffset: lines.length, trailingText: '', nextTurnId: null, nextSpecialCallIds: [], unknownKinds: [] }) };
+    const read = () => readMirrorDeliverableRecords(subscription, { size: lines.length, mtimeMs: lines.length, identity: 'native' }, source);
+    read(); // Attach without replaying existing history.
+    subscription = createMirrorSubscription({ ...options, lastDeliveredAt: '2026-11-20T05:58:40.000Z', readPosition: mirrorReadPosition(subscription) });
+    lines.push(row('assistant', '检查结果'));
+    const revision = read();
+    assert.equal(revision.reset, false);
+    assert.ok(revision.records.some(r => r.content?.includes('检查结果')));
+    consumeMirrorRecords(subscription, revision.records);
+    const streamKey = subscription.pendingTurn!.streamKey;
+    lines.push(row('user', 'Your previous response was interrupted. Continue from where you left off.'), row('assistant', '最终结果'), JSON.stringify({ type: 'turn_ended', status: 'success' }));
+    const completion = read();
+    assert.equal(completion.reset, false);
+    assert.equal(completion.records.at(-1)?.type, 'task_complete');
+    const turns = consumeMirrorRecords(subscription, completion.records);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0]?.status, 'completed');
+    assert.match(turns[0]!.text, /最终结果/);
+    assert.equal(turns[0]?.streamKey, streamKey, 'native automatic continuation must finish the same card');
+    assert.equal(subscription.pendingTurn, null);
+    assert.deepEqual(read().records, []);
+    subscription = createMirrorSubscription({ ...options, lastDeliveredAt: '2026-11-20T06:02:00.000Z', readPosition: mirrorReadPosition(subscription) });
+    assert.deepEqual(read().records, [], 'restart must not replay the answer');
+  });
   it('refreshes the mirror source path and resets read state only when the file changes', () => {
     const subscription = createMirrorSubscription({
       bindingId: 'binding-1',

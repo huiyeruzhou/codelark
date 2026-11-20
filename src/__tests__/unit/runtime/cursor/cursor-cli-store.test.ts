@@ -154,6 +154,20 @@ describe('Cursor native CLI progress', () => {
     assert.equal(records.filter((r) => r.type === 'tool_finished').length, 0);
   });
 
+  it('keeps native tool results aligned across interruption recovery and catalog refresh', () => {
+    const recovery = 'Your previous response was interrupted. Continue from where you left off.';
+    const catalog = '<available_subagent_types>types</available_subagent_types><dynamic_tool_catalog>tools</dynamic_tool_catalog>';
+    checkpoint([user('inspect'), assistant(call('one')), user(recovery), user(catalog), user(recovery),
+      assistant(call('two')), result('one', 'first.py'), result('two', 'second.py')]);
+    const records = parseCursorTranscriptRecords(wire([transcriptUser('inspect'), transcriptCalls(1),
+      transcriptUser(recovery), transcriptUser(catalog), transcriptUser(recovery), transcriptCalls(1),
+      { type: 'turn_ended', status: 'success' }]), store);
+    assert.equal(records.filter(r => r.type === 'task_started').length, 1);
+    assert.deepEqual(records.filter(r => r.type === 'tool_finished').map(r => r.content), ['first.py', 'second.py']);
+    assert.equal(new Set(records.filter(r => r.type === 'tool_finished').map(r => r.toolId)).size, 2);
+    assert.equal(records.at(-1)?.type, 'task_complete');
+  });
+
   it('reads accepted turns before model context, including repeated and external text, ignoring orphaned turns', () => {
     const file = path.join(root, 'accepted.db');
     const fixture = cursorNativeStore(file);

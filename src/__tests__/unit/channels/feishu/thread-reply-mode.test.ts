@@ -14,6 +14,25 @@ import { createMirrorSubscription, mirrorReplyMessageId } from '../../../../brid
 import { parseCursorTranscriptRecords } from '../../../../runtime/cursor/session-index.js';
 import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
 
+it('keeps repeated native interruption recovery in the active turn without swallowing an actual user request', () => {
+  const row = (role: string, text: string) => ({ role, message: { content: [{ type: 'text', text }] } });
+  const recovery = 'Your previous response was interrupted. Continue from where you left off.';
+  const records = parseCursorTranscriptRecords([
+    row('user', '<user_query>继续</user_query>'), row('assistant', '检查中'),
+    row('user', recovery), row('assistant', '恢复中'),
+    row('user', '<available_subagent_types>types</available_subagent_types><dynamic_tool_catalog>tools</dynamic_tool_catalog>'),
+    row('user', recovery), row('assistant', '完成'), { type: 'turn_ended', status: 'success' },
+    row('user', `<user_query>${recovery}</user_query>`), row('assistant', '独立回复'), { type: 'turn_ended', status: 'success' },
+  ].map(r => JSON.stringify(r)).join('\n'));
+  const starts = records.filter(r => r.type === 'task_started');
+  const ends = records.filter(r => r.type === 'task_complete');
+  assert.equal(starts.length, 2);
+  assert.equal(ends[0]?.turnId, starts[0]?.turnId);
+  assert.equal(ends[1]?.turnId, starts[1]?.turnId);
+  assert.notEqual(starts[0]?.turnId, starts[1]?.turnId);
+  assert.ok(records.filter(r => r.role === 'user').every(r => r.content !== recovery));
+});
+
 it('keeps Cursor background completions in the initiating topic without capturing unrelated local input', async () => {
   const row = (role: string, text: string) => ({ role, message: { content: [{ type: 'text', text }] } });
   const automatic = '<timestamp>Friday, Nov 20, 2026, 4:13 AM (UTC)</timestamp>\n\n<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>';
