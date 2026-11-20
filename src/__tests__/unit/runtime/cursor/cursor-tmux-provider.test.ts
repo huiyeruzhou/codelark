@@ -1783,6 +1783,44 @@ describe('Cursor tmux provider helpers', () => {
     }
   });
 
+  it('binds a bootstrapped empty chat instead of an older transcript in the same workspace', async () => {
+    const cwd = path.join(root, 'bootstrap-workspace');fs.mkdirSync(cwd);
+    const oldId = '11111111-1111-4111-8111-111111111111';
+    const newId = '22222222-2222-4222-8222-222222222222';
+    writeCursorSession({sessionId:oldId,cwd});
+    const core=tmuxCore as unknown as Record<string,unknown>;
+    const keys=['hasSession','ensureDetachedSession','capturePane','ensureExtendedKeys','listSessions','readPaneStartCommand'];
+    const saved=Object.fromEntries(keys.map(k=>[k,core[k]]));
+    const started=Date.now();let exists=false;
+    const sessionName=cursorTmuxSessionName('bootstrap');
+    core.hasSession=async()=>({exists,command:''});
+    core.listSessions=async()=>({sessions:[{name:sessionName,created:String(Math.floor(started/1000))}],command:''});
+    core.readPaneStartCommand=async()=> 'agent --model regression-fake --trust';
+    core.ensureDetachedSession=async()=>{
+      exists=true;const dir=path.join(configRoot,'chats',cursorWorkspaceHash(cwd),newId);fs.mkdirSync(dir,{recursive:true});
+      fs.writeFileSync(path.join(dir,'meta.json'),JSON.stringify({schemaVersion:1,cwd,createdAtMs:started,updatedAtMs:started,hasConversation:false}));
+      return{existed:false,commands:[]};
+    };
+    core.capturePane=async()=>({screen:'Agent\nContext 0%\n› ',command:''});
+    core.ensureExtendedKeys=async()=>'';
+    try{
+      const params={sessionId:'bootstrap',workingDirectory:cwd,prompt:''};
+      const boot=await ensureCursorTmuxInputSession(params);
+      assert.equal(boot.sessionId,newId);assert.equal(boot.sessionFilePath,undefined);
+      const reused=await ensureCursorTmuxInputSession(params);
+      assert.equal(reused.sessionId,newId);assert.notEqual(reused.sessionId,oldId);
+      const pinned=await ensureCursorTmuxInputSession({...params,cursorSessionId:newId});
+      assert.equal(pinned.sessionId,newId,'empty native identity survives the next input');
+      core.readPaneStartCommand=async()=>`agent --resume '${oldId}' --trust`;
+      assert.equal((await ensureCursorTmuxInputSession(params)).sessionId,oldId,'explicit resume outranks creation time');
+      core.readPaneStartCommand=async()=> 'agent --trust';
+      const other=path.join(configRoot,'chats',cursorWorkspaceHash(cwd),'33333333-3333-4333-8333-333333333333');fs.mkdirSync(other);
+      fs.writeFileSync(path.join(other,'meta.json'),JSON.stringify({schemaVersion:1,cwd,createdAtMs:started+1,updatedAtMs:started+1,hasConversation:false}));
+      await assert.rejects(ensureCursorTmuxInputSession(params),/多个新 Cursor 会话/);
+
+    }finally{Object.assign(core,saved);}
+  });
+
   it('launches one managed TUI, discovers one fixed chat, and reuses both across turns', async () => {
     const cwd = path.join(root, 'workspace');
     fs.mkdirSync(cwd, { recursive: true });

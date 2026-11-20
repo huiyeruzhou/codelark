@@ -417,13 +417,13 @@ function listCursorDesktopSessionSummaries(cwd?: string): CursorSessionFileSumma
   }
 }
 
-function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string): CursorSessionFileSummary | null {
+function summarizeCursorSessionDir(sessionDir: string, fallbackCwd?: string, includeEmpty = false): CursorSessionFileSummary | null {
   const sessionId = path.basename(sessionDir);
   const storePath = path.join(sessionDir, 'store.db');
   const meta = readCursorSessionMeta(sessionDir);
   const storeMeta = readCursorStoreMeta(storePath);
   if (!fs.existsSync(storePath) && !meta) return null;
-  if (meta?.isSubagent || meta?.hasConversation === false) return null;
+  if (meta?.isSubagent || (!includeEmpty && meta?.hasConversation === false)) return null;
   const cwd = meta?.cwd?.trim() || fallbackCwd?.trim() || undefined;
   const filePath = cwd
     ? getCursorTranscriptCandidates(sessionId, cwd).find((candidate) => fs.existsSync(candidate))
@@ -462,12 +462,12 @@ function listDirectories(root: string): string[] {
   }
 }
 
-export function listCursorSessionFileSummaries(cwd?: string, limit?: number): CursorSessionFileSummary[] {
+export function listCursorSessionFileSummaries(cwd?: string, limit?: number, options: { includeEmpty?: boolean } = {}): CursorSessionFileSummary[] {
   const workspaceDirs = cwd ? [getCursorChatsRoot(cwd)] : listDirectories(getCursorChatsRoot());
   const sessions: CursorSessionFileSummary[] = [];
   for (const workspaceDir of workspaceDirs) {
     for (const sessionDir of listDirectories(workspaceDir)) {
-      const summary = summarizeCursorSessionDir(sessionDir, cwd);
+      const summary = summarizeCursorSessionDir(sessionDir, cwd, options.includeEmpty);
       if (summary) sessions.push(summary);
     }
   }

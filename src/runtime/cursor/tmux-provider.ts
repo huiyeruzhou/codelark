@@ -464,8 +464,21 @@ function transcriptSize(summary: CursorSessionFileSummary | null | undefined): n
   }
 }
 
-function latestCursorSession(cwd: string | undefined): CursorSessionFileSummary | null {
-  return listCursorSessionFileSummaries(cwd).find((summary) => Boolean(summary.filePath)) || null;
+async function cursorSessionForPane(cwd: string | undefined, sessionName: string): Promise<CursorSessionFileSummary | null> {
+  if (!cwd) return null;
+  // An empty chat already has native identity before its first transcript.
+  // Never substitute the workspace's latest completed conversation for it.
+  const candidates = listCursorSessionFileSummaries(cwd, undefined, { includeEmpty: true })
+    .filter(summary => summary.transport === 'cli');
+  const command = await tmuxCore.readPaneStartCommand?.(`${sessionName}:0.0`) || '';
+  const resumed = /(?:^|\s)--resume\s+['"]?([a-f\d-]{36})(?:['"]?\s|['"]?$)/i.exec(command)?.[1];
+  if (resumed) return candidates.find(summary => summary.sessionId === resumed) || null;
+  const pane = (await tmuxCore.listSessions()).sessions.find(session => session.name === sessionName);
+  const createdAt = Number(pane?.created) * 1000;
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return null;
+  const fresh = candidates.filter(summary => Date.parse(summary.createdAt || '') >= createdAt);
+  if (fresh.length > 1) throw new Error('同目录出现多个新 Cursor 会话，无法确认当前窗口身份；未发送输入，请先显式绑定会话。');
+  return fresh[0] || null;
 }
 
 export interface CursorTmuxInputSession {
@@ -525,7 +538,7 @@ export async function ensureCursorTmuxInputSession(
       await waitForCursorInputReady(sessionName, targetPane, options.onReadinessProgress, params.abortController?.signal);
     }
   }
-  const discovered = known || (!params.cursorSessionId && !launched ? latestCursorSession(params.workingDirectory) : null);
+  const discovered = known || (!params.cursorSessionId ? await cursorSessionForPane(params.workingDirectory, sessionName) : null);
   transitionRuntimeTmuxInputState(
     'cursor',
     sessionName,
@@ -535,7 +548,7 @@ export async function ensureCursorTmuxInputSession(
   return {
     sessionName,
     targetPane,
-    ...(discovered?.sessionId ? { sessionId: discovered.sessionId } : {}),
+    ...(discovered?.sessionId || params.cursorSessionId ? { sessionId: discovered?.sessionId || params.cursorSessionId } : {}),
     ...(discovered?.cwd || params.workingDirectory ? { cwd: discovered?.cwd || params.workingDirectory } : {}),
     ...(discovered?.filePath ? { sessionFilePath: discovered.filePath } : {}),
     ...(discovered?.storePath ? { sessionStorePath: discovered.storePath } : {}),
