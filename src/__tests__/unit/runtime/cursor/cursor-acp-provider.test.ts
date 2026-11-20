@@ -99,53 +99,74 @@ describe('Cursor ACP direct provider', () => {
     client.end();
   };
 
-  it('resumes the same native session after a diagnostic error plus end_turn without repeating completed tools or the original input', async () => {
-    const {client,provider,sessionId}=setup();
-    client.onPrompt=(_params,index)=>{
-      if(index===1){
-        client.update({sessionUpdate:'tool_call',toolCallId:'once',kind:'execute',rawInput:{command:'side effect'}});
-        client.update({sessionUpdate:'tool_call_update',toolCallId:'once',status:'completed',rawOutput:'done'});
-        nativeError(client);
-      }else{client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'已续接完成'}});client.end();}
-    };
-    let accepted=0;
-    const events=await collect(provider.streamChat({sessionId,prompt:'original input',onInputAccepted:()=>accepted++}));
-    const prompts=client.calls.filter(call=>call.method==='session/prompt');
-    assert.equal(prompts.length,2);assert.equal(new Set(prompts.map(call=>call.params.sessionId)).size,1);
-    assert.equal(prompts[0].params.prompt[0].text,'original input');assert.match(prompts[1].params.prompt[0].text,/不要重复已完成/);
-    assert.equal(accepted,1);assert.equal(events.filter(e=>e.type==='tool_use').length,1);
-    assert.equal(events.filter(e=>e.type==='text').map(e=>e.data).join(''),'已续接完成');
-    assert.equal(events.filter(e=>e.type==='error').length,0);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'completed');
-    assert.ok(events.some(e=>e.type==='status'&&/自动续接（1\/2）/.test(e.data.reasoning||'')));
-  });
+  for (const failure of [transient, 'RetriableError: [resource_exhausted] Error']) {
+    it(`resumes after ${failure}: same native session after a diagnostic error plus end_turn without repeating completed tools or the original input`, async () => {
+      const {client,provider,sessionId}=setup();
+      client.onPrompt=(_params,index)=>{
+        if(index===1){
+          client.update({sessionUpdate:'tool_call',toolCallId:'once',kind:'execute',rawInput:{command:'side effect'}});
+          client.update({sessionUpdate:'tool_call_update',toolCallId:'once',status:'completed',rawOutput:'done'});
+          nativeError(client, failure);
+        }else{client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'已续接完成'}});client.end();}
+      };
+      let accepted=0;
+      const events=await collect(provider.streamChat({sessionId,prompt:'original input',onInputAccepted:()=>accepted++}));
+      const prompts=client.calls.filter(call=>call.method==='session/prompt');
+      assert.equal(prompts.length,2);assert.equal(new Set(prompts.map(call=>call.params.sessionId)).size,1);
+      assert.equal(prompts[0].params.prompt[0].text,'original input');assert.match(prompts[1].params.prompt[0].text,/不要重复已完成/);
+      assert.equal(accepted,1);assert.equal(events.filter(e=>e.type==='tool_use').length,1);
+      assert.equal(events.filter(e=>e.type==='text').map(e=>e.data).join(''),'已续接完成');
+      assert.equal(events.filter(e=>e.type==='error').length,0);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'completed');
+      assert.ok(events.some(e=>e.type==='status'&&/自动续接（1\/2）/.test(e.data.reasoning||'')));
+    });
 
-  it('exhausts two continuations and reports failure despite native end_turn', async () => {
-    const {client,provider,sessionId}=setup();client.onPrompt=()=>nativeError(client);
-    const events=await collect(provider.streamChat({sessionId,prompt:'original'}));
-    assert.equal(client.count,3);assert.equal(events.filter(e=>e.type==='result').length,1);
-    assert.equal(events.find(e=>e.type==='result')?.data.outcome,'failed');
-    assert.equal(events.find(e=>e.type==='error')?.data,transient);assert.equal(events.filter(e=>e.type==='text').length,0);
-  });
+    it(`exhausts two continuations for ${failure} despite native end_turn`, async () => {
+      const {client,provider,sessionId}=setup();client.onPrompt=()=>nativeError(client, failure);
+      const events=await collect(provider.streamChat({sessionId,prompt:'original'}));
+      assert.equal(client.count,3);assert.equal(events.filter(e=>e.type==='result').length,1);
+      assert.equal(events.find(e=>e.type==='result')?.data.outcome,'failed');
+      assert.equal(events.find(e=>e.type==='error')?.data,failure);assert.equal(events.filter(e=>e.type==='text').length,0);
+    });
 
-  for(const reason of ['authentication','unfinished tool']) it(`does not retry ${reason}`,async()=>{
+  }
+
+  for(const reason of ['authentication','unfinished tool','resource exhausted with unfinished tool']) it(`does not retry ${reason}`,async()=>{
     const {client,provider,sessionId}=setup();client.onPrompt=()=>{
-      if(reason==='unfinished tool')client.update({sessionUpdate:'tool_call',toolCallId:'pending',kind:'execute'});
-      nativeError(client,reason==='authentication'?'[unauthenticated] Backend rejected authentication.':transient);
+      if(reason.includes('unfinished tool'))client.update({sessionUpdate:'tool_call',toolCallId:'pending',kind:'execute'});
+      nativeError(client,reason==='authentication'?'[unauthenticated] Backend rejected authentication.':reason.startsWith('resource')?'RetriableError: [resource_exhausted] Error':transient);
     };
     const events=await collect(provider.streamChat({sessionId,prompt:'original'}));
     assert.equal(client.count,1);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'failed');
   });
 
-  it('cancels retry backoff promptly and accepts the next user input without an automatic stale continuation', async()=>{
+  for (const failure of [transient, 'RetriableError: [resource_exhausted] Error']) it(`cancels ${failure} backoff and accepts the next user input without stale continuation`, async()=>{
     const client=new FakeAcp();const sessionId=randomUUID();
     const provider=new CursorAcpProvider(undefined,{clientFactory:async()=>client,retryDelayMs:60_000});
-    client.onPrompt=()=>nativeError(client);const events:Event[]=[];
+    client.onPrompt=()=>nativeError(client, failure);const events:Event[]=[];
     const running=collect(provider.streamChat({sessionId,prompt:'old'}),e=>events.push(e));
     await until(()=>events.some(e=>e.type==='status'&&/自动续接/.test(e.data.reasoning||'')));
     assert.equal(await interruptCursorAcpSession(sessionId),true);await running;
     assert.equal(client.count,1);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'aborted');
     client.onPrompt=()=>client.end();await collect(provider.streamChat({sessionId,cursorSessionId:client.nativeId,prompt:'new'}));
     assert.deepEqual(client.calls.filter(c=>c.method==='session/prompt').map(c=>c.params.prompt[0].text),['old','new']);
+  });
+
+  it('waits 30 then 60 seconds on resource exhaustion instead of rapid retry', async t => {
+    t.mock.timers.enable({apis:['setTimeout']});
+    const client=new FakeAcp();const sessionId=randomUUID();
+    const provider=new CursorAcpProvider(undefined,{clientFactory:async()=>client});
+    client.onPrompt=()=>nativeError(client,'RetriableError: [resource_exhausted] Error');
+    const events:Event[]=[];
+    const running=collect(provider.streamChat({sessionId,prompt:'original'}),e=>events.push(e));
+    const retries=()=>events.filter(e=>e.type==='status'&&/自动续接/.test(e.data.reasoning||''));
+    await until(()=>retries().length===1);
+    assert.match(retries()[0].data.reasoning,/资源或额度受限，30 秒/);
+    t.mock.timers.tick(29_999);assert.equal(client.count,1);
+    t.mock.timers.tick(1);await until(()=>retries().length===2);
+    assert.match(retries()[1].data.reasoning,/60 秒/);
+    t.mock.timers.tick(59_999);assert.equal(client.count,2);
+    t.mock.timers.tick(1);await running;
+    assert.equal(client.count,3);assert.equal(events.find(e=>e.type==='result')?.data.outcome,'failed');
   });
 
   it('leaves quoted diagnostic examples and tool output as ordinary content', async()=>{

@@ -33,7 +33,7 @@ function fields(bytes: Uint8Array): Map<number, Buffer[]> {
 const get = (bytes: Uint8Array, no: number) => fields(bytes).get(no)?.[0] || Buffer.alloc(0);
 export interface FakeCursorAnswer { questionId: string; selectedOptionIds: string[]; freeformText: string }
 export type FakeCursorStreamEvent = { type: 'text'; text: string }
-  | { type: 'transport_error'; message: string }
+  | { type: 'transport_error'; message: string; code?: 'canceled' | 'resource_exhausted' }
   | { type: 'execute_shell'; id: string; command: string; cwd: string }
   | { type: 'tool_started' | 'tool_completed'; id: string; command: string; output?: string };
 export interface FakeCursorModel {
@@ -145,7 +145,7 @@ export async function startFakeCursorBackend(model: FakeCursorModel) {
                       if (event.type === 'transport_error') {
                         // Connect end-stream error, consumed by the real CLI.
                         await new Promise<void>(resolve => persist([...completedMessages, user], [], resolve));
-                        send(Buffer.from(JSON.stringify({ error: { code: 'canceled', message: event.message } })), 2);
+                        send(Buffer.from(JSON.stringify({ error: { code: event.code || 'canceled', message: event.message } })), 2);
                         stream.end(); return;
                       }
                       if (event.type === 'text') send(field(1, field(1, field(1, event.text))));

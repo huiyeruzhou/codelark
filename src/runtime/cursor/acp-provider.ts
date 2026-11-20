@@ -29,14 +29,16 @@ function nativeErrorChunk(text: string): string | undefined {
   return /^\n\nError: ((?:(?:RetriableError|ConnectError|Error):|\[unauthenticated\])[^\r\n]+)$/.exec(text)?.[1];
 }
 
-function retryableTransportError(message: string): boolean {
+function retryableError(message: string): 'resource_exhausted' | 'transport' | undefined {
   const detail = message.replace(/^Cursor ACP \(-?\d+\): /, '');
-  return /^RetriableError: \[(?:unavailable|deadline_exceeded)\] /.test(detail)
-    || detail === 'RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
+  if (/^RetriableError: \[resource_exhausted\] /.test(detail)) return 'resource_exhausted';
+  if (/^RetriableError: \[(?:unavailable|deadline_exceeded)\] /.test(detail)
+    || detail === 'RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)') return 'transport';
+  return undefined;
 }
 
 const RETRY_LIMIT = 2;
-const RETRY_PROMPT = '上一次请求因临时连接错误中断。请继续本会话中尚未完成的任务，先核对已保存的进度和工具结果，不要重复已完成的操作。';
+const RETRY_PROMPT = '上一次请求因临时服务错误中断。请继续本会话中尚未完成的任务，先核对已保存的进度和工具结果，不要重复已完成的操作。';
 interface Session {
   bridgeId: string;
   nativeId?: string;
@@ -498,11 +500,16 @@ export class CursorAcpProvider implements LLMProvider {
             if (failure) {
               // The old prompt has settled. Never retry an unconfirmed tool,
               // disconnected executor, or the user's cancellation.
-              if (!retryableTransportError(failure) || retries >= RETRY_LIMIT || !client.connected
+              const retryKind = retryableError(failure);
+              if (!retryKind || retries >= RETRY_LIMIT || !client.connected
                 || [...tools.values()].some(tool => !tool.complete) || waitingPermissions.size) throw new Error(failure);
               retries++;
-              const delayMs = Math.max(0, options.retryDelayMs ?? 1000) * retries;
-              emit('status', { reasoning: `Cursor 连接临时中断，${Math.ceil(delayMs / 1000)} 秒后自动续接（${retries}/${RETRY_LIMIT}）。` });
+              // ACP only exposes the native diagnostic string, without Retry-After.
+              // Capacity/quota failures need slower, bounded attempts, not a tight loop.
+              const resourceExhausted = retryKind === 'resource_exhausted';
+              const delayMs = Math.max(0, options.retryDelayMs ?? (resourceExhausted ? 30_000 : 1000)) * retries;
+              const reason = resourceExhausted ? 'Cursor 上游资源或额度受限' : 'Cursor 连接临时中断';
+              emit('status', { reasoning: `${reason}，${Math.ceil(delayMs / 1000)} 秒后自动续接（${retries}/${RETRY_LIMIT}）。` });
               await new Promise<void>(resolve => {
                 const timer = setTimeout(resolve, delayMs);
                 retryWake = () => { clearTimeout(timer); resolve(); };

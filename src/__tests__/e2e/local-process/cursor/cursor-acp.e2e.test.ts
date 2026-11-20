@@ -40,14 +40,14 @@ const realExecutable = () => process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || 
   path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
 ].find(candidate => fs.existsSync(candidate));
 
-it('real Cursor ACP recovers HTTP2 CANCEL once, exhausts bounded retries, and never repeats a completed side effect', {timeout:60_000}, async t=>{
+for (const code of ['canceled', 'resource_exhausted'] as const) it(`real Cursor ACP recovers ${code}, exhausts bounded retries, and never repeats a completed side effect`, {timeout:60_000}, async t=>{
   const executable=realExecutable();if(!executable){t.skip('real Cursor CLI not installed');return;}
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'clk-acp-retry-'));
   const marker=path.join(root,'side-effect');let failing=false;
   const backend=await startFakeCursorBackend({persistConversationSteps:true,call(prompt){
     if(prompt==='one operation'||failing)return{final:'unreachable',stream:(async function*():AsyncGenerator<FakeCursorStreamEvent>{
       if(!failing)yield{type:'execute_shell',id:'write-once',command:`printf once >> ${marker}`,cwd:root};
-      yield{type:'transport_error',message:'http/2 stream closed with error code CANCEL (0x8)'};
+      yield{type:'transport_error',code,message:code==='canceled'?'http/2 stream closed with error code CANCEL (0x8)':'Error'};
     })()};
     assert.match(prompt,/不要重复已完成/);return{final:'RECOVERED'};
   }});
@@ -64,7 +64,7 @@ it('real Cursor ACP recovers HTTP2 CANCEL once, exhausts bounded retries, and ne
     assert.equal(recovered.events.find(e=>e.type==='result')?.data.session_id,native);
     failing=true;const exhausted=observe(provider.streamChat({...params,cursorSessionId:native,prompt:'persistent outage'}));await exhausted.done;
     assert.equal(exhausted.events.find(e=>e.type==='result')?.data.outcome,'failed');
-    assert.match(exhausted.events.find(e=>e.type==='error')?.data,/RetriableError.*CANCEL/);
+    assert.match(exhausted.events.find(e=>e.type==='error')?.data,new RegExp(`RetriableError.*${code}`));
     assert.equal(text(exhausted.events),'');assert.equal(backend.prompts.length,5);
     assert.equal(fs.readFileSync(marker,'utf8'),'once');assert.deepEqual(backend.errors,[]);
   }finally{await closeCursorAcpSession(params.sessionId);await backend.close();fs.rmSync(root,{recursive:true,force:true});}
