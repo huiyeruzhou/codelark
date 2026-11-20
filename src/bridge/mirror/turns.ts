@@ -32,6 +32,7 @@ const EMPTY_GOAL_LOOP_WARNING_THRESHOLD = 3;
 
 export interface BridgeMirrorTurnState extends UnifiedTurnProgressState {
   turnId: string | null;
+  inputTurnId?: string;
   streamKey: string;
   startedAt: string;
   lastActivityAt: string;
@@ -167,8 +168,9 @@ export function ensureMirrorTurnState<TSubscription extends MirrorTurnStateHolde
 ): BridgeMirrorTurnState {
   if (!subscription.pendingTurn) {
     subscription.pendingTurn = createMirrorTurnState(subscription.sessionId, record.timestamp, record.turnId, subscription.bindingId);
-    return subscription.pendingTurn;
   }
+
+  if (record.inputTurnId) subscription.pendingTurn.inputTurnId = record.inputTurnId;
 
   if (!subscription.pendingTurn.turnId && record.turnId) {
     subscription.pendingTurn.turnId = record.turnId;
@@ -415,6 +417,7 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         }
       }
       if (subscription.pendingTurn) {
+        subscription.pendingTurn.inputTurnId = record.inputTurnId;
         hooks.onTurnStarted?.(subscription, subscription.pendingTurn);
       }
       continue;

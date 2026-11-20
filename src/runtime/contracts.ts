@@ -122,6 +122,8 @@ export interface BridgeMirrorRecord {
   userPrompt?: string;
   timestamp: string;
   turnId?: string;
+  /** Input turn that initiated a runtime-generated background continuation. */
+  inputTurnId?: string;
   /** Stable identity for content that supersedes an earlier revision in the same turn. */
   replacementKey?: string;
   toolId?: string;

@@ -4836,6 +4836,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
   it('appends terminal status only when updating the existing status element also fails', async () => {
     const elementCreates: Array<Record<string, any>> = [];
+    let failUpdates = false;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -4855,10 +4856,10 @@ describe('feishu-adapter structured streaming regions', () => {
           card: {
             create: async () => ({ data: { card_id: 'card-1' } }),
             settings: async () => ({}),
-            update: async () => ({ code: 300305, msg: 'ErrMsg: element exceeds the limit;' }),
+            update: async () => failUpdates ? { code: 300305, msg: 'ErrMsg: element exceeds the limit;' } : {},
           },
           cardElement: {
-            content: async () => ({ code: 300305, msg: 'ErrMsg: element exceeds the limit;' }),
+            content: async () => failUpdates ? { code: 300305, msg: 'ErrMsg: element exceeds the limit;' } : {},
             create: async (payload: Record<string, any>) => {
               elementCreates.push(payload);
               return {};
@@ -4878,6 +4879,11 @@ describe('feishu-adapter structured streaming regions', () => {
     adapter.onStreamHistory('chat-1', [
       { type: 'markdown' as const, role: 'assistant' as const, content: '模型输出' },
     ], 'stream-1');
+
+    // 正文先确认送达，然后只让终态更新失败；未送达正文由恢复测试覆盖。
+    (adapter as any).enqueueCardFlush('stream-1');
+    await (adapter as any).awaitCardFlushCompletion('stream-1');
+    failUpdates = true;
 
     const finalized = await adapter.onStreamEnd('chat-1', 'completed', '', 'stream-1');
 

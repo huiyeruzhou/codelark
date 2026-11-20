@@ -146,6 +146,7 @@ interface FeishuCardState {
   historyItemOffset: number;
   historyToolCallOffset: number;
   historyTextOffset?: number;
+  historyPayloadBytesLimit?: number;
   toolCallOffset: number;
   historyDriven: boolean;
   thinking: boolean;
@@ -383,6 +384,7 @@ interface StreamingCardInitialState {
   historyItemOffset: number;
   historyToolCallOffset: number;
   historyTextOffset?: number;
+  historyPayloadBytesLimit?: number;
   toolCallOffset: number;
   continuationIndex: number;
   startTime: number;
@@ -405,6 +407,7 @@ interface PendingStreamingCardCreateState {
   historyItemOffset?: number;
   historyToolCallOffset?: number;
   historyTextOffset?: number;
+  historyPayloadBytesLimit?: number;
 }
 
 interface RichCardUpdateState {
@@ -1336,6 +1339,7 @@ function buildStreamingCardRender(params: {
   historyTextOffset?: number;
   toolCallOffset?: number;
   maxComponents?: number;
+  payloadBytesLimit?: number;
   splitOnUserInput?: boolean;
 }): StreamingCardRenderResult {
   const historyItemOffset = Math.max(0, params.historyItemOffset || 0);
@@ -1358,7 +1362,7 @@ function buildStreamingCardRender(params: {
       // 为最终状态、任务标签和续接提示预留容量。
       const payload = measureStreamingCardPayload(candidate.body);
       return candidate.componentCount <= maxComponents
-        && payload.payloadBytes < STREAMING_CARD_PAYLOAD_BYTES_LIMIT - STREAMING_CARD_FOOTER_RESERVE_BYTES
+        && payload.payloadBytes < (params.payloadBytesLimit || STREAMING_CARD_PAYLOAD_BYTES_LIMIT) - STREAMING_CARD_FOOTER_RESERVE_BYTES
         && payload.markdownCount < STREAMING_CARD_MARKDOWN_COUNT_LIMIT;
     }, params.splitOnUserInput);
     return { ...render(page.items), historyItemOffset, historyToolCallOffset,
@@ -3753,6 +3757,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         historyItemOffset: initialState?.historyItemOffset,
         historyToolCallOffset: initialState?.historyToolCallOffset,
         historyTextOffset: initialState?.historyTextOffset,
+        payloadBytesLimit: initialState?.historyPayloadBytesLimit,
         toolCallOffset: initialState?.toolCallOffset,
       });
       const cardBody = render.body;
@@ -3834,6 +3839,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         historyItemOffset: render.historyItemOffset,
         historyToolCallOffset: render.historyToolCallOffset,
         historyTextOffset: render.historyTextOffset,
+        historyPayloadBytesLimit: initialState?.historyPayloadBytesLimit,
         renderedPageNext: render.next,
         renderedPageHasMore: render.hasMore,
         renderedForkSource: renderedForkSource(render),
@@ -4065,6 +4071,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       historyItemOffset: state.historyItemOffset,
       historyToolCallOffset: state.historyToolCallOffset,
       historyTextOffset: state.historyTextOffset,
+      payloadBytesLimit: state.historyPayloadBytesLimit,
       toolCallOffset: state.toolCallOffset,
       maxComponents,
     });
@@ -4185,6 +4192,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       historyItemOffset: offsets.historyItemOffset,
       historyToolCallOffset: offsets.historyToolCallOffset,
       historyTextOffset: offsets.historyTextOffset,
+      historyPayloadBytesLimit: state.historyPayloadBytesLimit,
       toolCallOffset: offsets.toolCallOffset,
       continuationIndex: state.continuationIndex + 1,
       startTime: state.startTime,
@@ -5240,22 +5248,77 @@ export class FeishuAdapter extends BaseChannelAdapter {
     let streamingModeClosed = false;
     let historyDrained = false;
     try {
-      // 批量恢复可能仍有多页。逐页确认发送，最后才写终态；失败从未完成页恢复。
-      while (state.historyDriven) {
-        const remaining = this.currentStreamingCardRender(state, state.pendingText || '',
-          state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
-        if (!remaining.hasMore && !state.renderedPageHasMore) break;
-        const previousCardId = state.cardId;
-        const previousRevision = state.shadowRevision;
-        this.enqueueCardFlush(cardKey);
-        if (!await this.awaitCardFlushCompletion(cardKey)) return false;
-        state = this.activeCards.get(cardKey)!;
-        if (state.cardId === previousCardId && (state.consecutiveFlushFailures > 0
-          || (state.shadowRevision === previousRevision && !state.renderedPageHasMore))) return false;
-      }
-      historyDrained = true;
+      let finalCardJson: string;
+      let finalRender: StreamingCardRenderResult;
+      let finalBody: Record<string, unknown>;
+      let finalComponentCount: number;
+      let elapsedMs: number;
+      // 公式出站转换会增加真实字节数。关闭流式模式前验证最终页，
+      // 超限时缩小同一分页器的预算，再排空剩余页，不能只写完成状态。
+      for (;;) {
+        historyDrained = false;
+        // 批量恢复可能仍有多页。逐页确认发送，最后才写终态；失败从未完成页恢复。
+        while (state.historyDriven) {
+          const remaining = this.currentStreamingCardRender(state, state.pendingText || '',
+            state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
+          if (!remaining.hasMore && !state.renderedPageHasMore) break;
+          const previousCardId = state.cardId;
+          const previousRevision = state.shadowRevision;
+          this.enqueueCardFlush(cardKey);
+          if (!await this.awaitCardFlushCompletion(cardKey)) return false;
+          state = this.activeCards.get(cardKey)!;
+          if (state.cardId === previousCardId && (state.consecutiveFlushFailures > 0
+            || (state.shadowRevision === previousRevision && !state.renderedPageHasMore))) return false;
+        }
+        historyDrained = true;
 
-      // Step 1: Close streaming mode
+        // 先构造并检查最终卡，避免关闭流式模式后才发现超限。
+        const statusLabels: Record<string, string> = {
+          completed: '',
+          interrupted: '⚠️ 已停止',
+          error: extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常',
+        };
+        const finalizedAtMs = Date.now();
+        elapsedMs = finalizedAtMs - state.startTime;
+        const footer = {
+          status: statusLabels[status] ?? status,
+          currentTime: formatFooterClockTime(finalizedAtMs),
+          elapsed: `已运行 ${formatFooterDuration(elapsedMs)}`,
+          lastResponse: resolveTerminalLastResponse(state),
+          context: resolveTerminalContextUsage(state),
+          lastIo: resolveTerminalLastIo(state),
+        };
+
+        const existingText = state.pendingText || '';
+        const trimmedExisting = existingText.trim();
+        const trimmedResponse = responseText.trim();
+        let finalText = trimmedResponse || trimmedExisting;
+        // Structured history already owns the answer. A terminal reason belongs
+        // in its own row; merging the answer into it would render that text twice.
+        if (!state.historyDriven && trimmedExisting && trimmedResponse && trimmedResponse !== trimmedExisting && !trimmedExisting.includes(trimmedResponse)) {
+          finalText = `${trimmedExisting}\n\n${trimmedResponse}`;
+        }
+
+        finalRender = this.currentStreamingCardRender(state, finalText,
+          state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
+        finalCardJson = await this.cardMath.json(buildFinalCardJson(finalText, state.taskItems, finalRender.tools,
+          footer, status, state.actionRows, state.chatId, state.metadata, finalRender.historyItems));
+        finalBody = JSON.parse(finalCardJson);
+        finalComponentCount = countFeishuCardComponents(finalBody);
+        if (finalComponentCount > STREAMING_CARD_COMPONENT_LIMIT
+          || describeStreamingCardPayloadPressure(measureStreamingCardPayload(finalBody))) {
+          const budget = Math.floor((state.historyPayloadBytesLimit || STREAMING_CARD_PAYLOAD_BYTES_LIMIT) * 0.75);
+          if (!state.historyDriven || budget <= STREAMING_CARD_FOOTER_RESERVE_BYTES) {
+            throw new Error('Final card exceeds payload budget');
+          }
+          state.historyPayloadBytesLimit = budget;
+          this.markStreamingDesiredDirty(state);
+          continue;
+        }
+        break;
+      }
+
+      // 最终页已满足预算，此时关闭流式模式。
       state.sequence++;
       const settingsStartedAt = Date.now();
       const settingsResult = await this.withFeishuRequestTimeout(cardKey, 'card.settings', () => cardkit.card.settings({
@@ -5269,43 +5332,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
       assertFeishuApiOk(settingsResult, 'card.settings');
       streamingModeClosed = true;
 
-      // Step 2: Build and apply final card
-      const statusLabels: Record<string, string> = {
-        completed: '',
-        interrupted: '⚠️ 已停止',
-        error: extractTerminalErrorStatus(state.pendingStatusText) || '❌ 异常',
-      };
-      const finalizedAtMs = Date.now();
-      const elapsedMs = finalizedAtMs - state.startTime;
-      const footer = {
-        status: statusLabels[status] ?? status,
-        currentTime: formatFooterClockTime(finalizedAtMs),
-        elapsed: `已运行 ${formatFooterDuration(elapsedMs)}`,
-        lastResponse: resolveTerminalLastResponse(state),
-        context: resolveTerminalContextUsage(state),
-        lastIo: resolveTerminalLastIo(state),
-      };
-
-      const existingText = state.pendingText || '';
-      const trimmedExisting = existingText.trim();
-      const trimmedResponse = responseText.trim();
-      let finalText = trimmedResponse || trimmedExisting;
-      // Structured history already owns the answer. A terminal reason belongs
-      // in its own row; merging the answer into it would render that text twice.
-      if (!state.historyDriven && trimmedExisting && trimmedResponse && trimmedResponse !== trimmedExisting && !trimmedExisting.includes(trimmedResponse)) {
-        finalText = `${trimmedExisting}\n\n${trimmedResponse}`;
-      }
-
-      const finalRender = this.currentStreamingCardRender(state, finalText,
-        state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
-      const finalCardJson = await this.cardMath.json(buildFinalCardJson(finalText, state.taskItems, finalRender.tools,
-        footer, status, state.actionRows, state.chatId, state.metadata, finalRender.historyItems));
-      const finalBody = JSON.parse(finalCardJson);
-      const finalComponentCount = countFeishuCardComponents(finalBody);
-      if (finalComponentCount > STREAMING_CARD_COMPONENT_LIMIT
-        || describeStreamingCardPayloadPressure(measureStreamingCardPayload(finalBody))) {
-        throw new Error('Final card exceeds payload budget');
-      }
       state.perf.finalPayloadBytes = Buffer.byteLength(finalCardJson, 'utf8');
       state.perf.finalComponentCount = finalComponentCount;
       recordFeishuCardPayloadPerf(state.perf, state.perf.finalPayloadBytes, finalComponentCount);
@@ -5360,6 +5386,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         console.warn('[feishu-adapter] Final card update failed because the card id is invalid; allowing message fallback:', err instanceof Error ? err.message : err);
         return false;
       }
+      // 状态修复只适用于正文已经确认送达的卡片；否则交给结构化恢复。
+      if (state.historyDriven && state.shadowRevision !== state.desiredRevision) return false;
       if (state.historyDriven) {
         const fallbackFinalizedAtMs = Date.now();
         const footerText = joinFooterParts([
@@ -5403,6 +5431,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         historyItemOffset: state.historyItemOffset,
         historyToolCallOffset: state.historyToolCallOffset,
         historyTextOffset: state.historyTextOffset,
+        historyPayloadBytesLimit: state.historyPayloadBytesLimit,
       });
       this.logStreamingCardPerfSummary(cardKey, state, status);
       this.activeCards.delete(cardKey);
@@ -6208,6 +6237,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         historyItemOffset: active.historyItemOffset,
         historyToolCallOffset: active.historyToolCallOffset,
         historyTextOffset: active.historyTextOffset,
+        historyPayloadBytesLimit: active.historyPayloadBytesLimit,
       });
     }
     if (await this.finalizeActiveCardWithoutBlocking(chatId, status, responseText, cardKey)) {
@@ -6261,10 +6291,20 @@ export class FeishuAdapter extends BaseChannelAdapter {
           statusText: status === 'completed' ? '已完成' : status === 'error' ? '❌ 异常' : '⚠️ 已停止',
           tools: [], actionRows: [], chatId, metadata: recovery.pending.metadata,
           historyItems: recovery.history, ...recovery.cursor,
+          payloadBytesLimit: recovery.pending.historyPayloadBytesLimit,
           splitOnUserInput: !recovery.pending.replyTarget?.inThread,
         });
         render.body.config = { wide_screen_mode: true };
-        const result = await this.sendStructuredMessage(chatId, 'interactive', JSON.stringify(render.body), recovery.pending.replyTarget?.messageId,
+        const json = await this.cardMath.json(JSON.stringify(render.body));
+        const body = JSON.parse(json);
+        if (countFeishuCardComponents(body) > STREAMING_CARD_COMPONENT_LIMIT
+          || describeStreamingCardPayloadPressure(measureStreamingCardPayload(body))) {
+          const budget = Math.floor((recovery.pending.historyPayloadBytesLimit || STREAMING_CARD_PAYLOAD_BYTES_LIMIT) * 0.75);
+          if (budget <= STREAMING_CARD_FOOTER_RESERVE_BYTES) throw new Error('Recovery card exceeds payload budget');
+          recovery.pending.historyPayloadBytesLimit = budget;
+          continue;
+        }
+        const result = await this.sendStructuredMessage(chatId, 'interactive', json, recovery.pending.replyTarget?.messageId,
           crypto.createHash('sha256').update(`stream-recovery:${cardKey}:${recovery.page}`).digest('hex').slice(0, 32),
           recovery.pending.replyTarget?.inThread);
         if (!result.ok) throw new Error(result.error || 'Structured stream recovery failed');

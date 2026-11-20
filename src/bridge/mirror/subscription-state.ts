@@ -226,9 +226,9 @@ export function mirrorReadPosition(subscription: BridgeMirrorSubscription): Mirr
   };
 }
 
-export function mirrorReplyMessageId(subscription: BridgeMirrorSubscription, turnId: string | null): string | undefined {
+export function mirrorReplyMessageId(subscription: BridgeMirrorSubscription, turnId: string | null, inputTurnId?: string): string | undefined {
   const target = subscription.cursor.replyTarget;
-  return target?.turnId === turnId && target.channelType === subscription.channelType
+  return target && (target.turnId === turnId || target.turnId === inputTurnId) && target.channelType === subscription.channelType
     && target.chatId === subscription.chatId ? target.messageId : undefined;
 }
 

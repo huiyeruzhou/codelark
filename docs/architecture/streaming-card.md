@@ -401,3 +401,9 @@ Codex app-server 的 mirror 卡片和权限问卷从 lifecycle 的原生 turn �
 - API 汇总：`api_top` 按 `operation` 记录 `count`、`timeout_count`、`error_count`、`total_ms`、`max_ms`、`avg_ms`。
 - payload：`max_payload_bytes`、`max_component_count`、`final_payload_bytes`、`final_component_count`。
 - finalize：`finalize_wait_ms`、`settings_ms`、`final_update_ms`、`background_finalize`。
+
+### 最终回答与原生后台补充
+
+公式会在出站时转换为图片容器，转换后的 JSON 可能比 Markdown 分页时更大。收尾必须在关闭流式模式之前检查实际终态 payload；如果超限，收紧当前页预算并用同一历史游标继续分页，直到正文完整送达。只有当前正文已确认投递时，最终全量更新失败才可仅恢复状态栏；不能用状态栏更新成功代替正文投递成功。
+
+Cursor 原生后台任务完成通知会生成独立轮次，并注入固定的 `Briefly inform the user about the task result and perform any follow-up actions (if needed).` 输入。解析器在这一明确的原生格式上保存 `inputTurnId`，补充轮次仍保持自身 ID，用于防止历史重放；输出目标按对应的真实输入轮次恢复。连续后台补充沿用同一来源，普通本地用户新输入建立自己的来源，不能自动继承旧飞书话题。

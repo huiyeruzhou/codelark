@@ -613,6 +613,13 @@ function isCursorCatalogUserRow(blocks: CursorTranscriptContentBlock[]): boolean
     && !text.replace(/<(available_subagent_types|available_subagent_models|dynamic_tool_catalog)>[\s\S]*?<\/\1>/gu, '').trim();
 }
 
+function isCursorBackgroundFollowup(blocks: CursorTranscriptContentBlock[]): boolean {
+  return blocks.length === 1 && blocks[0]?.type === 'text'
+    && /^<timestamp>[^<]+<\/timestamp>\s*<user_query>Briefly inform the user about the task result and perform any follow-up actions \(if needed\)\.<\/user_query>$/u.test(blocks[0].text?.trim() || '');
+}
+
+const CURSOR_INPUT_TURN_STATE_PREFIX = 'cursor-input-turn:';
+
 function stableAssistantTextSignature(turnId: string, text: string): string {
   const digest = crypto.createHash('sha256').update(`${turnId}\0${text}`).digest('hex').slice(0, 16);
   return `cursor:${digest}:assistant-text`;
@@ -977,6 +984,9 @@ function parseCursorTranscriptRecordState(
   const assistantSnapshots = decodeCursorAssistantSnapshots(encodedState);
   const occurrences = decodeCursorOccurrences(encodedState);
   let activeTurnId = options.currentTurnId || null;
+  let inputTurnId = encodedState.find(value => value.startsWith(CURSOR_INPUT_TURN_STATE_PREFIX))?.slice(CURSOR_INPUT_TURN_STATE_PREFIX.length) || activeTurnId;
+  const inputTurns = new Map<string, string>();
+  if (activeTurnId && inputTurnId !== activeTurnId && inputTurnId) inputTurns.set(activeTurnId, inputTurnId);
   let activeTurnTimestamp = cursorTurnTimestamp(activeTurnId);
   let catalogRefreshed = encodedState.includes(CURSOR_CATALOG_REFRESH_STATE);
   const flushNativeResults = () => {
@@ -1094,6 +1104,8 @@ function parseCursorTranscriptRecordState(
       timestamp = activeTurnTimestamp;
       const userOccurrence = nextCursorOccurrence(occurrences, `user:${lineDigest}`);
       activeTurnId = cursorTurnId(line, userOccurrence, activeTurnTimestamp);
+      if (isCursorBackgroundFollowup(blocks) && inputTurnId) inputTurns.set(activeTurnId, inputTurnId);
+      else inputTurnId = activeTurnId;
       lineOccurrence = nextCursorOccurrence(occurrences, `event:${activeTurnId}:${lineDigest}`);
       records.push({
         signature: stableLineSignature(line, entry.offset, 'turn-started', activeTurnId, lineOccurrence),
@@ -1252,6 +1264,10 @@ function parseCursorTranscriptRecordState(
     }
   }
   flushNativeResults();
+  for (const record of records) {
+    const origin = record.turnId && inputTurns.get(record.turnId);
+    if (origin) record.inputTurnId = origin;
+  }
   return {
     records,
     nextTurnId: activeTurnId,
@@ -1261,6 +1277,7 @@ function parseCursorTranscriptRecordState(
       ...encodeCursorAssistantSnapshots(assistantSnapshots),
       encodeCursorOccurrences(occurrences),
       ...(catalogRefreshed ? [CURSOR_CATALOG_REFRESH_STATE] : []),
+      ...(inputTurnId ? [CURSOR_INPUT_TURN_STATE_PREFIX + inputTurnId] : []),
     ],
   };
 }

@@ -487,7 +487,7 @@ describe('Cursor ACP direct provider', () => {
     const nativeId=clients[0]!.nativeId;
     await collect(provider.streamChat({sessionId,cursorSessionId:nativeId,prompt:'same history',workingDirectory:'/',cursorForce:true}));
     assert.equal(clients[0]!.connected,false);assert.equal(clients.length,2);
-    assert.equal(launches[1].cwd,'/');assert.ok(launches[1].args.includes('--force'));
+    assert.equal(launches[1].cwd,path.resolve('/'));assert.ok(launches[1].args.includes('--force'));
     assert.equal(clients[1]!.calls.find(call=>call.method==='session/load')?.params.sessionId,nativeId);
     const denied=await collect(provider.streamChat({sessionId,cursorSessionId:nativeId,prompt:'restrict',workingDirectory:'/',cursorForce:false}));
     assert.match(denied.find(event=>event.type==='error')?.data,/不能.*关闭.*Run Everything/);

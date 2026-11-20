@@ -2176,7 +2176,7 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
       return target?.channelType === subscription.channelType && target.chatId === subscription.chatId ? target.messageId : undefined;
     }
     const task = getState().activeTasks.get(subscription.sessionId);
-    return mirrorReplyMessageId(subscription, turn.turnId)
+    return mirrorReplyMessageId(subscription, turn.turnId, turn.inputTurnId)
       || (task?.address.channelType === subscription.channelType && task.address.chatId === subscription.chatId
         ? task.latestAcceptedMessageId || task.requestMessageId : undefined);
   },

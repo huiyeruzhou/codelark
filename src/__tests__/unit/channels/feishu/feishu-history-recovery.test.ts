@@ -3,6 +3,7 @@ import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { FeishuAdapter, _testOnly } from '../../../../channels/feishu/adapter.js';
 import { buildToolProgressBlocks } from '../../../../shared/progress/tool-rendering.js';
+import { FeishuCardMath } from '../../../../channels/feishu/math.js';
 import type { StreamingHistoryItem } from '../../../../domain/index.js';
 
 function harness() {
@@ -72,6 +73,39 @@ function history(count = 40): StreamingHistoryItem[] {
     type: 'markdown', role: 'assistant', content: `RECORD_${i}_BEGIN ${'恢复中文🙂\\"'.repeat(70)} RECORD_${i}_END`,
   }));
 }
+
+it('delivers a terminal answer whose formula images overflow the pre-conversion page budget', async () => {
+  const { adapter, cards } = harness();
+  const png = Buffer.alloc(24); png.writeUInt32BE(200, 16); png.writeUInt32BE(40, 20);
+  adapter.cardMath = new FeishuCardMath(async () => 'img_v3_' + 'a'.repeat(50), async () => png);
+  await adapter.createStreamingCard('chat', undefined, 'formula-terminal');
+  const tools: StreamingHistoryItem[] = [{ type: 'tool_panel', tools: [{
+    id: 'inspect', name: 'Shell', status: 'complete', input: '{"command":"inspect"}',
+  }] }];
+  adapter.onStreamHistory('chat', tools, 'formula-terminal');
+  await adapter.flushCardUpdate('formula-terminal');
+  const answer = 'TERMINAL_BEGIN ' + '证'.repeat(8_000)
+    + Array.from({ length: 12 }, (_, i) => `\n公式${i} \\[\\frac{a}{b}\\] 说明${i}`).join('\n') + ' TERMINAL_END';
+  adapter.onStreamHistory('chat', [...tools, { type: 'markdown', role: 'assistant', content: answer }], 'formula-terminal');
+  assert.equal(await adapter.onStreamEnd('chat', 'completed', answer, 'formula-terminal'), true);
+  const all = [...cards.values()].map(x => JSON.stringify(x)).join('\n');
+  assert.equal(all.split('TERMINAL_BEGIN').length - 1, 1);
+  assert.equal(all.split('TERMINAL_END').length - 1, 1);
+  assert.equal((all.match(/证/g) || []).length, 8_000);
+  assert.equal((all.match(/"tag":"img"/g) || []).length, 12);
+  assert.ok(cards.size > 1);
+  assert.notEqual([...cards.values()].at(-1).config.streaming_mode, true);
+});
+
+it('recovers undelivered terminal text instead of treating a status-only patch as delivery', async () => {
+  const { adapter, sent } = harness();
+  await adapter.createStreamingCard('chat', undefined, 'late-answer');
+  adapter.onStreamHistory('chat', [{ type: 'markdown', role: 'assistant', content: 'LATE_FINAL_ANSWER' }], 'late-answer');
+  adapter.restClient.cardkit.v1.card.update = async () => { throw new Error('update unavailable'); };
+  adapter.restClient.cardkit.v1.cardElement.content = async () => ({});
+  assert.equal(await adapter.onStreamEnd('chat', 'completed', 'LATE_FINAL_ANSWER', 'late-answer'), true);
+  assert.ok(sent.some(p => p.data.msg_type === 'interactive' && p.data.content.includes('LATE_FINAL_ANSWER')));
+});
 
 it('recovers a large current turn in order and drains every page before finalization', async () => {
   const { adapter, cards } = harness();

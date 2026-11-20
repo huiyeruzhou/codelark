@@ -11,6 +11,37 @@ import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils
 import * as router from '../../../../bridge/session/channel-router.js';
 import type { InboundMessage } from '../../../../domain/index.js';
 import { createMirrorSubscription, mirrorReplyMessageId } from '../../../../bridge/mirror/subscription-state.js';
+import { parseCursorTranscriptRecords } from '../../../../runtime/cursor/session-index.js';
+import { consumeMirrorRecords } from '../../../../bridge/mirror/turns.js';
+
+it('keeps Cursor background completions in the initiating topic without capturing unrelated local input', async () => {
+  const row = (role: string, text: string) => ({ role, message: { content: [{ type: 'text', text }] } });
+  const automatic = '<timestamp>Friday, Nov 20, 2026, 4:13 AM (UTC)</timestamp>\n\n<user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed).</user_query>';
+  const records = parseCursorTranscriptRecords([
+    row('user', '<user_query>检查结果</user_query>'), row('assistant', '首轮结果'),
+    { type: 'turn_ended', status: 'success' },
+    row('user', automatic), row('assistant', '后台补充结果'), { type: 'turn_ended', status: 'success' },
+    row('user', automatic), row('assistant', '再次补充'), { type: 'turn_ended', status: 'success' },
+    row('user', '独立的本地问题'), row('assistant', '独立结果'), { type: 'turn_ended', status: 'success' },
+  ].map(r => JSON.stringify(r)).join('\n'));
+  const originalTurnId = records[0]!.turnId!;
+  const sub = createMirrorSubscription({ bindingId: 'binding', sessionId: 'session', channelType: address.channelType,
+    chatId, threadId: 'native', filePath: null, lastDeliveredAt: null,
+    readPosition: { threadId: 'native', lastEventCount: 0, replyTarget: { turnId: originalTurnId, channelType: address.channelType, chatId, messageId: 'om_inside' } } });
+  const f = fixture(); const targets: Array<string | undefined> = [];
+  consumeMirrorRecords(sub, records.filter(r => r.turnId !== originalTurnId), {
+    onTurnStarted: (s, turn) => {
+      const target = mirrorReplyMessageId(s, turn.turnId, turn.inputTurnId);
+      targets.push(target);
+      f.adapter.onMirrorStreamStart(chatId, turn.streamKey, target);
+    },
+    onStreamText: (_s, turn) => f.adapter.onStreamText(chatId, turn.streamedText, turn.streamKey),
+  });
+  await Promise.all([...f.a.cardCreatePromises.values(), ...f.a.scheduledCardCreatePromises.values()]);
+  assert.deepEqual(targets, ['om_inside', 'om_inside', undefined]);
+  assert.equal(f.sent.filter(s => s.method === 'reply' && s.path.message_id === 'om_inside' && s.data.reply_in_thread).length, 2);
+  await f.adapter.stop();
+});
 
 const configPath = path.join(CODELARK_HOME, 'config.toml');
 const originalConfig = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;

@@ -92,8 +92,8 @@ describe('Cursor native CLI progress', () => {
   });
 
   it('resolves the same ACP store path for Todo restore and permission checks without accepting path traversal', () => {
-    assert.equal(cursorAcpSessionStorePath('session_1',{CURSOR_CONFIG_DIR:'/cursor-config',XDG_CONFIG_HOME:'/other'}),'/cursor-config/acp-sessions/session_1/store.db');
-    assert.equal(cursorAcpSessionStorePath('session-2',{XDG_CONFIG_HOME:'/xdg'}),'/xdg/cursor/acp-sessions/session-2/store.db');
+    assert.equal(cursorAcpSessionStorePath('session_1',{CURSOR_CONFIG_DIR:'/cursor-config',XDG_CONFIG_HOME:'/other'}),path.join('/cursor-config','acp-sessions','session_1','store.db'));
+    assert.equal(cursorAcpSessionStorePath('session-2',{XDG_CONFIG_HOME:'/xdg'}),path.join('/xdg','cursor','acp-sessions','session-2','store.db'));
     assert.equal(cursorAcpSessionStorePath('session3',{}),path.join(os.homedir(),'.cursor','acp-sessions','session3','store.db'));
     for(const id of ['', '../other','nested/session','a\\b']) assert.throws(()=>cursorAcpSessionStorePath(id,{}),/会话 ID 无效/);
   });
