@@ -45,12 +45,16 @@ describe('Cursor tmux provider helpers', () => {
   let dataRoot: string;
   let desktopUserRoot: string;
   const originalReadPaneDead = tmuxCore.readPaneDead;
+  const originalReadPaneStartCommand = tmuxCore.readPaneStartCommand;
+  const originalListSessions = tmuxCore.listSessions;
   let previousConfigRoot: string | undefined;
   let previousDataRoot: string | undefined;
   let previousDesktopUserRoot: string | undefined;
 
   beforeEach(() => {
     tmuxCore.readPaneDead = async () => false;
+    tmuxCore.readPaneStartCommand = async () => '';
+    tmuxCore.listSessions = async () => ({ sessions: [], command: '' });
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-cursor-'));
     configRoot = path.join(root, 'config');
     dataRoot = path.join(root, 'data');
@@ -65,6 +69,8 @@ describe('Cursor tmux provider helpers', () => {
 
   afterEach(() => {
     tmuxCore.readPaneDead = originalReadPaneDead;
+    tmuxCore.readPaneStartCommand = originalReadPaneStartCommand;
+    tmuxCore.listSessions = originalListSessions;
     if (previousConfigRoot === undefined) delete process.env.CURSOR_CONFIG_DIR;
     else process.env.CURSOR_CONFIG_DIR = previousConfigRoot;
     if (previousDataRoot === undefined) delete process.env.CURSOR_DATA_DIR;
