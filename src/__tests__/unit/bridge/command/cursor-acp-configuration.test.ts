@@ -108,6 +108,33 @@ describe('Cursor ACP configuration and provider switching', () => {
     assert.equal(resolveCursorRuntimeConfig(before).provider, 'tmux');
   });
 
+  it('confirms the current ACP card by command once, preserving the old native identity', async () => {
+    const f = fixture();
+    assert.match((await f.command('acp --confirm')).response, /没有待确认/);
+    f.store.updateSession(f.session.id, { runtime_status: 'running' });
+    await f.command('acp');
+    assert.match((await f.command('acp --confirm')).response, /已切换 Cursor Provider/);
+    const saved = f.store.getSession(f.session.id)!;
+    assert.equal(saved.runtime?.cursor?.sessionProvider, 'acp');
+    assert.equal(saved.runtime?.cursor?.previousSession?.sessionId, 'legacy-tui');
+    assert.match((await f.command('acp --confirm')).response, /没有待确认/);
+  });
+
+  it('does not let command confirmation stop a task started after the ACP card', async () => {
+    const f = fixture();
+    f.store.updateSession(f.session.id, { runtime_status: 'running' });
+    await f.command('acp');
+    let stopped = false;
+    const task = new AbortController();
+    const result = await handleProviderCommand({ store: f.store, currentBinding: f.binding, args: 'acp --confirm', markdown: true,
+      msg: { address: { channelType: 'feishu', chatId: f.binding.chatId }, messageId: 'command-confirm', text: '/p acp --confirm', timestamp: Date.now() },
+      deps: { getActiveTask: () => ({ abortController: task }), forceStopSession: async () => { stopped = true; return true; } },
+    });
+    assert.match(result.response, /已失效/);
+    assert.equal(stopped, false);
+    assert.equal(resolveCursorRuntimeConfig(f.store.getSession(f.session.id)).provider, 'tmux');
+  });
+
   it('rejects an old switch button after a new task has started', async () => {
     const f = fixture();
     f.store.updateSession(f.session.id, { runtime_status: 'running' });

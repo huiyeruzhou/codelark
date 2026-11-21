@@ -75,7 +75,7 @@ import {
 } from './runtime-session.js';
 import * as router from '../session/channel-router.js';
 import type { SessionCommandResult } from '../session/command-use-cases/types.js';
-import { consumeProviderTransition, requestProviderTransition } from './provider-transition-confirmation.js';
+import { consumeProviderTransition, pendingProviderTransitionId, requestProviderTransition } from './provider-transition-confirmation.js';
 import {
   CODEX_PROVIDER_OPTIONS_TEXT,
   CLAUDE_PROVIDER_OPTIONS_TEXT,
@@ -304,6 +304,11 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在。' };
   const runtime = getSessionActiveRuntime(session) || 'codex';
+  if (runtime === 'cursor' && requested === 'acp --confirm') {
+    const id = pendingProviderTransitionId(binding, session, 'acp');
+    if (!id) return { response: '没有待确认的 ACP 切换，请先执行 /p acp。' };
+    return handleProviderCommand({ ...options, args: `acp --restart=${id}` });
+  }
   const isCursorAcp = runtime === 'cursor' && requested === 'acp';
   if (requested !== 'tmux' && !isCursorAcp) {
     let richCard: OutboundRichCard | undefined;

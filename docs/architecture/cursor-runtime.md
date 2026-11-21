@@ -20,6 +20,8 @@ Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `d
 
 切换按钮只适用于发卡时的绑定和活动任务；新任务开始、绑定改变或重复点击时不执行旧操作。清理原终端失败时不提交 ACP 配置和身份。只有配置改成 ACP、原生身份仍属于 tmux 的不完整切换，也通过同一确认流程修复；普通输入仍禁止将 TUI ID 交给 ACP。
 
+通过命令行操作时，先发送 `/p acp` 创建确认，再发送 `/p acp --confirm` 确认当前聊天的这一次切换。它使用与按钮完全相同的一次性确认和任务校验，没有待确认操作或原任务已变化时不会停止任何执行。
+
 ACP 使用 `<Cursor配置根>/acp-sessions/<id>/store.db`，与 TUI 的 `chats/...` 分离。运行状态保存 `sessionProvider`，避免混用两个来源的 UUID。`/p` 切换保留 `previousSession` 供回退，但不会自动把旧 TUI 正文当作新消息发送。需要保留整段原生上下文的迁移必须先停止旧执行，再调用 `cloneCursorCliSessionForAcp` 将 SQLite 一致快照复制到新的 ACP UUID，验证 `session/load` 后再改绑定；源库不修改，两个进程不共用一个库。
 
 Bridge 持有 ACP 子进程。Bridge 停止/热更新会中断并关闭这些子进程，之后从已保存的 ACP ID 恢复上下文；不宣称热更新期间原生任务仍继续。没有完成确认的输入不会自动重发。执行模式 `cursorForce` 受原生持久化权限限制，不能把重连时省略 `--force` 描述为已经撤销旧库里的 Run Everything。

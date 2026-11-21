@@ -7,6 +7,11 @@ import { buildCommandCallbackData } from './callbacks.js';
 const confirmations = new Map<string, { bindingId: string; sessionId: string; runtime: string; provider: 'tmux' | 'acp'; task?: AbortController; createdAt: number }>();
 const ttlMs = 10 * 60_000;
 
+export function pendingProviderTransitionId(binding: ChannelChat, session: BridgeSession, provider: 'tmux' | 'acp'): string | undefined {
+  return [...confirmations].find(([, pending]) => pending.bindingId === binding.id
+    && pending.sessionId === session.id && pending.provider === provider)?.[0];
+}
+
 export function requestProviderTransition(binding: ChannelChat, session: BridgeSession, provider: 'tmux' | 'acp', task?: AbortController): SessionCommandResult {
   for (const [key, value] of confirmations) {
     if (Date.now() - value.createdAt > ttlMs || value.bindingId === binding.id) confirmations.delete(key);
