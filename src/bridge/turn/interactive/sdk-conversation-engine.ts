@@ -338,7 +338,15 @@ export async function processMessage(
       onToolEvent,
       onTaskEvent,
       onStatusNote,
-      { ...options, isCurrentTask },
+      {
+        ...options,
+        // ACP cancellation is a request, not the terminal event. Its owner must
+        // drain the remaining text/tool results until session/prompt settles.
+        // A genuinely superseded task still cannot write to the next turn.
+        isCurrentTask: cursorRuntimeConfig?.provider === 'acp'
+          ? () => options?.isCurrentTask?.() !== false
+          : isCurrentTask,
+      },
       activeRuntime,
       cursorRuntimeConfig?.provider,
     );

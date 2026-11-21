@@ -14,6 +14,11 @@ import { cloneCursorCliSessionForAcp } from '../../../../runtime/cursor/acp-migr
 import { readCursorNativeMessages } from '../../../../runtime/cursor/cli-store.js';
 import type { StreamChatParams } from '../../../../runtime/contracts.js';
 import { PendingPermissions } from '../../../../runtime/permission-gateway.js';
+import { processMessage } from '../../../../bridge/turn/interactive/sdk-conversation-engine.js';
+import { consumeSseEvents } from '../../../../runtime/sse-stream-decoder.js';
+import { normalizeReasoningEffort, normalizeSandboxMode } from '../../../../runtime/options.js';
+import { initBridgeTestContext } from '../../../helpers/bridge/test-bridge-utils.js';
+import { createConfigService } from '../../../../configuration/service.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -171,6 +176,80 @@ it('real Cursor ACP streams before persistence, cancels, preserves consecutive i
       fs.writeFileSync(path.join(root, 'evidence.json'), JSON.stringify({ executable: fs.realpathSync(executable), passed, calls, prompts: backend.prompts, errors: backend.errors, captured, replayed, modelEventTimes: backend.streamEvents, shellResults: backend.shellResults }, null, 2));
       console.error(`Cursor ACP evidence: ${root}`);
     } else fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('real Cursor ACP cancellation drains buffered text and executed tool results through the bridge', { timeout: 45_000 }, async t => {
+  const executable = realExecutable();
+  if (!executable) { t.skip('real Cursor CLI is not installed'); return; }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-acp-cancel-drain-'));
+  const checkpoint = deferred(), releaseConsumer = deferred(), consumerBlocked = deferred(), receivedTail = deferred();
+  const backend = await startFakeCursorBackend({
+    call() { return { final: '前半句，尾包已到。', beforeFinish: checkpoint.promise,
+      stream: (async function* (): AsyncGenerator<FakeCursorStreamEvent> {
+        yield { type: 'text', text: '前半句，' };
+        yield { type: 'execute_shell', id: 'cancel-tail-tool', command: 'printf CANCEL_DRAIN_TOOL', cwd: root };
+        yield { type: 'text', text: '尾包已到。' };
+      })(),
+    }; },
+  });
+  const provider = new CursorAcpProvider(undefined, {
+    executable, args: backend.args,
+    env: { ...process.env, HOME: root, USERPROFILE: root, CURSOR_CONFIG_DIR: path.join(root, 'config'), CURSOR_DATA_DIR: path.join(root, 'data'), CURSOR_API_KEY: undefined, CURSOR_AUTH_TOKEN: undefined, NODE_OPTIONS: undefined },
+    clientFactory: async options => {
+      const client = await CursorAcpClient.start(options);
+      client.onMessage(message => {
+        const update = (message.params as any)?.update;
+        if (update?.sessionUpdate === 'agent_message_chunk' && update.content?.text?.includes('尾包已到')) receivedTail.resolve();
+      });
+      return client;
+    },
+  });
+  const store = initBridgeTestContext({ llm: provider });
+  const session = store.createSession('ACP cancellation drain', 'regression-fake', undefined, root);
+  store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'acp', sessionProvider: 'acp' } } });
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'acp', force: true, model: 'regression-fake' } } });
+  const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'isolated-drain', bridgeSessionId: session.id });
+  const abort = new AbortController();
+  const previews: string[] = [], tools: unknown[][] = [];
+  let running: ReturnType<typeof processMessage> | undefined;
+  try {
+    running = processMessage(binding, '只测试取消尾包', undefined, abort.signal, undefined,
+      value => previews.push(value), (...event) => tools.push(event), undefined, undefined, undefined,
+      { isCurrentTask: () => true }, {
+        store, llm: provider, normalizeReasoningEffort, normalizeSandboxMode,
+        // Hold the consumer after the first delta, as with an asynchronous UI
+        // callback. Let real ACP queue its text/tool output before cancellation.
+        consumeSseEvents: (stream, onEvent) => consumeSseEvents(stream, async event => {
+          await onEvent(event);
+          if (event.type === 'text' && event.data === '前半句，') {
+            consumerBlocked.resolve(); await releaseConsumer.promise;
+          }
+        }),
+      });
+    const timer = setTimeout(() => { releaseConsumer.resolve(); abort.abort(); }, 25_000);
+    try {
+      await Promise.race([Promise.all([consumerBlocked.promise, receivedTail.promise]), running.then(() => { throw new Error('native prompt ended before the cancellation boundary'); })]);
+      abort.abort('codelark:cursor-acp-follow-up');
+      await interruptCursorAcpSession(session.id);
+      releaseConsumer.resolve();
+      const result = await running;
+      assert.equal(result.outcome, 'aborted');
+      assert.equal(result.hasError, false);
+      assert.equal(result.responseText, '前半句，\n\n尾包已到。');
+      assert.match(previews.at(-1)!, /尾包已到/);
+      assert.equal(tools.length, 2);
+      assert.match(JSON.stringify(tools[1]), /CANCEL_DRAIN_TOOL/);
+      const saved = store.getMessages(session.id).messages.filter(message => message.role === 'assistant');
+      assert.equal(saved.length, 1); assert.match(saved[0]!.content, /尾包已到/);
+      assert.deepEqual(backend.prompts, ['只测试取消尾包']);
+      assert.deepEqual(backend.shellResults, [{ command: 'printf CANCEL_DRAIN_TOOL', stdout: 'CANCEL_DRAIN_TOOL', stderr: '', exitCode: 0 }]);
+      assert.deepEqual(backend.errors, []);
+    } finally { clearTimeout(timer); }
+  } finally {
+    releaseConsumer.resolve(); checkpoint.resolve(); abort.abort();
+    await closeCursorAcpSession(session.id); await running?.catch(() => {}); await backend.close();
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

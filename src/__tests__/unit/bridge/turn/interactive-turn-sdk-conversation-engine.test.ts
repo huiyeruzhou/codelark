@@ -696,3 +696,52 @@ it('preserves a runtime-confirmed interrupted outcome without treating it as an 
   assert.equal(result.hasError, false);
   assert.equal(result.errorMessage, '');
 });
+
+for (const scenario of ['acp-cancel', 'acp-replaced', 'codex-cancel'] as const) {
+  it(`${scenario}: drains only the ACP owner through cancellation, without overwriting a replacement`, async () => {
+    resetBridgeTestState();
+    const store = initBridgeTestContext();
+    const session = store.createSession(scenario, 'test-model');
+    const runtime = scenario === 'codex-cancel' ? 'codex' : 'cursor';
+    store.updateSession(session.id, { runtime: { activeRuntime: runtime, cursor: { provider: 'acp', sessionProvider: 'acp' } } });
+    createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'acp' } } });
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: scenario, bridgeSessionId: session.id });
+    const abort = new AbortController();
+    let owner = true;
+    const previews: string[] = [];
+    const tools: unknown[][] = [];
+    const llm: LLMProvider = { streamChat() {
+      return new ReadableStream({ start(controller) {
+        controller.enqueue(sseEvent('text', '上半句，'));
+        controller.enqueue(sseEvent('text', '取消确认前的尾包。'));
+        controller.enqueue(sseEvent('tool_use', { id: 'last-tool', name: 'Shell', input: { command: 'pwd' } }));
+        controller.enqueue(sseEvent('tool_result', { tool_use_id: 'last-tool', content: '/test', is_error: false }));
+        controller.enqueue(sseEvent('result', { outcome: 'aborted' }));
+        controller.close();
+      } });
+    } };
+    const result = await processMessage(binding, '开始', undefined, abort.signal, undefined, text => {
+      previews.push(text);
+      if (!abort.signal.aborted) {
+        abort.abort('codelark:cursor-acp-follow-up');
+        if (scenario === 'acp-replaced') { owner = false; store.setSessionRuntimeStatus(session.id, 'running'); }
+      }
+    }, (...event) => tools.push(event), undefined, undefined, undefined,
+    { isCurrentTask: () => owner }, createTestSdkConversationRuntime(store, llm));
+    assert.equal(result.outcome, 'aborted');
+    const saved = store.getMessages(session.id).messages.filter(message => message.role === 'assistant');
+    if (scenario === 'acp-cancel') {
+      assert.equal(result.hasError, false);
+      assert.equal(result.responseText, '上半句，取消确认前的尾包。');
+      assert.match(previews.at(-1)!, /取消确认前的尾包/);
+      assert.equal(tools.length, 2);
+      assert.equal(saved.length, 1);
+      assert.match(saved[0]!.content, /取消确认前的尾包/);
+    } else {
+      assert.deepEqual(previews, ['上半句，']);
+      assert.equal(tools.length, 0);
+      assert.equal(saved.length, 0);
+      if (!owner) assert.equal(store.getSession(session.id)?.runtime_status, 'running');
+    }
+  });
+}

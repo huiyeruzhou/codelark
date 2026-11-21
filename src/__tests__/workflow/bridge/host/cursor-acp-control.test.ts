@@ -38,11 +38,20 @@ it('ACP rapid follow-ups cancel once, wait for confirmation, preserve both input
     starts: Array<{ key?: string; origin?: string }> = [];
     reactions: string[] = [];
     histories: StreamingHistoryItem[][] = [];
+    finalHistories = new Map<string, StreamingHistoryItem[]>();
+    historyByStream = new Map<string, StreamingHistoryItem[]>();
     onMessageStart(_chat: string, key?: string, origin?: string) { this.starts.push({ key, origin }); }
     supportsStructuredStreamingUi() { return true; }
+    onStreamText() {}
     hasActiveStreamingUi() { return true; }
-    onStreamHistory(_chat: string, items: StreamingHistoryItem[]) { this.histories.push(structuredClone(items)); }
-    async onStreamEnd() { return true; }
+    onStreamHistory(_chat: string, items: StreamingHistoryItem[], key?: string) {
+      this.histories.push(structuredClone(items));
+      this.historyByStream.set(key || '', structuredClone(items));
+    }
+    async onStreamEnd(_chat: string, _status: unknown, _text?: string, key?: string) {
+      this.finalHistories.set(key || '', structuredClone(this.historyByStream.get(key || '') || []));
+      return true;
+    }
     async addMessageReaction(id: string) { this.reactions.push(id); return id; }
   }
   const adapter = new Adapter();
@@ -73,6 +82,9 @@ it('ACP rapid follow-ups cancel once, wait for confirmation, preserve both input
   await delay(30);
   assert.equal(cancellations, 1);
   assert.equal(calls.length, 1, 'next prompt cannot start before backend cancellation is confirmed');
+  streams[0]!.enqueue(sseEvent('text', '取消确认前已生成的最后一句。'));
+  streams[0]!.enqueue(sseEvent('tool_use', { id: 'tail-tool', name: 'Shell', input: { command: 'pwd' } }));
+  streams[0]!.enqueue(sseEvent('tool_result', { tool_use_id: 'tail-tool', content: '/isolated', is_error: false }));
   finish(0, 'aborted');
   await until(() => calls.length === 2);
   assert.equal(calls[1]!.cursorProvider, 'acp');
@@ -84,6 +96,13 @@ it('ACP rapid follow-ups cancel once, wait for confirmation, preserve both input
   streams[1]!.enqueue(sseEvent('text', '两个要求都已接收。'));
   finish(1);
   await Promise.all(jobs);
+  const oldKey = adapter.starts[0]!.key!;
+  await until(() => adapter.finalHistories.has(oldKey));
+  assert.match(JSON.stringify(adapter.finalHistories.get(oldKey)), /取消确认前已生成的最后一句/,
+    'the interrupted card must drain received output through the native terminal response');
+  assert.doesNotMatch(JSON.stringify(adapter.finalHistories.get(oldKey)), /两个要求都已接收/);
+  assert.match(JSON.stringify(store.getMessages(session.id).messages), /取消确认前已生成的最后一句/,
+    'interrupted output remains in local history exactly once');
   assert.equal(calls.length, 2, 'both rapid follow-ups share one next prompt, without replay');
   jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, {
     ...msg('迁移后的追加', 'manual:migration-once'),
