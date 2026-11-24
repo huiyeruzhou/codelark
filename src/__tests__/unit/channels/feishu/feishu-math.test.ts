@@ -84,7 +84,7 @@ it('preserves the original Markdown node, paragraph, table and code when all for
   const math = new FeishuCardMath(async () => { throw new Error('simple math must not upload'); },
     async () => { throw new Error('simple math must not render'); });
   const source = { tag: 'markdown', element_id: 'answer', text_align: 'center', margin: '4px', text_size: 'large',
-    content: '**能量 $E=mc^2$。** 与 $x_i$ 连在原句。\n\n|变量|值|\n|---|---|\n|$x^2$|1|\n\n`$x^2$`，价格 $5 和 $10。' };
+    content: '**能量 $E=mc^2$。** 与 $x_i$ 连在原句。\n\n|变量|值|\n|---|---|\n|x²|1|\n\n`$x^2$`，价格 $5 和 $10。' };
   const original = structuredClone(source);
   assert.deepEqual(await math.element(source), { ...source,
     content: '**能量 E=mc²。** 与 xᵢ 连在原句。\n\n|变量|值|\n|---|---|\n|x²|1|\n\n`$x^2$`，价格 $5 和 $10。' });

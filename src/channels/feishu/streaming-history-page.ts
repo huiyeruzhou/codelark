@@ -1,5 +1,6 @@
 import type { StreamingHistoryItem } from '../../domain/index.js';
 import { buildToolProgressBlocks } from '../../shared/progress/tool-rendering.js';
+import { findMarkdownMathTables } from './math.js';
 
 export interface HistoryPageCursor {
   historyItemOffset: number;
@@ -73,6 +74,9 @@ export function buildHistoryPage(
       }
       const newline = textItem.content.lastIndexOf('\n', low - 1);
       if (low < textItem.content.length && newline > offset + (low - offset) / 2) low = newline + 1;
+      // Move a table that fits on its own to the next card instead of severing a cell.
+      const table = findMarkdownMathTables(textItem.content).find(t => t.start < low && low < t.end);
+      if (table && table.start > offset && fits([{ ...textItem, content: table.source }])) low = table.start;
       // 不拆开UTF-16代理对。
       if (low < textItem.content.length && /[\uD800-\uDBFF]/u.test(textItem.content[low - 1] || '')) low -= 1;
       if (low <= offset) throw new Error('Streaming card metadata leaves no room for history');

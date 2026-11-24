@@ -2,8 +2,63 @@ import { maskMarkdownCode } from '../../shared/markdown/code-mask.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { inlineMathMarkdown } from './math-inline.js';
 import { splitMathMarkdown } from './math-emphasis.js';
+import MarkdownIt from 'markdown-it';
 
 export interface MarkdownFormula { start: number; end: number; tex: string; display: boolean }
+
+export interface MarkdownMathTable {
+  start: number; end: number; source: string; rows: string[][]; align: string[];
+}
+const tableMarkdown = new MarkdownIt({ html: false, linkify: false });
+
+/** Parse block boundaries before replacing math: images cannot live in Markdown cells. */
+export function findMarkdownMathTables(source: string): MarkdownMathTable[] {
+  const formulas = findMarkdownFormulas(source);
+  if (!formulas.length || !source.includes('|')) return [];
+  let prefix = 'CLKMATH';
+  while (source.includes(prefix)) prefix += 'X';
+  let masked = source;
+  for (let i = formulas.length - 1; i >= 0; i--) {
+    const f = formulas[i]!;
+    // GFM splits pipes before inline parsing, including pipes inside TeX.
+    masked = masked.slice(0, f.start) + prefix + i + 'END' + '\n'.repeat((source.slice(f.start, f.end).match(/\n/g) || []).length) + masked.slice(f.end);
+  }
+  const restore = (text: string) => text.replace(new RegExp(`${prefix}(\\d+)END`, 'g'), (_m, n) => {
+    const f = formulas[Number(n)]!; return source.slice(f.start, f.end);
+  });
+  const lines = source.split('\n');
+  const offsets = [0];
+  for (const line of lines) offsets.push(offsets.at(-1)! + line.length + 1);
+  const tokens = tableMarkdown.parse(masked, {});
+  const tables: MarkdownMathTable[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (token.type !== 'table_open' || !token.map) continue;
+    const start = offsets[token.map[0]]!, end = Math.min(source.length, offsets[token.map[1]]!);
+    const rows: string[][] = [], align: string[] = [];
+    let row: string[] = [];
+    for (i++; i < tokens.length && tokens[i]!.type !== 'table_close'; i++) {
+      const t = tokens[i]!;
+      if (t.type === 'tr_open') row = [];
+      if (t.type === 'inline') row.push(restore(t.content));
+      if (t.type === 'th_open') align.push(t.attrGet('style')?.replace('text-align:', '') || 'left');
+      if (t.type === 'tr_close') rows.push(row);
+    }
+    if (formulas.some(f => f.start >= start && f.end <= end)) tables.push({ start, end, source: source.slice(start, end), rows, align });
+  }
+  return tables;
+}
+
+/** Keep a single table when images fail; never insert a fenced block into a cell. */
+export function tableMathFallback(source: string): string {
+  let result = source;
+  for (const f of findMarkdownFormulas(source).reverse()) {
+    const inline = inlineMathMarkdown(f.tex);
+    const literal = f.tex.replace(/\s+/gu, ' ').replace(/[&\\`*_{}[\]()#+.!|<>:-]/gu, c => `&#${c.charCodeAt(0)};`);
+    result = result.slice(0, f.start) + (inline ?? literal).replace(/\|/gu, '&#124;') + result.slice(f.end);
+  }
+  return result;
+}
 
 export function formulaInlineMarkdown(formula: MarkdownFormula): string | null {
   return formula.display ? null : inlineMathMarkdown(formula.tex);
@@ -50,15 +105,16 @@ export class FeishuCardMath {
   constructor(private readonly upload: (png: Buffer) => Promise<string>,
     private readonly render = async (tex: string, display: boolean) => (await import('./math-renderer.js')).renderMathPng(tex, display)) {}
 
-  private image(tex: string, display: boolean): Promise<FormulaImage | null> {
-    const key = `${display ? 'block' : 'inline'}:${tex}`;
+  private image(tex: string, display: boolean, table?: MarkdownMathTable): Promise<FormulaImage | null> {
+    const key = `${table ? 'table' : display ? 'block' : 'inline'}:${tex}`;
     const cached = this.images.get(key);
     if (cached && cached.expiresAt > Date.now()) return cached.promise;
     const entry: ImageCacheEntry = { promise: Promise.resolve(null), expiresAt: Infinity };
-    entry.promise = this.render(tex, display).then(async png => {
+    const render = table ? import('./math-table-renderer.js').then(m => m.renderMathTablePng(table)) : this.render(tex, display);
+    entry.promise = render.then(async png => {
       const naturalWidth = png.readUInt32BE(16) / 2;
       const naturalHeight = png.readUInt32BE(20) / 2;
-      const scale = Math.min(1, 320 / naturalWidth);
+      const scale = Math.min(1, (table ? 560 : 320) / naturalWidth);
       return { key: await this.upload(png), width: Math.round(naturalWidth * scale), height: Math.round(naturalHeight * scale) };
     }).catch(() => {
       entry.expiresAt = Date.now() + 60_000;
@@ -72,6 +128,29 @@ export class FeishuCardMath {
   async element(node: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (node.tag !== 'markdown' || typeof node.content !== 'string') return node;
     const source = node.content;
+    const tables = findMarkdownMathTables(source);
+    if (tables.length) {
+      const elements: Record<string, unknown>[] = [];
+      let offset = 0;
+      const append = async (content: string) => {
+        if (!content.trim()) return;
+        const child = await this.element({ tag: 'markdown', content, text_size: node.text_size || 'normal' });
+        if (child.tag === 'column_set') elements.push(...(child.columns as Array<{ elements: Record<string, unknown>[] }>)[0]!.elements);
+        else elements.push(child);
+      };
+      for (const table of tables) {
+        await append(source.slice(offset, table.start));
+        const image = await this.image(table.source, true, table);
+        if (image) elements.push({ tag: 'img', img_key: image.key, scale_type: 'crop_center',
+          size: `${image.width}px ${image.height}px`, preview: true,
+          alt: { tag: 'plain_text', content: `表格（${table.rows.length - 1} 行）：${table.rows[0]!.join(' / ').slice(0, 180)}` } });
+        else elements.push({ tag: 'markdown', content: tableMathFallback(table.source), text_size: node.text_size || 'normal' });
+        offset = table.end;
+      }
+      await append(source.slice(offset));
+      return { tag: 'column_set', flex_mode: 'none', ...(node.element_id ? { element_id: node.element_id } : {}),
+        columns: [{ tag: 'column', width: 'weighted', weight: 1, vertical_spacing: '4px', elements }] };
+    }
     const found = findMarkdownFormulas(source);
     if (!found.length) return node;
     let text = '', offset = 0;

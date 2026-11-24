@@ -77,3 +77,42 @@ for (const mode of ['text', 'history', 'summary'] as const) {
     } finally { await adapter.stop(); }
   });
 }
+
+for (const mode of ['text', 'history', 'summary'] as const) {
+  it(`replaces a growing ${mode} math table as one image without replaying messages`, async () => {
+    const updates: any[] = []; let messages = 0, uploads = 0;
+    const adapter = new FeishuAdapter({ id: 'table-test', provider: 'feishu', alias: 'test', enabled: true, config: { streamingEnabled: true } });
+    const a = adapter as any; a.cardFlushBaseIntervalMs = 1;
+    const ok = async () => ({ code: 0 });
+    a.restClient = {
+      cardkit: { v1: { card: { create: async () => ({ code: 0, data: { card_id: 'table-card' } }), settings: ok,
+        update: async (p: any) => { updates.push(JSON.parse(p.data.card.data)); return { code: 0 }; }, batchUpdate: ok },
+      cardElement: { create: ok, patch: ok, content: ok,
+        update: async (p: any) => { updates.push(JSON.parse(p.data.element)); return { code: 0 }; } } } },
+      im: { image: { create: async () => ({ code: 0, data: { image_key: `img_table_${++uploads}` } }) },
+        message: { create: async () => { messages++; return { code: 0, data: { message_id: 'table-message' } }; } } },
+    };
+    const update = async (content: string) => {
+      if (mode === 'text') adapter.onStreamText('table-chat', content, 'table-stream');
+      else adapter.onStreamHistory('table-chat', [{ type: 'markdown', role: mode === 'summary' ? 'thinking' : 'assistant',
+        ...(mode === 'summary' ? { variant: 'thinking_summary' as const } : {}), content }], 'table-stream');
+      await Promise.all([...a.cardCreatePromises.values(), ...a.scheduledCardCreatePromises.values()]);
+      await a.awaitCardFlushCompletion('table-stream'); a.enqueueCardFlush('table-stream'); await a.awaitCardFlushCompletion('table-stream');
+    };
+    try {
+      const header = '| 项目 | 定义 |\n|---|---|\n';
+      await update(header); assert.equal(uploads, 0);
+      const first = header + '| **一** | $\\frac{a}{b}$ |\n';
+      await update(first); assert.equal(uploads, 1);
+      const final = first + '| **二** | $\\theta^- = \\theta$ |\n';
+      await update(final); assert.equal(uploads, 2);
+      assert.equal(await adapter.onStreamEnd('table-chat', 'completed', final, 'table-stream'), true);
+      await Promise.all([...a.cardFinalizePromises.values()]);
+      const card = JSON.stringify(updates.at(-1));
+      assert.equal((card.match(/"tag":"img"/g) || []).length, 1);
+      assert.match(card, /img_table_2/); assert.doesNotMatch(card, /img_table_1|```latex/);
+      assert.equal(uploads, 2, 'finalization reuses the complete table image');
+      assert.equal(messages, 1, 'table revisions remain in the same card');
+    } finally { await adapter.stop(); }
+  });
+}
