@@ -11,6 +11,13 @@ export interface MarkdownMathTable {
 }
 const tableMarkdown = new MarkdownIt({ html: false, linkify: false });
 
+// GFM splits table cells before parsing backticks. Treat pipes in closed code
+// spans as literal text, including multi-backtick spans and already escaped pipes.
+function escapeTableCodePipes(source: string): string {
+  return source.replace(/\\[\s\S]|(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/gu, (span, ticks: string | undefined) =>
+    ticks ? span.replace(/(?<!\\)\|/gu, '\\|') : span);
+}
+
 /** Parse block boundaries before replacing math: images cannot live in Markdown cells. */
 export function findMarkdownMathTables(source: string): MarkdownMathTable[] {
   const formulas = findMarkdownFormulas(source);
@@ -29,7 +36,7 @@ export function findMarkdownMathTables(source: string): MarkdownMathTable[] {
   const lines = source.split('\n');
   const offsets = [0];
   for (const line of lines) offsets.push(offsets.at(-1)! + line.length + 1);
-  const tokens = tableMarkdown.parse(masked, {});
+  const tokens = tableMarkdown.parse(escapeTableCodePipes(masked), {});
   const tables: MarkdownMathTable[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]!;
@@ -57,7 +64,7 @@ export function tableMathFallback(source: string): string {
     const literal = f.tex.replace(/\s+/gu, ' ').replace(/[&\\`*_{}[\]()#+.!|<>:-]/gu, c => `&#${c.charCodeAt(0)};`);
     result = result.slice(0, f.start) + (inline ?? literal).replace(/\|/gu, '&#124;') + result.slice(f.end);
   }
-  return result;
+  return escapeTableCodePipes(result);
 }
 
 export function formulaInlineMarkdown(formula: MarkdownFormula): string | null {

@@ -93,3 +93,31 @@ it('counts a dense formula table as one image and moves it intact across card bo
   assert.equal((second.items[0] as any).content, table + '\n后文');
   assert.equal(second.hasMore, false);
 });
+
+it('keeps code pipes inside their cells, including bold code, header code and multi-backtick spans', () => {
+  for (const code of ['`Acc|Box = 90.9%`', '`Acc\\|Box = 90.9%`', '``Acc`|Box = 90.9%``']) {
+    const source = '| 实验 | **`Acc|Box`** | 结论 |\n|---|---|---|\n'
+      + `| $q=0.01$ | **数学能力未丢失（${code}！）** | **第三列不能丢失** |\n`;
+    const [parsed] = findMarkdownMathTables(source);
+    assert.equal(parsed.source, source);
+    assert.deepEqual(parsed.rows[0], ['实验', '**`Acc|Box`**', '结论']);
+    assert.deepEqual(parsed.rows[1], ['$q=0.01$', `**数学能力未丢失（${code.replace('\\|', '|')}！）**`, '**第三列不能丢失**']);
+    const inline = new MarkdownIt().renderInline(parsed.rows[1][1]);
+    assert.match(inline, /<strong>数学能力未丢失（<code>Acc/);
+    assert.doesNotMatch(inline, /\*\*/);
+    assert.equal(findMarkdownMathTables('```md\n' + source + '```').length, 0);
+  }
+});
+
+it('retains every column and bold span when a table containing code pipes falls back to Markdown', async () => {
+  const source = '| 实验 | 结果 | 结论 |\n|---|---|---|\n| $q=0.01$ | **能力未丢失（`Acc|Box = 90.9%`！）** | **第三列不能丢失** |\n';
+  const math = new FeishuCardMath(async () => { throw new Error('offline'); });
+  const rendered = children(await math.element({ tag: 'markdown', content: source }))[0];
+  assert.equal(rendered.tag, 'markdown');
+  const tokens = new MarkdownIt().parse(rendered.content, {});
+  const cells = tokens.filter(t => t.type === 'inline').map(t => t.content);
+  assert.deepEqual(cells.slice(3), ['q=0&#46;01', '**能力未丢失（`Acc|Box = 90.9%`！）**', '**第三列不能丢失**']);
+  const html = new MarkdownIt().render(rendered.content);
+  assert.match(html, /<strong>能力未丢失（<code>Acc\|Box = 90.9%<\/code>！）<\/strong>/);
+  assert.match(html, /<td><strong>第三列不能丢失<\/strong><\/td>/);
+});
