@@ -92,6 +92,8 @@ CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 
 CLI 原生根状态使用 protobuf，`meta[0].latestRootBlobId` 指向当前状态，`rootPromptMessagesJson`（bytes 字段 1）给出有序消息 blob 引用。CodeLark 只按这些引用读取原生 JSON 消息；不扫描孤立旧 blob 来推断工具成功。原生消息保留 `text` / `reasoning`、`tool-call.toolCallId` 与 `tool-result`，导出的 transcript 则可能合并正文和思考、丢掉工具结果。当前实现因此用原生记录恢复展示语义，仍用 transcript 的正式终态结束回合。未知或不可读的原生格式保留 transcript 路径，不伪造工具完成。`meta.json` schema v1 提供 `title`、`createdAtMs`、`updatedAtMs`、`hasConversation`、`isSubagent` 与 `cwd`，用于会话发现和列表。
 
+`/cd` 修改 Bridge 的工作目录，不能改变仍在运行的原生 CLI chat 的存储位置。直接流发送前先按已绑定的 chat UUID 找到原生 metadata、store 和 transcript；当前目录找不到时，再跨目录查同一个 UUID，绝不替换为新目录最近的其他会话。读取基线、输入回执和后续正文/终态必须使用同一份原生记录；已有 tmux 不会因 `/cd` 自动切换目录。这样既避免静默等待不存在的 transcript，也避免重新读取旧轮造成重复输出。
+
 Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 的可见会话索引位于用户数据目录：macOS 默认为 `~/Library/Application Support/Cursor/User`，Linux 默认为 `${XDG_CONFIG_HOME:-~/.config}/Cursor/User`，Windows 默认为 `%APPDATA%/Cursor/User`。CodeLark 的 `/t cursor` 会额外读取：
 
 - `globalStorage/conversation-search.db`：Desktop 可见、未归档的 conversation id、标题和活动时间；

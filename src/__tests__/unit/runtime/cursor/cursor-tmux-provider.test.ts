@@ -1094,6 +1094,50 @@ describe('Cursor tmux provider helpers', () => {
     }
   });
 
+  it('keeps reading the bound native chat after the bridge working directory changes', { timeout: 5_000 }, async () => {
+    const nativeCwd = path.join(root, 'native-workspace');
+    const requestedCwd = path.join(root, 'new-workspace');
+    fs.mkdirSync(nativeCwd); fs.mkdirSync(requestedCwd);
+    const sessionId = '66666666-6666-4666-8666-666666666667';
+    const transcript = writeCursorSession({ sessionId, cwd: nativeCwd });
+    // A newer chat in the requested workspace must never replace the bound ID.
+    writeCursorSession({ sessionId: '66666666-6666-4666-8666-666666666668', cwd: requestedCwd });
+    assert.equal(createCursorMirrorJsonlSource().findByThreadId(sessionId, requestedCwd)?.filePath, transcript,
+      'a re-created mirror subscription must retain the same native file after /cd');
+    const originals = { ...tmuxCore };
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), 2_000);
+    let submissions = 0;
+    tmuxCore.hasSession = async () => ({ exists: true, command: '' });
+    tmuxCore.capturePane = async () => ({ screen: '→ Add a follow-up', command: '' });
+    tmuxCore.ensureExtendedKeys = async () => '';
+    tmuxCore.killSession = async () => '';
+    tmuxCore.injectPromptIntoPane = async (_pane, prompt) => {
+      submissions++;
+      fs.appendFileSync(transcript, [
+        { role: 'user', message: { content: [{ type: 'text', text: prompt }] } },
+        { role: 'assistant', message: { content: [{ type: 'text', text: 'answer after cd' }] } },
+        { type: 'turn_ended', status: 'success' },
+      ].map(row => JSON.stringify(row)).join('\n') + '\n');
+      return { commands: [] };
+    };
+    try {
+      const events: Array<{ type: string; data: string }> = [];
+      for await (const chunk of streamCursorTmuxTui({
+        prompt: 'continue after cd', sessionId: 'bridge-changed-cwd', cursorSessionId: sessionId,
+        workingDirectory: requestedCwd, abortController,
+      })) for (const line of chunk.trim().split('\n')) events.push(JSON.parse(line.slice(6)));
+      assert.equal(submissions, 1);
+      assert.deepEqual(events.filter(e => e.type === 'text_snapshot').map(e => e.data), ['answer after cd']);
+      assert.equal(events.filter(e => e.type === 'result').length, 1);
+      assert.equal(events.some(e => e.type === 'error'), false);
+      assert.deepEqual(JSON.parse(events.find(e => e.type === 'result')!.data), { session_id: sessionId, cwd: nativeCwd });
+    } finally {
+      clearTimeout(timeout);
+      Object.assign(tmuxCore, originals);
+    }
+  });
+
   for (const resume of [false, true]) {
     it(`waits for delayed ${resume ? 'resumed' : 'first'} transcript output without relying on a running footer`, { timeout: 5_000 }, async () => {
       const cwd = path.join(root, 'slow-output');

@@ -31,7 +31,7 @@ class IdleAdapter extends RecordingAdapter {
   async addMessageReaction(id: string) { this.onReaction?.(id); this.reactions.push(id); return id; }
 }
 
-for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }, { redrawDelay: 0, delayedCheckpoint: false, retainedDraft: true }, { redrawDelay: 1_200, delayedCheckpoint: true, oldTerminal: true }]) it(`real Cursor confirms idle input after the editor acknowledges a delayed paste (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)}, retained draft ${Boolean(scenario.retainedDraft)}, old terminal ${Boolean(scenario.oldTerminal)})`, { timeout: 75_000 }, async (t) => {
+for (const scenario of [{ redrawDelay: 0, delayedCheckpoint: false }, { redrawDelay: 1_200, delayedCheckpoint: false }, { redrawDelay: 0, delayedCheckpoint: true }, { redrawDelay: 0, delayedCheckpoint: false, plainMultiline: true }, { redrawDelay: 0, delayedCheckpoint: false, retainedDraft: true }, { redrawDelay: 1_200, delayedCheckpoint: true, oldTerminal: true }, { redrawDelay: 0, delayedCheckpoint: false, changeDirectory: true }]) it(`real Cursor confirms idle input after the editor acknowledges a delayed paste (redraw delay ${scenario.redrawDelay}ms, delayed checkpoint ${scenario.delayedCheckpoint}, plain multiline ${Boolean(scenario.plainMultiline)}, retained draft ${Boolean(scenario.retainedDraft)}, old terminal ${Boolean(scenario.oldTerminal)}, changed directory ${Boolean(scenario.changeDirectory)})`, { timeout: 75_000 }, async (t) => {
   const { redrawDelay, delayedCheckpoint } = scenario;
   const executable = process.env.CODELARK_REAL_CURSOR_E2E_EXECUTABLE || [
     path.join(process.env.CODELARK_TEST_ORIGINAL_HOME || os.homedir(), '.local/bin/agent'),
@@ -131,6 +131,15 @@ fi\n` : '';
       return /→ Add a follow-up/.test(screen) && !/ctrl\+c to stop|Working/.test(screen);
     }, 'native editor must be idle');
     assert.ok(store.getSession(session.id)?.runtime?.cursor?.sessionId, 'second input must use the known native store');
+    const initialNativeId = store.getSession(session.id)!.runtime!.cursor!.sessionId;
+    if (scenario.changeDirectory) {
+      const newWorkspace = path.join(root, 'new-workspace');
+      fs.mkdirSync(newWorkspace);
+      adapter.enqueueManualInboundMessage(inboundMessage(address, `/cd ${newWorkspace}`, 'change-directory'));
+      await until(() => finished.includes('change-directory'), '/cd must finish before the next user input');
+      assert.ok(adapter.sent.some(message => message.text.includes('已切换工作目录') && message.text.includes(newWorkspace)));
+      assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, initialNativeId);
+    }
     if (scenario.retainedDraft) {
       await originalSend(pane, [{ type: 'literal', text: initial }], { bracketedPaste: true });
       await until(async () => (await originalCapture(pane, 80)).screen.includes('先分析当前实现'), 'retained multiline draft must be visible');
@@ -160,6 +169,8 @@ fi\n` : '';
     assert.ok(!finished.includes('steer'), 'model must still be running when receipt is confirmed');
     releaseFinal();
     await until(() => finished.includes('steer'), 'second native turn must finish');
+    if (scenario.changeDirectory) assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, initialNativeId,
+      'changing bridge cwd must preserve the native conversation identity');
     assert.deepEqual(backend.prompts.map(prompt => prompt.trim()), [initial, followup], 'retry must not duplicate either request');
     assert.equal(backend.steers.length, 0, 'an idle input starts a new turn');
     assert.ok(adapter.events.some(e => e.type === 'end' && e.status === 'completed' && e.text.includes('IDLE_DONE')));

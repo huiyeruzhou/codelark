@@ -503,6 +503,9 @@ export async function ensureCursorTmuxInputSession(
   const sessionName = cursorTmuxSessionName(params.sessionId);
   const targetPane = `${sessionName}:0.0`;
   const known = params.cursorSessionId
+    // /cd changes the bridge workspace, not the storage location of a live
+    // native chat. Resolve the bound UUID before submitting input so both the
+    // baseline and subsequent output come from that same conversation.
     ? findCursorSessionFileById(params.cursorSessionId, params.workingDirectory)
     : null;
   const inspection = await inspectRuntimeTmuxInput({
@@ -720,7 +723,7 @@ async function waitForCursorTranscript(
       }
     }
     const summary = context.sessionId
-      ? context.cwd ? null : findCursorSessionFileById(context.sessionId)
+      ? findCursorSessionFileById(context.sessionId, context.cwd)
       : listCursorSessionFileSummaries(context.cwd)
         .find((candidate) => Boolean(candidate.filePath) && !baselineSessionIds.has(candidate.sessionId));
     if (summary?.filePath) {

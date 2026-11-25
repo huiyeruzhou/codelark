@@ -506,8 +506,11 @@ export function findCursorSessionFileById(sessionId: string, cwd?: string): Curs
   if (!sessionId.trim()) return null;
   if (cwd) {
     if (isArchivedCursorSession(sessionId, cwd)) return null;
-    return listCursorSessionFileSummaries(cwd).find((session) => session.sessionId === sessionId) || null;
+    const local = listCursorSessionFileSummaries(cwd).find((session) => session.sessionId === sessionId);
+    if (local) return local;
   }
+  // A bridge /cd does not relocate an existing native chat. The UUID owns its
+  // storage identity; cwd only narrows the initial lookup for direct and mirror.
   return listCursorSessionFileSummaries().find((session) => session.sessionId === sessionId) || null;
 }
 
