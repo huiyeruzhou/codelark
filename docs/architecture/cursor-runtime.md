@@ -94,6 +94,15 @@ CLI 原生根状态使用 protobuf，`meta[0].latestRootBlobId` 指向当前状�
 
 `/cd` 修改 Bridge 的工作目录，不能改变仍在运行的原生 CLI chat 的存储位置。直接流发送前先按已绑定的 chat UUID 找到原生 metadata、store 和 transcript；当前目录找不到时，再跨目录查同一个 UUID，绝不替换为新目录最近的其他会话。读取基线、输入回执和后续正文/终态必须使用同一份原生记录；已有 tmux 不会因 `/cd` 自动切换目录。这样既避免静默等待不存在的 transcript，也避免重新读取旧轮造成重复输出。
 
+已有 CLI 会话跨目录迁移时，不能仅在新目录运行 `agent --resume <UUID> --workspace <新目录>`：当前版本按 workspace hash 找存储，这样可能建立同 UUID 的空存储。一次完整迁移必须在原生轮次结束、没有排队输入时执行：
+
+1. 对原 `store.db` 使用 SQLite backup 取得包含 WAL 的一致性快照，校验数据库完整性、metadata 和 blob 数量；保留 UUID、模型、所有历史以及 `prompt_history.json`，仅把 `meta.json.cwd` 改到目标目录。
+2. 同步迁移 transcript 及其工具事件目录。只迁数据库会让直接流失去旧轮基线，在下一次输入时再次展示旧回答。Bridge 持久化的原生 turn/signature 游标应保留。
+3. 新存储先暂存，停止确认空闲的唯一原生 writer 后再切换；旧 chat 和 transcript 退出正常枚举目录并留在备份目录，避免相同 UUID 出现两个活跃副本。切换失败必须恢复旧路径。
+4. 沿用原模型、环境和 UUID，在新目录启动 `--resume`；先确认旧历史已显示、原生底栏是新目录。隔离回归还必须让真实工具执行 `pwd`，并确认下一轮只同步新回答，不能只验证 metadata 中的路径。
+
+上述是已有会话的迁移流程，不代表 `/cd` 已自动执行迁移；普通 `/cd` 仍不能声称已经改变存活原生进程的工作目录。
+
 Cursor Desktop 的会话目录与 Cursor Agent CLI 并不完全重合。Desktop 的可见会话索引位于用户数据目录：macOS 默认为 `~/Library/Application Support/Cursor/User`，Linux 默认为 `${XDG_CONFIG_HOME:-~/.config}/Cursor/User`，Windows 默认为 `%APPDATA%/Cursor/User`。CodeLark 的 `/t cursor` 会额外读取：
 
 - `globalStorage/conversation-search.db`：Desktop 可见、未归档的 conversation id、标题和活动时间；
