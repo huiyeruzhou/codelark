@@ -376,13 +376,13 @@ describe('buildToolProgressMarkdown', () => {
 
     const markdown = buildToolProgressMarkdown(tools);
     assert.match(markdown, /```bash\ncat large\.log\n```/);
-    assert.doesNotMatch(markdown, /```text|显示 4000\/4004 字符/);
+    assert.doesNotMatch(markdown, new RegExp(`\`\`\`text|显示 ${EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT}/${EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT + 4} 字符`));
     assert.doesNotMatch(markdown, /tail/);
     assert.doesNotMatch(markdown, /raw envelope output|raw tool output|stdout fallback|stderr fallback|workdir:/);
 
     const cardJson = JSON.stringify(buildStreamingToolsElements(tools));
     assert.match(cardJson, /cat large\.log/);
-    assert.doesNotMatch(cardJson, /```text|显示 4000\/4004 字符/);
+    assert.doesNotMatch(cardJson, new RegExp(`\`\`\`text|显示 ${EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT}/${EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT + 4} 字符`));
     assert.doesNotMatch(cardJson, /tail/);
     assert.doesNotMatch(cardJson, /raw envelope output|raw tool output|stdout fallback|stderr fallback|workdir:/);
   });
@@ -1322,18 +1322,18 @@ describe('buildFinalCardJson', () => {
   });
 
   it('shares one hard character and line budget across multi-file patch blocks', () => {
-    const fileLines = (prefix: string) => Array.from(
-      { length: 100 },
-      (_, index) => `+${prefix}_${index} = "${'x'.repeat(40)}"`,
+    const fileLines = (prefix: string, count: number) => Array.from(
+      { length: count },
+      (_, index) => `+${prefix}_${index} = "${'x'.repeat(24)}"`,
     );
     const detail = buildToolCallDetailFromInput('apply_patch', [
       '*** Begin Patch',
       '*** Update File: src/first.ts',
       '@@',
-      ...fileLines('first'),
+      ...fileLines('first', 35),
       '*** Update File: src/second.ts',
       '@@',
-      ...fileLines('second'),
+      ...fileLines('second', 50),
       '*** End Patch',
     ].join('\n'));
     const markdown = renderToolCallDetailMarkdown({

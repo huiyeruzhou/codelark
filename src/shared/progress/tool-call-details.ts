@@ -6,11 +6,11 @@ import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
 import { createTextPreview, type TextPreviewOptions } from '../text-preview.js';
 
-export const TOOL_DETAIL_PREVIEW_CHAR_LIMIT = 4_000;
-export const TOOL_DETAIL_PREVIEW_LINE_LIMIT = 80;
-export const TOOL_DETAIL_PREVIEW_BYTE_LIMIT = 4_000;
-export const PATCH_DETAIL_PREVIEW_CHAR_LIMIT = 8_000;
-export const PATCH_DETAIL_PREVIEW_LINE_LIMIT = 160;
+export const TOOL_DETAIL_PREVIEW_CHAR_LIMIT = 1_200;
+export const TOOL_DETAIL_PREVIEW_LINE_LIMIT = 30;
+export const TOOL_DETAIL_PREVIEW_BYTE_LIMIT = 1_500;
+export const PATCH_DETAIL_PREVIEW_CHAR_LIMIT = 2_400;
+export const PATCH_DETAIL_PREVIEW_LINE_LIMIT = 60;
 export const EXEC_COMMAND_RENDER_OUTPUT_CHAR_LIMIT = TOOL_DETAIL_PREVIEW_CHAR_LIMIT;
 
 function sanitizeToolText(value: string): string {
@@ -744,7 +744,7 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
       typeof detail.tty === 'boolean' ? `tty: \`${String(detail.tty)}\`` : '',
     ].filter(Boolean).join('  ');
     if (meta) sections.push(meta);
-    if (detail.command) sections.push(buildFencedCodeBlock(detail.command, 'bash'));
+    if (detail.command) sections.push(renderStandardPreview(detail.command, 'bash'));
     const output = renderStandardPreview(detail.output || '', 'text');
     if (output) sections.push(output);
     return sections.join('\n\n');
@@ -844,22 +844,22 @@ export function renderToolCallDetailMarkdown(tool: ToolCallInfo): string {
         const language = /^(js|javascript|evaluate|run_code)$/iu.test(detail.tool || '')
           ? 'javascript'
           : /^(python|py)$/iu.test(detail.tool || '') ? 'python' : 'text';
-        sections.push(buildFencedCodeBlock(parameters.code, language));
+        sections.push(renderStandardPreview(parameters.code, language));
         delete parameters.code;
       }
-      if (Object.keys(parameters).length > 0) sections.push(buildFencedCodeBlock(stringifyToolValue(parameters), 'json'));
+      if (Object.keys(parameters).length > 0) sections.push(renderStandardPreview(stringifyToolValue(parameters), 'json'));
     } else if (input != null) {
-      sections.push(buildFencedCodeBlock(stringifyToolValue(input), typeof input === 'string' ? 'text' : 'json'));
+      sections.push(renderStandardPreview(stringifyToolValue(input), typeof input === 'string' ? 'text' : 'json'));
     }
-    if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
-    if (detail.errorText && detail.errorText !== detail.output) sections.push(buildFencedCodeBlock(detail.errorText, 'text'));
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    if (detail.errorText && detail.errorText !== detail.output) sections.push(renderStandardPreview(detail.errorText, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'dynamic') {
     if (detail.tool) sections.push(`tool: \`${detail.tool}\``);
-    if (detail.input != null) sections.push(buildFencedCodeBlock(stringifyToolValue(detail.input), 'json'));
-    if (detail.output) sections.push(buildFencedCodeBlock(detail.output, 'text'));
-    if (detail.errorText) sections.push(buildFencedCodeBlock(detail.errorText, 'text'));
+    if (detail.input != null) sections.push(renderStandardPreview(stringifyToolValue(detail.input), 'json'));
+    if (detail.output) sections.push(renderStandardPreview(detail.output, 'text'));
+    if (detail.errorText) sections.push(renderStandardPreview(detail.errorText, 'text'));
     return sections.join('\n\n');
   }
   if (detail.kind === 'orchestration') {

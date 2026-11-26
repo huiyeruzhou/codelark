@@ -1624,7 +1624,6 @@ function buildPanelUpdateOperations(
   if (current.tag !== 'collapsible_panel' || desired.tag !== current.tag
     || !Array.isArray(current.elements) || !Array.isArray(desired.elements)
     || current.elements.length > desired.elements.length) return null;
-  if (!patchDecoration(current, desired)) return null;
   for (let i = 0; i < desired.elements.length; i++) {
     const after = desired.elements[i];
     const before = current.elements[i];
@@ -1657,6 +1656,9 @@ function buildPanelUpdateOperations(
         element: detail, content: detail.content });
     }
   }
+  // Update the group header count only after new child panels exist, so a mid-batch rollover
+  // never freezes a source card whose header claims more tools than it rendered.
+  if (!patchDecoration(current, desired)) return null;
   if (!same(current, desired)) return null;
   if (operations.length && snapshot) operations.at(-1)!.snapshot = snapshot;
   return operations;
@@ -4351,7 +4353,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         state.renderedTasksText || EMPTY_STREAMING_TASKS,
         statusText,
         renderedTools,
-        nextTopicMessageId ? [] : state.actionRows,
+        [],
         state.chatId,
         state.metadata,
         renderedHistoryItems,

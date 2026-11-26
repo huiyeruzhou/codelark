@@ -4408,6 +4408,7 @@ describe('feishu-adapter structured streaming regions', () => {
     };
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    adapter.onStreamActions('chat-1', [[{ text: '停止', callbackData: 'clk-command:s1:%2Fstop', type: 'danger' }]], 'stream-1');
     const firstLargeGroup = `上一组 ${'a'.repeat(14_500)}`;
     const currentLargeGroup = `当前组 ${'b'.repeat(14_500)}`;
     adapter.onStreamHistory('chat-1', [{
@@ -4415,7 +4416,7 @@ describe('feishu-adapter structured streaming regions', () => {
       role: 'assistant' as const,
       content: firstLargeGroup,
     }], 'stream-1');
-    await waitForCondition(() => elementUpdates.length >= 1);
+    await waitForCondition(() => elementUpdates.length >= 1 || cardUpdates.length >= 1);
 
     adapter.onStreamHistory('chat-1', [{
       type: 'markdown' as const,
@@ -4429,18 +4430,20 @@ describe('feishu-adapter structured streaming regions', () => {
     await waitForCondition(() => createdCards.length >= 2, 1000);
 
     assert.equal(replyCalls.length, 2);
-    assert.equal(cardUpdates.length, 1);
+    assert.ok(cardUpdates.length >= 1);
     assert.equal(elementCreates.length, 0);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
-    const rolloverStaticJson = cardUpdates[0]?.data?.card?.data || '';
+    const rolloverStaticJson = cardUpdates.at(-1)?.data?.card?.data || '';
     assert.notEqual(JSON.parse(rolloverStaticJson).config?.streaming_mode, true);
     assert.ok(Buffer.byteLength(rolloverStaticJson, 'utf8') < 28_000);
     assert.match(rolloverStaticJson, /上一组/);
     assert.doesNotMatch(rolloverStaticJson, /当前组/);
+    assert.doesNotMatch(rolloverStaticJson, /clk-command:s1:%2Fstop/, 'rolled-over source card must clear stop buttons');
     const continuationJson = JSON.stringify(createdCards.at(-1));
     assert.ok(Buffer.byteLength(continuationJson, 'utf8') < 28_000);
     assert.match(continuationJson, /当前组/);
     assert.doesNotMatch(continuationJson, /上一组/);
+    assert.match(continuationJson, /clk-command:s1:%2Fstop/, 'new continuation card keeps the active stop button');
     const activeState = (adapter as any).activeCards.get('stream-1');
     assert.equal(activeState.cardId, 'card-2');
     assert.equal(activeState.historyItemOffset, 1);

@@ -151,12 +151,12 @@ it('keeps one Feishu message through separate native tool polls and finalizes on
     }
     const longOutput = markdown.find(text => text.includes('RESULT-2'))!;
     assert.ok(longOutput, 'long output must retain its beginning');
-    assert.doesNotMatch(longOutput, /END-2/, 'the long output tail is deliberately outside the 80-line preview');
-    assert.match(longOutput, /显示 \d+\/\d+ 字符 · 80\/92 行/, 'omission must be explicit');
+    assert.doesNotMatch(longOutput, /END-2/, 'the long output tail is deliberately outside the 30-line preview');
+    assert.match(longOutput, /显示 \d+\/\d+ 字符 · 30\/92 行/, 'omission must be explicit');
     const preview = /```text\n([\s\S]*?)\n```/.exec(longOutput)?.[1];
     assert.ok(preview);
-    assert.ok(Buffer.byteLength(preview, 'utf8') <= 4_000);
-    assert.equal(preview.split('\n').length, 80);
+    assert.ok(Buffer.byteLength(preview, 'utf8') <= 1_500);
+    assert.equal(preview.split('\n').length, 30);
     const nativeRow = db.prepare('SELECT value FROM cursorDiskKV WHERE key = ?').get('bubbleId:t:tool-2')!;
     const nativeResult = JSON.parse(JSON.parse(String(nativeRow.value)).toolFormerData.result);
     assert.equal(nativeResult.output, rawOutputs[2], 'card preview must not truncate the native result');

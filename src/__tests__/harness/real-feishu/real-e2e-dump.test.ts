@@ -729,7 +729,7 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
         toolPanels: [
           { elementId: 'st_1_t_1', title: '📖 读取 `src/a.ts`', detailChars: 10, detailLines: 1, nestedPanelCount: 0, fences: [], forbiddenEnvelopeTexts: [] },
           { elementId: 'st_1_t_2', title: '🔎 搜索 `toolPanels:` · 路径 `src/__tests__` · 2 行', detailChars: 80, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 63, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
-          { elementId: 'st_1_t_3', title: '🛠️ 修改 2 个文件 · `src/features/tool-card-preview/this-is-a-deliberately-long-typescript-fixture-for-title-budget.ts` 等 2 个文件', detailChars: 4000, detailLines: 166, nestedPanelCount: 0, fences: [{ language: 'typescript', chars: 2500, lines: 102, closed: true }, { language: 'python', chars: 1200, lines: 58, closed: true }], forbiddenEnvelopeTexts: [] },
+          { elementId: 'st_1_t_3', title: '🛠️ 修改 2 个文件 · `src/features/tool-card-preview/this-is-a-deliberately-long-typescript-fixture-for-title-budget.ts` 等 2 个文件', detailChars: 2000, detailLines: 66, nestedPanelCount: 0, fences: [{ language: 'typescript', chars: 1300, lines: 38, closed: true }, { language: 'python', chars: 600, lines: 22, closed: true }], forbiddenEnvelopeTexts: [] },
           { elementId: 'st_1_t_4', title: '💻 运行 `npm test` · 200ms · 后台终端 `90`', detailChars: 20, detailLines: 3, nestedPanelCount: 0, fences: [{ language: 'bash', chars: 8, lines: 1, closed: true }], forbiddenEnvelopeTexts: [] },
         ],
       },
@@ -768,7 +768,7 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       {
         ...kimiCheckpoints[1]!,
         toolPanels: kimiCheckpoints[1]!.toolPanels!.map((panel, index) => index === 2
-          ? { ...panel, nestedPanelCount: 1, fences: [{ language: 'typescript', chars: 9000, lines: 161, closed: false }, { language: 'python', chars: 1200, lines: 58, closed: true }], forbiddenEnvelopeTexts: ['Success'] }
+          ? { ...panel, nestedPanelCount: 1, fences: [{ language: 'typescript', chars: 3000, lines: 61, closed: false }, { language: 'python', chars: 600, lines: 22, closed: true }], forbiddenEnvelopeTexts: ['Success'] }
           : panel),
       },
     ], {
@@ -778,10 +778,10 @@ describe('unit::real-e2e-dump::live-log-scoping', () => {
       'kimi-tmux: st_1_t_3 contains 1 nested collapsible panels.',
       'kimi-tmux: st_1_t_3 leaked Success.',
       'kimi-tmux: st_1_t_3 contains an unclosed typescript fence.',
-      'kimi-tmux: st_1_t_3 fence exceeded 8000 characters.',
-      'kimi-tmux: st_1_t_3 fence exceeded 160 lines.',
-      'kimi-tmux: multi-file patch fences exceeded the shared 8000-character budget.',
-      'kimi-tmux: scripted multi-file patch should exercise the shared 160-line cap, got 219 lines.',
+      'kimi-tmux: st_1_t_3 fence exceeded 2400 characters.',
+      'kimi-tmux: st_1_t_3 fence exceeded 60 lines.',
+      'kimi-tmux: multi-file patch fences exceeded the shared 2400-character budget.',
+      'kimi-tmux: scripted multi-file patch should exercise the shared 60-line cap, got 83 lines.',
     ]);
     assert.deepEqual(kimiThinkingStatusOnlyIssues([
       ...kimiCheckpoints.slice(0, 1),

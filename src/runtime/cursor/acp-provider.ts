@@ -423,6 +423,8 @@ export class CursorAcpProvider implements LLMProvider {
               emit('task_update', { tasks, todos: tasks }); client.respond(message.id, {});
             } else client.reject(message.id, -32601, `Unsupported client method: ${message.method}`);
           };
+          let emittedTextInTurn = false;
+          let needsTextBoundary = false;
           unsubscribe = client.onMessage(message => {
             if (message.id !== undefined && message.method) {
               void handleRequest(message).catch(error => {
@@ -445,13 +447,22 @@ export class CursorAcpProvider implements LLMProvider {
               if (content.type === 'text' && typeof content.text === 'string') {
                 const failure = nativeErrorChunk(content.text);
                 if (failure) nativeFailure = failure;
-                else emit('text', content.text);
+                else if (content.text.length > 0) {
+                  const text = needsTextBoundary && emittedTextInTurn && !content.text.startsWith('\n')
+                    ? `\n\n${content.text}`
+                    : content.text;
+                  emittedTextInTurn = true;
+                  needsTextBoundary = false;
+                  emit('text', text);
+                }
               }
             } else if (update.sessionUpdate === 'agent_thought_chunk') {
+              if (emittedTextInTurn) needsTextBoundary = true;
               emit('status', { reasoning: 'Cursor 正在思考。' });
             } else if (typeof update.toolCallId === 'string') {
               let tool = tools.get(update.toolCallId);
               if (!tool) {
+                if (emittedTextInTurn) needsTextBoundary = true;
                 tool = { name: toolName(update), kind: update.kind, complete: false }; tools.set(update.toolCallId, tool);
                 emit('tool_use', { id: update.toolCallId, name: tool.name, input: initialToolInput(update, session!.cwd) });
               }
@@ -522,6 +533,7 @@ export class CursorAcpProvider implements LLMProvider {
             stopReason = typeof result?.stopReason === 'string' ? result.stopReason : 'unknown';
             if (continuationText && !interrupted) {
               prompt = continuationText; continuationText = undefined; tools.clear();
+              emittedTextInTurn = false; needsTextBoundary = false;
               emit('status', { reasoning: '自由文本回答已保留，正在作为新消息继续原任务。' });
               continue;
             }

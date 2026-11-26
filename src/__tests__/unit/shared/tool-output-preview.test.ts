@@ -9,13 +9,24 @@ for (const output of ['正文😀'.repeat(10_000), 'line\n'.repeat(5_000), 'a'.r
       output, status: 'complete', showOutput: true };
     const block = buildToolProgressBlocks([tool])[0]!;
     assert.match(block.detail, /显示 \d+\/\d+ 字符 · \d+\/\d+ 行/);
-    assert.ok(Buffer.byteLength(block.detail) < 4_300);
+    assert.ok(Buffer.byteLength(block.detail) < 1_800);
     assert.equal(tool.output, output, 'display limits must not rewrite runtime results');
     assert.equal((block.detail.match(/^```/gm) || []).length, 2);
     assert.equal(block.presentation.primary, '📖 读取 `example.py`');
     assert.equal(block.detail.split('/very/long/project/src/example.py').length - 1, 1);
   });
 }
+
+it('bounds long exec_command heredoc scripts in card details while preserving bash fences', () => {
+  const longScript = `python3 - <<'PY'\n${'print("hello world")\n'.repeat(120)}PY`;
+  const [block] = buildToolProgressBlocks([{
+    id: 'exec-long-cmd', name: 'Shell', status: 'complete', showOutput: true,
+    input: JSON.stringify({ command: longScript }), output: 'ok',
+  }]);
+  assert.match(block!.detail, /显示 \d+\/\d+ 字符 · \d+\/\d+ 行/);
+  assert.ok(Buffer.byteLength(block!.detail) < 1_800);
+  assert.equal((block!.detail.match(/^```/gm) || []).length, 4);
+});
 
 it('shows a short read exactly once, without JSON escaping or a duplicate path in the title', () => {
   const [block] = buildToolProgressBlocks([{ id: 'read', name: 'Read', status: 'complete', showOutput: true,

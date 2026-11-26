@@ -381,6 +381,22 @@ describe('Cursor ACP direct provider', () => {
     assert.equal(client.calls.filter(call=>call.method==='session/new').length,0);
   });
 
+  it('inserts a paragraph break when agent_message_chunk resumes after agent_thought_chunk', async () => {
+    const {client,provider,sessionId} = setup();
+    const events: Event[] = [];
+    const result = collect(provider.streamChat({sessionId,prompt:'two thoughts'}), event=>events.push(event));
+    await until(()=>client.count===1);
+    client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'第一段完成！'}});
+    client.update({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:'thinking again'}});
+    client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'第二段跟进说明。'}});
+    client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'继续同一段。'}});
+    client.end(); await result;
+    assert.equal(
+      events.filter(event=>event.type==='text').map(event=>event.data).join(''),
+      '第一段完成！\n\n第二段跟进说明。继续同一段。',
+    );
+  });
+
   it('rejects overlap without resubmission and waits for native cancellation before releasing the turn', async () => {
     const {client,provider,sessionId} = setup();
     const abortController = new AbortController();

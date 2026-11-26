@@ -11,6 +11,10 @@ import { findKimiSessionFileById, readKimiSessionMessagesByFilePath } from '../.
 import { findCursorSessionFileById } from '../../runtime/cursor/session-index.js';
 import { findZcodeSessionById } from '../../runtime/zcode/session-index.js';
 import {
+  PATCH_DETAIL_PREVIEW_CHAR_LIMIT,
+  PATCH_DETAIL_PREVIEW_LINE_LIMIT,
+} from '../../shared/progress/tool-call-details.js';
+import {
   getSessionActiveRuntime,
   getSessionClaudeCwd,
   getSessionClaudeSessionId,
@@ -552,8 +556,8 @@ export function scriptedKimiToolCardIssues(
     }
     for (const fence of panel.fences) {
       if (!fence.closed) issues.push(`${phase.providerKey}: ${panel.elementId} contains an unclosed ${fence.language || 'plain'} fence.`);
-      if (fence.chars > 8_000) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded 8000 characters.`);
-      if (fence.lines > 160) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded 160 lines.`);
+      if (fence.chars > PATCH_DETAIL_PREVIEW_CHAR_LIMIT) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded ${PATCH_DETAIL_PREVIEW_CHAR_LIMIT} characters.`);
+      if (fence.lines > PATCH_DETAIL_PREVIEW_LINE_LIMIT) issues.push(`${phase.providerKey}: ${panel.elementId} fence exceeded ${PATCH_DETAIL_PREVIEW_LINE_LIMIT} lines.`);
     }
   }
 
@@ -573,11 +577,11 @@ export function scriptedKimiToolCardIssues(
   }
   const patchChars = patchFences.reduce((total, fence) => total + fence.chars, 0);
   const patchLines = patchFences.reduce((total, fence) => total + fence.lines, 0);
-  if (patchChars > 8_000) {
-    issues.push(`${phase.providerKey}: multi-file patch fences exceeded the shared 8000-character budget.`);
+  if (patchChars > PATCH_DETAIL_PREVIEW_CHAR_LIMIT) {
+    issues.push(`${phase.providerKey}: multi-file patch fences exceeded the shared ${PATCH_DETAIL_PREVIEW_CHAR_LIMIT}-character budget.`);
   }
-  if (patchLines !== 160) {
-    issues.push(`${phase.providerKey}: scripted multi-file patch should exercise the shared 160-line cap, got ${patchLines} lines.`);
+  if (patchLines !== PATCH_DETAIL_PREVIEW_LINE_LIMIT) {
+    issues.push(`${phase.providerKey}: scripted multi-file patch should exercise the shared ${PATCH_DETAIL_PREVIEW_LINE_LIMIT}-line cap, got ${patchLines} lines.`);
   }
   if (!panels.some((panel) => panel.fences.some((fence) => fence.language === 'bash'))) {
     issues.push(`${phase.providerKey}: no bash command fence was present in the final tool card.`);

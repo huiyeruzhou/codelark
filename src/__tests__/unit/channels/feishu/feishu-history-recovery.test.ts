@@ -147,7 +147,7 @@ it('keeps the original card open on rejected continuation and preserves input ar
 
 it('splits an oversized group of bounded patch previews without losing its lines or code fences', async () => {
   const { adapter, cards } = harness();
-  const tools = ['A', 'B'].map(label => {
+  const tools = ['A', 'B', 'C', 'D', 'E'].map(label => {
     const lines = Array.from({ length: 900 }, (_, i) => `+PATCH_${label}_LINE_${i}_END ${'中文🙂'.repeat(80)}`);
     const patch = ['*** Begin Patch', `*** Update File: ${label}.py`, '@@', ...lines, '*** End Patch'].join('\n');
     return { id: `patch-${label}`, name: 'apply_patch', status: 'complete' as const,
@@ -166,7 +166,7 @@ it('splits an oversized group of bounded patch previews without losing its lines
   };
   [...cards.values()].forEach(visit);
   const all = contents.join('\n');
-  const expectedLines = expected.match(/PATCH_[AB]_LINE_\d+_END/g)!;
+  const expectedLines = expected.match(/PATCH_[A-E]_LINE_\d+_END/g)!;
   for (const line of expectedLines) assert.equal(all.split(line).length - 1, 1, line);
   assert.ok(cards.size > 1);
   for (const content of contents) assert.equal((content.match(/^```/gm) || []).length % 2, 0);
@@ -238,13 +238,13 @@ it('rebases a rewritten snapshot that arrives while the continuation is being cr
   assert.equal(all.split('CONCURRENT_FINAL').length - 1, 1);
 });
 
-it('keeps six ordinary 3 KB tool results on one bounded card', async () => {
+it('keeps sixteen ordinary 1 KB tool results on one bounded card', async () => {
   const { adapter, cards } = harness();
   await adapter.createStreamingCard('chat', undefined, 'tools');
-  const tools = Array.from({ length: 6 }, (_, index) => ({
+  const tools = Array.from({ length: 16 }, (_, index) => ({
     id: `ordinary-${index}`, name: 'Shell', status: 'complete' as const, showOutput: true,
     input: JSON.stringify({ command: `inspect-result-${index}` }),
-    output: `TOOL_${index}_BEGIN ` + 'x'.repeat(3_000) + ` TOOL_${index}_END`,
+    output: `TOOL_${index}_BEGIN ` + 'x'.repeat(1_000) + ` TOOL_${index}_END`,
   }));
   for (let count = 1; count <= tools.length; count++) {
     adapter.onStreamHistory('chat', [{ type: 'tool_panel', tools: tools.slice(0, count) }], 'tools');
