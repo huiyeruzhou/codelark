@@ -123,6 +123,7 @@ it('Cursor provider form changes keep the active task and all submitted settings
 
 it('an idle Cursor provider form switches protocols while preserving the previous native identity', async () => {
   const f = fixture(false);
+  f.service.set(f.scope, { runtime: { cursor: { provider: 'tmux' } } });
   f.store.updateSession(f.session.id, { runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'tui-idle' } } });
   const result = await f.command('/current-config cursor', { cursorProvider: 'acp' });
   assert.match(result.text, /已保存/);

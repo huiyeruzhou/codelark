@@ -18,6 +18,7 @@ import { readCursorPendingQuestion, readCursorNativeMessages } from '../../../..
 import { findCursorSessionFileById } from '../../../../runtime/cursor/session-index.js';
 import { clearCursorQuestions, handleCursorQuestionCallback, hasCursorQuestion } from '../../../../bridge/permission/cursor-questions.js';
 import { computeBaseDiagnosis } from '../../../../bridge/health/reducer.js';
+import { createConfigService } from '../../../../configuration/service.js';
 
 const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 class QuestionAdapter extends RecordingAdapter {
@@ -88,6 +89,7 @@ for (const scenario of ['single choice', 'multiple choices', 'existing Other tex
   const session = store.createSession('fake Cursor questions', 'regression-fake', undefined, workDir, 'normal', { activeRuntime: 'cursor' });
   const target = cursorTmuxSessionName(session.id);
   store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'cli', force: true, model: 'regression-fake' }, general: { workingDirectory: workDir, tmuxSessionName: target } } });
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
   const address = { channelType: 'feishu', chatId: 'fake-question-chat' };
   store.upsertChannelChat({ ...address, bridgeSessionId: session.id, chatKind: 'group' });
   const state = { adapters: new Map(), adapterMeta: new Map(), invalidAdapters: new Map(), loopAborts: new Map(), running: true };

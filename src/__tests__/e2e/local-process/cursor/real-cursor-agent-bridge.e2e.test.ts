@@ -18,6 +18,7 @@ import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.
 import { DEFAULT_CURSOR_MODEL } from '../../../../runtime/cursor/constants.js';
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
 import { resolveCursorRuntimeConfig } from '../../../../bridge/session/support.js';
+import { createConfigService } from '../../../../configuration/service.js';
 import {
   inboundMessage,
   initBridgeTestContext,
@@ -230,6 +231,7 @@ describe('real Cursor Agent bridge e2e', () => {
           general: { workingDirectory: workDir },
         },
       });
+      createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
       store.upsertChannelChat({
         channelType: address.channelType,
         chatId: address.chatId,

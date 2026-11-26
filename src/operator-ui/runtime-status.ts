@@ -64,7 +64,7 @@ export const projectRuntimeStatusBrowserSource = String.raw`function projectRunt
     };
   } else if (runtime === 'cursor') {
     config = {
-      provider: String(globalConfig.cursorProvider || 'tmux'),
+      provider: String(globalConfig.cursorProvider || 'acp'),
       model: String(globalConfig.cursorDefaultModel || '跟随 Cursor Agent'),
     };
   } else if (runtime === 'zcode') {

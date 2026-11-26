@@ -15,6 +15,7 @@ import {
   getSessionActiveRuntime,
   getSessionKimiSessionId,
   getSessionCursorSessionId,
+  getSessionCursorNativeProvider,
   getSessionCursorSessionIdForProvider,
   setSessionCursorProviderUpdate,
   getSessionZcodeSessionId,
@@ -353,9 +354,15 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
   } else {
     const shared = runtime === 'codex'
       && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id));
-    const target = getProviderOwnedRuntimeTmuxTarget(session, binding);
-    const changingCursor = isCursorAcp && (resolveCursorRuntimeConfig(session, binding).provider !== 'acp'
-      || (session.runtime?.cursor?.sessionProvider || 'tmux') !== 'acp');
+    const recordedCursorTmux = runtime === 'cursor' && provider === 'tmux'
+      && session.runtime?.cursor?.transport !== 'desktop'
+      && session.runtime?.general?.tmuxSessionName === cursorTmuxSessionName(session.id)
+      ? { sessionName: cursorTmuxSessionName(session.id), runtime: 'cursor' as const }
+      : undefined;
+    const target = getProviderOwnedRuntimeTmuxTarget(session, binding) || recordedCursorTmux;
+    const currentCursorProvider = resolveCursorRuntimeConfig(session, binding).provider;
+    const changingCursor = isCursorAcp && (currentCursorProvider !== 'acp'
+      || getSessionCursorNativeProvider(session, currentCursorProvider) !== 'acp');
     if ((!isCursorAcp && !shared && (sessionHasActiveRuntimeTurn(options.deps, session)
       || (target && (runtime !== 'cursor' || (await tmuxCore.hasSession(target.sessionName)).exists))))
       || (changingCursor && sessionHasActiveRuntimeTurn(options.deps, session))) {
@@ -608,8 +615,9 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
       );
     }
     const nextProvider = requested === 'default'
-      ? scopedConfigForRuntime(binding).config.runtime.cursor.provider : requested;
-    const nativeProvider = session.runtime?.cursor?.sessionProvider || 'tmux';
+      ? (currentCursorConfig.transport === 'desktop' ? 'tmux' : scopedConfigForRuntime(binding).config.runtime.cursor.provider)
+      : requested;
+    const nativeProvider = getSessionCursorNativeProvider(session, currentCursorConfig.provider);
     const changingProvider = nextProvider !== currentCursorConfig.provider || nextProvider !== nativeProvider;
     if (changingProvider && !confirmedCursorSwitch && sessionHasActiveRuntimeTurn(options.deps, session)) {
       return buildRuntimeSwitchWhileRunningResponse({

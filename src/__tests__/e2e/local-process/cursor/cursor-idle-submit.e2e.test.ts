@@ -14,6 +14,7 @@ import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { readCursorNativeUserPrompts } from '../../../../runtime/cursor/cli-store.js';
 import { findCursorSessionFileById } from '../../../../runtime/cursor/session-index.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
+import { createConfigService } from '../../../../configuration/service.js';
 
 const quote = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
 class IdleAdapter extends RecordingAdapter {
@@ -76,6 +77,7 @@ fi\n` : '';
   const session = store.createSession('Cursor idle submission regression', 'regression-fake', undefined, workspace, 'normal', { activeRuntime: 'cursor' });
   const target = cursorTmuxSessionName(session.id), pane = `${target}:0.0`;
   store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'cli', force: true, model: 'regression-fake' }, general: { workingDirectory: workspace, tmuxSessionName: target } } });
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
   const address = { channelType: 'feishu', chatId: 'fake-idle-chat' };
   store.upsertChannelChat({ ...address, bridgeSessionId: session.id, chatKind: 'group' });
   const state = { adapters: new Map(), adapterMeta: new Map(), invalidAdapters: new Map(), loopAborts: new Map(), running: true };

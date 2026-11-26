@@ -126,7 +126,7 @@ export function recommendRuntime(homeDir = os.homedir()): RuntimeRecommendation 
 export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<ConfigPatch['runtime']> {
   if (choice === 'codex') return { agent: 'codex' };
   if (choice === 'kimi') return { agent: 'kimi', kimi: { provider: 'tmux' } };
-  if (choice === 'cursor') return { agent: 'cursor', cursor: { provider: 'tmux' } };
+  if (choice === 'cursor') return { agent: 'cursor', cursor: { provider: 'acp' } };
   if (choice === 'zcode') return { agent: 'zcode', zcode: { provider: 'tmux' } };
   return {
     agent: 'claude',
@@ -218,7 +218,7 @@ export function buildSetupConfig(
       cursor: {
         ...current.runtime.cursor,
         ...(runtimeConfig.cursor || {}),
-        provider: 'tmux',
+        provider: runtimeConfig.cursor?.provider || current.runtime.cursor.provider || 'acp',
       },
       zcode: {
         ...current.runtime.zcode,
@@ -879,7 +879,7 @@ async function promptRuntime(homeDir: string): Promise<RuntimeChoice> {
       { value: 'ccr', label: 'Claude Code Router', hint: '写入 runtime=claude，claudeExecutable=ccr' },
       { value: 'claude', label: 'Claude Code', hint: '写入 runtime=claude，claudeExecutable=claude' },
       { value: 'kimi', label: 'Kimi Code', hint: '写入 runtime=kimi，provider=tmux' },
-      { value: 'cursor', label: 'Cursor Agent', hint: '写入 runtime=cursor，provider=tmux' },
+      { value: 'cursor', label: 'Cursor Agent', hint: '写入 runtime=cursor，provider=acp' },
       { value: 'zcode', label: 'ZCode', hint: '写入 runtime=zcode，provider=tmux' },
     ],
   }));

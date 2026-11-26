@@ -23,7 +23,10 @@ for (const confirmation of ['text', 'button', 'tmux', 'stale-text', 'tmux-idle',
   store.updateSession(binding.bridgeSessionId, { health_status: 'running_active' });
   const tmuxCommand = confirmation.startsWith('tmux');
   const acpCommand = confirmation === 'acp';
-  if (acpCommand) store.updateSession(binding.bridgeSessionId, { runtime_status: 'running', runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', sessionId: 'old-tui' } } });
+  if (acpCommand) {
+    createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { cursor: { provider: 'tmux' } } });
+    store.updateSession(binding.bridgeSessionId, { runtime_status: 'running', runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', sessionId: 'old-tui' } } });
+  }
   if (confirmation.endsWith('-idle')) {
     createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { codex: { provider: 'tmux' } } });
     store.updateSession(binding.bridgeSessionId, { runtime_status: 'idle', health_status: 'completed', runtime: { codex: { threadId: binding.bridgeSessionId }, general: { tmuxSessionName: `codex_${binding.bridgeSessionId}` } } });

@@ -36,6 +36,7 @@ for (const threadMode of [false, true]) it(`Cursor CLI ${threadMode ? 'Feishu th
   const session = store.createSession('Cursor CLI control', 'model', undefined, os.tmpdir());
   const nativeId = '11111111-1111-4111-8111-111111111111';
   const target = cursorTmuxSessionName(session.id);
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
   store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'cli', sessionId: nativeId }, general: { tmuxSessionName: target } } });
   const address = { channelType: 'feishu', chatId: 'oc_cursorclicontrol' };
   store.upsertChannelChat({ ...address, bridgeSessionId: session.id });

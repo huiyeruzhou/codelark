@@ -597,7 +597,7 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     usage: '/set cursorProvider tmux|acp',
     control: 'select',
     options: [selectOption('tmux'), selectOption('acp')],
-    read: (config) => config.runtime.cursor.provider || 'tmux',
+    read: (config) => config.runtime.cursor.provider || 'acp',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
       if (token === 'tmux' || token === 'acp') return patch({ runtime: { cursor: { provider: token } } });

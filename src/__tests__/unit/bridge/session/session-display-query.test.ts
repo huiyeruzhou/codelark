@@ -278,7 +278,7 @@ describe('SessionDisplayQuery', () => {
     assert.equal(row.runtime, 'cursor');
     assert.equal(row.cursorSessionId, 'cursor-linked');
     assert.equal(row.threadId, 'cursor-linked');
-    assert.equal(row.executionProvider, 'tmux');
+    assert.equal(row.executionProvider, 'acp');
   });
 
   it('does not resolve a Cursor session ID through the Codex thread index', () => {

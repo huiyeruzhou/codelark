@@ -39,7 +39,7 @@ thinking_mode = "default"
 
 [runtime.cursor]
 model = "gpt-5.3-codex"
-provider = "tmux"
+provider = "acp"
 force = false
 reasoning_effort = ""
 

@@ -2,6 +2,7 @@ import '../../../setup/test-setup.js';
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleProviderCommand } from '../../../../bridge/command/provider-settings.js';
+import { handleModeCommand, handleModelCommand, handleReasoningCommand } from '../../../../bridge/command/runtime-settings.js';
 import { handleSetCommand } from '../../../../bridge/command/global-settings.js';
 import { parseCommandCallbackData } from '../../../../bridge/command/callbacks.js';
 import { resolveCursorRuntimeConfig, resolveEffectiveRuntimeProvider } from '../../../../bridge/session/support.js';
@@ -14,8 +15,12 @@ import { UiSessionApplication } from '../../../../operator-ui/application/sessio
 import { JsonFileStore } from '../../../../storage/json-store.js';
 import { makeBridgeSettings, resetBridgeTestState } from '../../../helpers/bridge/test-bridge-utils.js';
 
-function fixture() {
+function fixture(options: { defaultProvider?: 'tmux' | 'acp' } = { defaultProvider: 'tmux' }) {
   const store = new JsonFileStore(makeBridgeSettings());
+  const config = createConfigService({ migrate: false });
+  if (options.defaultProvider) {
+    config.set({ kind: 'home' }, { runtime: { cursor: { provider: options.defaultProvider } } });
+  }
   const initial = store.createSession('Cursor', 'default', undefined, '/tmp/cursor-acp');
   store.updateSession(initial.id, { runtime: {
     activeRuntime: 'cursor', cursor: { provider: 'tmux', sessionId: 'legacy-tui', cwd: '/tmp/cursor-acp' },
@@ -27,11 +32,59 @@ function fixture() {
     store, currentBinding: binding, args, markdown: true, deps: {},
     msg: { address: { channelType: 'feishu', chatId: binding.chatId }, messageId: `provider-${args}`, text: `/p ${args}`, timestamp: Date.now() },
   });
-  return { store, session, binding, command, config: createConfigService({ migrate: false }) };
+  return { store, session, binding, command, config };
 }
 
 describe('Cursor ACP configuration and provider switching', () => {
   beforeEach(() => resetBridgeTestState());
+
+  it('defaults new Cursor sessions to ACP and reports the active provider in /mode, /model, and /reasoning', () => {
+    const store = new JsonFileStore(makeBridgeSettings());
+    const config = createConfigService({ migrate: false });
+    assert.equal(config.get('runtime.cursor.provider'), 'acp');
+
+    const session = store.createSession('Fresh Cursor', 'default', undefined, '/tmp/cursor-default-acp');
+    store.updateSession(session.id, { runtime: { activeRuntime: 'cursor' } });
+    const fresh = store.getSession(session.id)!;
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'cursor-default-acp-test', bridgeSessionId: fresh.id });
+    assert.equal(resolveCursorRuntimeConfig(fresh, binding).provider, 'acp');
+    assert.equal(resolveEffectiveRuntimeProvider(fresh, binding).identity, 'cursor:acp');
+
+    const msg = (text: string) => ({
+      address: { channelType: 'feishu' as const, chatId: binding.chatId },
+      messageId: `msg-${text}`,
+      text,
+      timestamp: Date.now(),
+    });
+    const modeQuery = handleModeCommand({ msg: msg('/mode'), args: '', currentBinding: binding, store, markdown: true });
+    assert.match(modeQuery, /Provider[\s\S]*acp/);
+    assert.doesNotMatch(modeQuery, /tmux/);
+
+    const modeYolo = handleModeCommand({ msg: msg('/mode yolo'), args: 'yolo', currentBinding: binding, store, markdown: true });
+    assert.match(modeYolo, /模式[\s\S]*yolo/);
+    assert.match(modeYolo, /Provider[\s\S]*acp/);
+    assert.doesNotMatch(modeYolo, /tmux/);
+    assert.equal(resolveCursorRuntimeConfig(store.getSession(fresh.id), binding).force, true);
+
+    const modeNormal = handleModeCommand({ msg: msg('/mode normal'), args: 'normal', currentBinding: binding, store, markdown: true });
+    assert.match(modeNormal, /模式[\s\S]*normal/);
+    assert.match(modeNormal, /Provider[\s\S]*acp/);
+    assert.match(modeNormal, /\/clear/);
+    assert.doesNotMatch(modeNormal, /tmux/);
+
+    const modelReply = handleModelCommand({ msg: msg('/model sonnet'), args: 'sonnet', currentBinding: binding, store, markdown: true });
+    assert.match(modelReply, /Cursor ACP/);
+    assert.doesNotMatch(modelReply, /tmux/);
+
+    const reasoningReply = handleReasoningCommand({ args: 'high', binding, store, markdown: true });
+    assert.match(reasoningReply, /Cursor acp/);
+    assert.doesNotMatch(reasoningReply, /tmux/);
+
+    // Explicit tmux override still reports tmux in /mode.
+    config.set({ kind: 'session', sessionId: fresh.id }, { runtime: { cursor: { provider: 'tmux' } } });
+    const tmuxMode = handleModeCommand({ msg: msg('/mode yolo'), args: 'yolo', currentBinding: binding, store, markdown: true });
+    assert.match(tmuxMode, /Provider[\s\S]*tmux/);
+  });
 
   it('switches an idle TUI conversation to ACP without reusing its native ID or mirror cursor', async () => {
     const f = fixture();

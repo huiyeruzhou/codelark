@@ -47,13 +47,14 @@ export class CodexRoutingProvider implements LLMProvider {
       return this.zcodeTmuxProvider.streamChat(params);
     }
     if (params.runtime === 'cursor') {
+      const cursorProvider = params.cursorProvider || 'acp';
       console.log('[codex-routing-provider] Route Cursor Agent request:', {
         bridge_session_id: params.sessionId,
         runtime: params.runtime,
-        provider: params.cursorProvider || 'tmux',
+        provider: cursorProvider,
         transport: params.cursorTransport || 'cli',
       });
-      return (params.cursorProvider === 'acp' ? this.cursorAcpProvider : this.cursorTmuxProvider).streamChat(params);
+      return (cursorProvider === 'acp' ? this.cursorAcpProvider : this.cursorTmuxProvider).streamChat(params);
     }
     if (params.runtime === 'kimi') {
       console.log('[codex-routing-provider] Route Kimi Code request:', {

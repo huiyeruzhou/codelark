@@ -1700,7 +1700,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
         document.getElementById('kimiProvider').value = config.kimiProvider || 'tmux';
         document.getElementById('kimiDefaultModel').value = config.kimiDefaultModel || '';
         document.getElementById('kimiThinkingMode').value = config.kimiThinkingMode || 'default';
-        document.getElementById('cursorProvider').value = config.cursorProvider || 'tmux';
+        document.getElementById('cursorProvider').value = config.cursorProvider || 'acp';
         document.getElementById('cursorDefaultModel').value = config.cursorDefaultModel || '';
         document.getElementById('cursorReasoningEffort').value = config.cursorReasoningEffort || '';
         document.getElementById('cursorForce').checked = config.cursorForce === true;

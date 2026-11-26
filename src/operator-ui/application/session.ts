@@ -23,6 +23,7 @@ import {
 import {
   getSessionActiveRuntime,
   getSessionCodexTitle,
+  getSessionCursorNativeProvider,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
@@ -678,8 +679,9 @@ export class UiSessionApplication {
     const cursorProvider = payload.cursorProvider === 'tmux' || payload.cursorProvider === 'acp'
       ? payload.cursorProvider
       : payload.cursorProvider === '' ? createConfigService({ migrate: false }).get<'tmux' | 'acp'>('runtime.cursor.provider') : undefined;
+    const beforeCursorProvider = resolveCursorRuntimeConfig(before).provider;
     if (getSessionActiveRuntime(before) === 'cursor' && cursorProvider
-      && (cursorProvider !== resolveCursorRuntimeConfig(before).provider || cursorProvider !== (before.runtime?.cursor?.sessionProvider || 'tmux'))
+      && (cursorProvider !== beforeCursorProvider || cursorProvider !== getSessionCursorNativeProvider(before, beforeCursorProvider))
       && sessionLooksRunning(before)) {
       throw new Error('当前 Cursor 会话仍在运行或排队，请先停止后再切换 Provider。');
     }

@@ -12,6 +12,7 @@ import { createAdapterRuntime } from '../../../../channels/adapter-runtime/runti
 import { CodexRoutingProvider } from '../../../../runtime/codex/routing-provider.js';
 import { tmuxCore, _testOnlyTmuxCore } from '../../../../runtime/tmux/core.js';
 import { cursorTmuxSessionName } from '../../../../runtime/cursor/tmux-provider.js';
+import { createConfigService } from '../../../../configuration/service.js';
 
 import type { StreamingHistoryItem } from '../../../../domain/index.js';
 
@@ -86,6 +87,7 @@ for (const scenario of [
   const session = store.createSession('Cursor steer regression', 'regression-fake', undefined, workspace, 'normal', { activeRuntime: 'cursor' });
   const target = cursorTmuxSessionName(session.id), pane = `${target}:0.0`;
   store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'cli', force: true, model: 'regression-fake' }, general: { workingDirectory: workspace, tmuxSessionName: target } } });
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
   const address = { channelType: 'feishu', chatId: 'fake-steer-chat' };
   store.upsertChannelChat({ ...address, bridgeSessionId: session.id, chatKind: 'group' });
   const state = { adapters: new Map(), adapterMeta: new Map(), invalidAdapters: new Map(), loopAborts: new Map(), running: true };

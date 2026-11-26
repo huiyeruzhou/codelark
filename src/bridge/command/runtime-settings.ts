@@ -476,13 +476,16 @@ export function handleReasoningCommand(options: {
         options.markdown,
       );
     }
+    const cursorProvider = resolveCursorRuntimeConfig(session, options.binding).provider;
     setSessionCursorReasoningToml(session.id, cursorReasoning);
     return buildCommandFields(
       '已更新 Cursor Agent 思考级别',
       [['级别', cursorReasoning]],
       [
-        `后续 Cursor tmux 启动会把模型写成 \`model[effort=${cursorReasoning}]\`；具体模型不支持该值时 Cursor CLI 会明确报错。`,
-        '如果 Cursor TUI 已启动，发送 `/p tmux`，确认“结束并重启”后生效。',
+        `后续 Cursor ${cursorProvider} 启动会把模型写成 \`model[effort=${cursorReasoning}]\`；具体模型不支持该值时 Cursor CLI 会明确报错。`,
+        cursorProvider === 'acp'
+          ? '下一次发消息时 ACP 会按新参数重新启动并恢复会话。'
+          : '如果 Cursor TUI 已启动，发送 `/p tmux`，确认“结束并重启”后生效。',
       ],
       options.markdown,
     );
@@ -591,12 +594,17 @@ export function handleModeCommand(options: {
     );
   }
   if (activeRuntime === 'cursor') {
+    const cursorConfig = resolveCursorRuntimeConfig(session, binding);
     if (!options.args) {
-      const cursorConfig = resolveCursorRuntimeConfig(session, binding);
       return buildCommandFields(
         '当前 Cursor Agent 模式',
-        [['Runtime', 'cursor'], ['模式', cursorConfig.force ? 'yolo' : 'normal'], ['Provider', 'tmux']],
-        [MODE_OPTIONS_TEXT, '发送 `/mode normal` 或 `/mode yolo` 切换；修改从下一次 Cursor tmux 启动开始生效。'],
+        [['Runtime', 'cursor'], ['模式', cursorConfig.force ? 'yolo' : 'normal'], ['Provider', cursorConfig.provider]],
+        [
+          MODE_OPTIONS_TEXT,
+          cursorConfig.provider === 'acp'
+            ? '发送 `/mode normal` 或 `/mode yolo` 切换；ACP 会在下一次消息时按新权限模式启动或重建进程。'
+            : '发送 `/mode normal` 或 `/mode yolo` 切换；修改从下一次 Cursor tmux 启动开始生效。',
+        ],
         options.markdown,
       );
     }
@@ -607,8 +615,14 @@ export function handleModeCommand(options: {
     setSessionCursorForceToml(session!.id, requestedMode === 'yolo');
     return buildCommandFields(
       '已切换 Cursor Agent 模式',
-      [['模式', requestedMode], ['Provider', 'tmux']],
-      ['后续 Cursor tmux 启动会按此设置决定是否传 `--force`。'],
+      [['模式', requestedMode], ['Provider', cursorConfig.provider]],
+      [
+        cursorConfig.provider === 'acp'
+          ? requestedMode === 'yolo'
+            ? '后续 Cursor ACP 启动会传入 `--force`（下一次发消息自动按新模式重建进程）。'
+            : '后续 Cursor ACP 启动不再传入 `--force`（若当前原生会话已开启 yolo，需 `/clear` 新建会话才能降权）。'
+          : '后续 Cursor tmux 启动会按此设置决定是否传 `--force`。',
+      ],
       options.markdown,
     );
   }
@@ -1108,12 +1122,17 @@ export function handleModelCommand(options: {
       );
     }
     const requestedModel = options.args.trim();
+    const cursorProvider = resolveCursorRuntimeConfig(session, binding).provider;
     if (requestedModel === 'default') {
       clearSessionCursorModelToml(session.id);
       return buildCommandFields(
         '已恢复默认 Cursor Agent 模型',
         [['模型', resolveCursorRuntimeConfig(options.store.getSession(session.id), binding).model || 'default']],
-        ['后续 Cursor tmux 启动不再显式传 `--model`。'],
+        [
+          cursorProvider === 'acp'
+            ? '后续 Cursor ACP 启动不再显式传 `--model`（下一次发消息生效）。'
+            : '后续 Cursor tmux 启动不再显式传 `--model`。',
+        ],
         options.markdown,
       );
     }
@@ -1121,7 +1140,11 @@ export function handleModelCommand(options: {
     return buildCommandFields(
       '已更新 Cursor Agent 模型',
       [['模型', requestedModel]],
-      [`后续 Cursor tmux 启动会传入 \`--model ${requestedModel}\`。`],
+      [
+        cursorProvider === 'acp'
+          ? `后续 Cursor ACP 启动会传入 \`--model ${requestedModel}\`（下一次发消息生效）。`
+          : `后续 Cursor tmux 启动会传入 \`--model ${requestedModel}\`。`,
+      ],
       options.markdown,
     );
   }

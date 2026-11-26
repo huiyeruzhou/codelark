@@ -323,7 +323,7 @@ test('keeps Codex on tmux and uses Claude sdk when tmux install is declined', ()
   assert.equal(next.runtime.claude.provider, 'sdk');
 });
 
-test('builds setup config for the Cursor tmux runtime', () => {
+test('builds setup config for the Cursor ACP runtime by default', () => {
   const current = baseSetupConfig();
   const next = buildSetupConfig(current, {
     appId: 'cli_demo',
@@ -332,7 +332,7 @@ test('builds setup config for the Cursor tmux runtime', () => {
   }, 'cursor', '/work/cursor');
 
   assert.equal(next.runtime.agent, 'cursor');
-  assert.equal(next.runtime.cursor.provider, 'tmux');
+  assert.equal(next.runtime.cursor.provider, 'acp');
   assert.equal(next.bridge.defaultWorkspace, '/work/cursor');
 });
 

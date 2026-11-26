@@ -81,7 +81,7 @@ import { mergePatch } from '../../configuration/merge.js';
 import type { ConfigPatch } from '../../configuration/schema.js';
 import type { ConfigPath } from '../../configuration/fields.js';
 import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath, scopedConfigForRuntime } from '../session/support.js';
-import { getSessionActiveRuntime, getSessionWorkingDirectory, setSessionCursorProviderUpdate } from '../../domain/session-runtime.js';
+import { getSessionActiveRuntime, getSessionCursorNativeProvider, getSessionWorkingDirectory, setSessionCursorProviderUpdate } from '../../domain/session-runtime.js';
 import { listCursorAvailableModels } from '../../runtime/cursor/models.js';
 import {
   attachCursorDesktopModelNotice,
@@ -476,9 +476,10 @@ async function handleCurrentConfigFormCommand(options: {
   const nextCursorProvider = cursorProviderValue === 'tmux' || cursorProviderValue === 'acp' ? cursorProviderValue
     : cursorProviderValue === '' ? scopedConfigForRuntime(binding).config.runtime.cursor.provider : undefined;
   const cursorSession = options.store.getSession(targetSessionId) || session;
+  const currentCursorProvider = resolveEffectiveRuntimeProvider(cursorSession, binding).provider;
   if (nextCursorProvider && getSessionActiveRuntime(cursorSession) === 'cursor'
-    && (nextCursorProvider !== resolveEffectiveRuntimeProvider(cursorSession, binding).provider
-      || nextCursorProvider !== (cursorSession.runtime?.cursor?.sessionProvider || 'tmux'))
+    && (nextCursorProvider !== currentCursorProvider
+      || nextCursorProvider !== getSessionCursorNativeProvider(cursorSession, currentCursorProvider === 'tmux' ? 'tmux' : 'acp'))
     && sessionHasActiveRuntimeTurn(options.deps, cursorSession)) {
     let richCard: OutboundRichCard | undefined;
     const response = buildRuntimeSwitchWhileRunningResponse({

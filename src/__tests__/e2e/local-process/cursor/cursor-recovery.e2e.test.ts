@@ -77,6 +77,7 @@ for (const scenario of ['dead-pane', 'expired-login', 'cancel-login', 'unavailab
   const session = store.createSession('Cursor idle submission regression', 'regression-fake', undefined, workspace, 'normal', { activeRuntime: 'cursor' });
   const target = cursorTmuxSessionName(session.id), pane = `${target}:0.0`;
   store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', transport: 'cli', force: true, model: 'regression-fake' }, general: { workingDirectory: workspace, tmuxSessionName: target } } });
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
   if (scenario === 'expired-login' || scenario === 'cancel-login' || scenario === 'unavailable-model') {
     createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { model: 'regression-fake' } } });
   }

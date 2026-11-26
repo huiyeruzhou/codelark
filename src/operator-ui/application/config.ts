@@ -168,7 +168,7 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     kimiProvider: config.runtime.kimi.provider || 'tmux',
     kimiThinkingMode: config.runtime.kimi.thinkingMode || 'default',
     cursorDefaultModel: config.runtime.cursor.model || '',
-    cursorProvider: config.runtime.cursor.provider || 'tmux',
+    cursorProvider: config.runtime.cursor.provider || 'acp',
     cursorReasoningEffort: config.runtime.cursor.reasoningEffort || '',
     cursorForce: config.runtime.cursor.force === true,
     zcodeDefaultModel: config.runtime.zcode.model || '',

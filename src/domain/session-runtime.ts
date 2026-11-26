@@ -421,6 +421,23 @@ export function setSessionCursorIdentityUpdate(
   } } };
 }
 
+export function getSessionCursorNativeProvider(
+  session: SessionRuntimeLike | null | undefined,
+  fallback: CursorProviderChoice = 'acp',
+): CursorProviderChoice {
+  const current = session?.runtime?.cursor;
+  if (current?.sessionProvider) return current.sessionProvider;
+  if (
+    getSessionCursorSessionId(session)
+    || session?.runtime?.general?.tmuxSessionName
+    || current?.transport === 'desktop'
+    || current?.provider === 'desktop'
+  ) {
+    return 'tmux';
+  }
+  return fallback;
+}
+
 /** 原生 ID 只可交给创建它的协议，避免将 TUI 历史当作 ACP 会话恢复。 */
 export function getSessionCursorSessionIdForProvider(
   session: SessionRuntimeLike | null | undefined,
@@ -435,7 +452,7 @@ export function setSessionCursorProviderUpdate(
   provider: CursorProviderChoice,
 ): BridgeSessionRuntimeUpdate {
   const current = session.runtime?.cursor;
-  const nativeProvider = current?.sessionProvider || 'tmux';
+  const nativeProvider = getSessionCursorNativeProvider(session, provider);
   if (nativeProvider === provider) return { runtime: { cursor: { provider } } };
   return {
     runtime: {

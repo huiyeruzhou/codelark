@@ -2,7 +2,7 @@
 
 ## 目标
 
-Cursor 支持两种独立 provider：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择。切换命令走独立控制通道；运行中选择 ACP 会立即给出“结束并切换 ACP”按钮，确认后结束旧执行、保存旧身份并提交新配置，不必等待原任务结束后重发命令。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。
+Cursor 支持两种独立 provider，默认使用 `acp`：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择。切换命令走独立控制通道；运行中选择 ACP 会立即给出“结束并切换 ACP”按钮，确认后结束旧执行、保存旧身份并提交新配置，不必等待原任务结束后重发命令。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。`/mode`、`/model` 与 `/reasoning` 均按当前有效 provider（`acp` 或 `tmux`）展示状态与生效方式。
 
 Cursor 的 `tmux` provider 在 CodeLark 持有的 tmux session 中运行官方 `agent` TUI。tmux 负责进程生命周期和输入；Cursor 自己在后台写入原生会话库与 transcript JSONL，CodeLark 用原生记录恢复思考摘要和工具结果，并与 transcript 的消息、正式终态对齐，回答正文、思考摘要和工具结果不依赖终端屏幕的 ANSI/局部重绘。原生问卷的题号和输入确认使用当前终端界面。
 

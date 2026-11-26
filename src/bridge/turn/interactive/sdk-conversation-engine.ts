@@ -386,7 +386,7 @@ async function consumeStream(
     onNativeTurn?: (threadId: string, turnId: string, completed: boolean) => Promise<void>;
   },
   activeRuntime: RuntimeAgent = 'codex',
-  cursorProvider: 'tmux' | 'acp' = 'tmux',
+  cursorProvider: 'tmux' | 'acp' = 'acp',
 ): Promise<ConversationResult> {
   const { store } = runtime;
   const contentBlocks: MessageContentBlock[] = [];
