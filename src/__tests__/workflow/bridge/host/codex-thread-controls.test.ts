@@ -9,6 +9,64 @@ import { _testOnly } from '../../../../bridge/host/manager.js';
 import { handleTmuxBridgeCommand } from '../../../../bridge/command/tmux.js';
 import { prepareCodexAppServerSession, closeCodexAppServerSessions } from '../../../../runtime/codex/app-server-registry.js';
 import { observeAppServerRequests, hasAppServerQuestion } from '../../../../bridge/permission/app-server.js';
+import { createSessionHealthRuntime } from '../../../../bridge/health/runtime.js';
+
+test('an endpoint-only new chat stays idle and can stop then attach an unbound running thread', async (t) => {
+  resetBridgeTestState();
+  const f = await fixture(t);
+  const address = { ...f.address, chatId: 'fresh-rebind-chat' };
+  const draft = router.createBinding(address, process.cwd(), undefined, { forceNewDraftSession: true });
+  f.store.updateSession(draft.bridgeSessionId, {
+    runtime: { codex: { appServerEndpoint: f.handle.endpoint } },
+    runtime_status: 'unknown', health_status: 'suspected_detached',
+  });
+  await _testOnly.reconcileTerminalSessionRuntimeState();
+  assert.equal(f.store.getSession(draft.bridgeSessionId)?.runtime_status, 'idle');
+  const health = createSessionHealthRuntime({ getStore: () => f.store, nowIso: () => new Date().toISOString() });
+  health.reconcileSessionHealth();
+  assert.equal((await health.diagnoseSessionHealth(draft.bridgeSessionId))?.healthStatus, 'idle');
+  const callsBeforeStop = f.calls.length;
+  await _testOnly.handleMessage(f.adapter, inboundMessage(address, '/stop'));
+  assert.doesNotMatch(f.adapter.sent.at(-1)!.text, /失败|尚未恢复/);
+  assert.equal(f.calls.length, callsBeforeStop, 'stopping a draft must not connect, create, resume, or interrupt');
+  await f.send('/t unbind');
+  await _testOnly.handleMessage(f.adapter, inboundMessage(address, `/t ${f.binding.bridgeSessionId}`));
+  assert.equal(f.store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, f.binding.bridgeSessionId);
+  assert.doesNotMatch(f.adapter.sent.at(-1)!.text, /确认停止|仍在运行/);
+  assert.equal(f.store.getSession(f.binding.bridgeSessionId)?.runtime?.codex?.threadId, f.handle.threadId);
+  assert.equal(f.calls.some(call => ['turn/interrupt', 'turn/start', 'turn/steer'].includes(call.method)), false);
+});
+
+test('/stop on a never-started Codex chat succeeds without waiting for health reconciliation', async (t) => {
+  resetBridgeTestState();
+  const f = await fixture(t);
+  const address = { ...f.address, chatId: 'fresh-stop-chat' };
+  const draft = router.createBinding(address, process.cwd(), undefined, { forceNewDraftSession: true });
+  f.store.updateSession(draft.bridgeSessionId, { runtime: { codex: { appServerEndpoint: f.handle.endpoint } } });
+  const calls = f.calls.length;
+  await _testOnly.handleMessage(f.adapter, inboundMessage(address, '/stop'));
+  assert.match(f.adapter.sent.at(-1)!.text, /没有|尚未创建/);
+  assert.doesNotMatch(f.adapter.sent.at(-1)!.text, /执行失败/);
+  assert.equal(f.calls.length, calls);
+  assert.equal(f.store.getSession(draft.bridgeSessionId)?.runtime?.codex?.threadId, undefined);
+});
+
+test('an existing Codex thread without a protocol connection remains unknown and requires switch confirmation', async (t) => {
+  resetBridgeTestState();
+  const f = await fixture(t, false);
+  const address = { ...f.address, chatId: 'detached-existing-thread' };
+  const draft = router.createBinding(address, process.cwd(), undefined, { forceNewDraftSession: true });
+  f.store.updateSession(draft.bridgeSessionId, { runtime: { codex: { appServerEndpoint: f.handle.endpoint, threadId: 'detached-thread' } } });
+  await _testOnly.reconcileTerminalSessionRuntimeState();
+  assert.equal(f.store.getSession(draft.bridgeSessionId)?.runtime_status, 'unknown');
+  const health = createSessionHealthRuntime({ getStore: () => f.store, nowIso: () => new Date().toISOString() });
+  health.reconcileSessionHealth();
+  assert.equal((await health.diagnoseSessionHealth(draft.bridgeSessionId))?.healthStatus, 'suspected_detached');
+  await f.send('/t unbind');
+  await _testOnly.handleMessage(f.adapter, inboundMessage(address, `/t ${f.binding.bridgeSessionId}`));
+  assert.equal(f.store.getChannelChat(address.channelType, address.chatId)?.bridgeSessionId, draft.bridgeSessionId);
+  assert.match(f.adapter.sent.at(-1)!.text, /确认停止/);
+});
 
 async function fixture(t: TestContext, active = true, chatId?: string) {
   _testOnly.resetStateForTests();

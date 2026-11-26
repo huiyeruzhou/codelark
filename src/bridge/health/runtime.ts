@@ -412,6 +412,7 @@ export function createSessionHealthRuntime(
   function protocolDiagnosis(session: BridgeSession): SessionHealthDiagnosis | null {
     if (!session.runtime?.codex?.appServerEndpoint) return null;
     const snapshot = deps.getProtocolSnapshot?.(session.id);
+    if (!snapshot && !getSessionCodexThreadId(session)) return null;
     const unknown = !snapshot || snapshot.connection !== 'ready' || snapshot.activity === 'unknown';
     const waiting = snapshot?.activity === 'waiting';
     const active = snapshot?.activity === 'active';

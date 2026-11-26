@@ -1912,6 +1912,9 @@ const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   getExternalThreadActivity: (session) => {
     if (session.runtime?.codex?.appServerEndpoint) {
       const handle = getCodexAppServerSession(session.id);
+      // A configured endpoint is not a native thread. New/temporary chats have
+      // no external work to observe until a thread is created or attached.
+      if (!handle && !getSessionCodexThreadId(session)) return 'idle';
       const snapshot = handle?.lifecycle.snapshot(handle.threadId);
       if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity === 'unknown' || snapshot.submission) return 'unknown';
       return snapshot.activity === 'idle' ? 'idle' : 'active';
@@ -3824,7 +3827,8 @@ function isThenSessionReadyForPrompt(sessionId: string): boolean {
   const session = getBridgeContext().store.getSession(sessionId);
   if (!session) return true;
   if (session.pending_user_input) return false;
-  if (session.runtime?.codex?.appServerEndpoint) {
+  if (session.runtime?.codex?.appServerEndpoint
+    && (getSessionCodexThreadId(session) || getCodexAppServerSession(sessionId))) {
     const handle = getCodexAppServerSession(sessionId);
     const snapshot = handle?.lifecycle.snapshot(handle.threadId);
     if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle' || snapshot.submission) return false;
@@ -3843,7 +3847,8 @@ function recordInteractiveHealthEndAndScheduleThen(
   detail?: string,
 ): void {
   const session = getBridgeContext().store.getSession(sessionId);
-  if (session?.runtime?.codex?.appServerEndpoint) {
+  if (session?.runtime?.codex?.appServerEndpoint
+    && (getSessionCodexThreadId(session) || getCodexAppServerSession(sessionId))) {
     const handle = getCodexAppServerSession(sessionId);
     const snapshot = handle?.lifecycle.snapshot(handle.threadId);
     if (!snapshot || snapshot.connection !== 'ready' || snapshot.activity !== 'idle' || snapshot.submission) return;

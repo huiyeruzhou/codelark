@@ -140,6 +140,15 @@ export async function stopRunningSession(options: {
   const registered = getCodexAppServerSession(options.binding.bridgeSessionId);
   if (session && resolveEffectiveRuntimeProvider(session, options.binding).runtime === 'codex'
     && (registered || session.runtime?.codex?.appServerEndpoint)) {
+    if (!registered && !getSessionCodexThreadId(session)) {
+      const task = options.deps.getActiveTask(session.id);
+      task?.abortController.abort();
+      return {
+        stopped: Boolean(task),
+        method: task ? 'active_task' : 'idle',
+        detail: task ? '已取消本次输入，等待连接收尾。' : '尚未创建 Codex 线程，当前没有正在运行的任务。',
+      };
+    }
     let protocol = registered;
     if (!protocol) {
       try {
