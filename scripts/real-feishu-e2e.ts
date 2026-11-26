@@ -56,8 +56,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-type RuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
-type ProviderName = 'sdk' | 'tmux';
+type RuntimeName = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
+type ProviderName = 'sdk' | 'tmux' | 'acp';
 
 const COMMAND_RESPONSE_TIMEOUT_MS = 15_000;
 const FILTERED_MESSAGE_OBSERVE_MS = 6_000;
@@ -122,6 +122,7 @@ interface CliOptions {
   message: string;
   codexModel: string;
   cursorModel: string;
+  doubaoModel: string;
   timeoutMs: number;
   pollMs: number;
   outputPath: string;
@@ -930,6 +931,7 @@ function sessionManagementProviderSettingCommand(options: CliOptions): string {
   if (options.runtime === 'kimi') return '/set kimiProvider tmux';
   if (options.runtime === 'cursor') return '/set cursorProvider tmux';
   if (options.runtime === 'zcode') return '/set zcodeProvider tmux';
+  if (options.runtime === 'doubao') return '/set doubaoProvider acp';
   return `/set claudeProvider ${options.runtime === 'claude' ? options.provider : 'tmux'}`;
 }
 
@@ -950,6 +952,7 @@ function runtimeProviderCommandTitle(runtime: RuntimeName): string {
   if (runtime === 'kimi') return 'Kimi Provider';
   if (runtime === 'cursor') return 'Cursor Provider';
   if (runtime === 'zcode') return 'ZCode Provider';
+  if (runtime === 'doubao') return 'Doubao Provider';
   return 'Codex Provider';
 }
 
@@ -958,6 +961,7 @@ function runtimeDisplayLabel(runtime: RuntimeName): string {
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor';
   if (runtime === 'zcode') return 'ZCode';
+  if (runtime === 'doubao') return 'Doubao';
   return 'Codex';
 }
 
@@ -966,6 +970,7 @@ function runtimeIdentityFieldName(runtime: RuntimeName): string {
   if (runtime === 'kimi') return 'kimi_session_id';
   if (runtime === 'cursor') return 'cursor_session_id';
   if (runtime === 'zcode') return 'zcode_session_id';
+  if (runtime === 'doubao') return 'doubao_session_id';
   return 'codex_thread_id';
 }
 
@@ -1167,6 +1172,7 @@ const VALUE_CLI_OPTIONS = new Set([
   '--message',
   '--codex-model',
   '--cursor-model',
+  '--doubao-model',
   '--timeout-ms',
   '--poll-ms',
   '--output',
@@ -1195,8 +1201,8 @@ function validateCliArgs(argv: string[]): void {
 }
 
 function parseRuntimeName(raw: string): RuntimeName {
-  if (raw === 'codex' || raw === 'claude' || raw === 'kimi' || raw === 'cursor' || raw === 'zcode') return raw;
-  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, kimi, cursor, or zcode.`);
+  if (raw === 'codex' || raw === 'claude' || raw === 'kimi' || raw === 'cursor' || raw === 'zcode' || raw === 'doubao') return raw;
+  throw new Error(`Invalid runtime "${raw}". Expected codex, claude, kimi, cursor, zcode, or doubao.`);
 }
 
 function parseClaudeExecutable(raw: string): ClaudeExecutable {
@@ -1365,6 +1371,7 @@ function parseOptions(argv: string[]): CliOptions {
     message: valueArg(argv, '--message', defaultMessage),
     codexModel: valueArg(argv, '--codex-model', process.env.CODELARK_REAL_FEISHU_CODEX_MODEL || (hasFlag(argv, '--codex-app-server') ? fixtureModel : 'gpt-5.5')),
     cursorModel: valueArg(argv, '--cursor-model', process.env.CODELARK_REAL_FEISHU_CURSOR_MODEL || 'gpt-5.3-codex'),
+    doubaoModel: valueArg(argv, '--doubao-model', process.env.CODELARK_REAL_FEISHU_DOUBAO_MODEL || ''),
     timeoutMs: parsePositiveIntOption(argv, '--timeout-ms', 120_000),
     pollMs: parsePositiveIntOption(argv, '--poll-ms', 2_000),
     outputPath: valueArg(argv, '--output', ''),
@@ -1376,7 +1383,7 @@ function parseOptions(argv: string[]): CliOptions {
 
 function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): ProviderName {
   const provider = raw.trim().toLowerCase();
-  if (!provider) return 'tmux';
+  if (!provider) return runtime === 'doubao' ? 'acp' : 'tmux';
   if (runtime === 'codex') {
     if (provider === 'sdk' || provider === 'tmux') return provider;
     throw new Error(`Invalid Codex provider "${raw}". Expected sdk or tmux.`);
@@ -1386,12 +1393,16 @@ function normalizeProviderForRuntime(runtime: RuntimeName, raw: string): Provide
     throw new Error(`Invalid Kimi provider "${raw}". Expected tmux.`);
   }
   if (runtime === 'cursor') {
-    if (provider === 'tmux') return provider;
-    throw new Error(`Invalid Cursor provider "${raw}". Expected tmux.`);
+    if (provider === 'tmux' || provider === 'acp') return provider;
+    throw new Error(`Invalid Cursor provider "${raw}". Expected acp or tmux.`);
   }
   if (runtime === 'zcode') {
     if (provider === 'tmux') return provider;
     throw new Error(`Invalid ZCode provider "${raw}". Expected tmux.`);
+  }
+  if (runtime === 'doubao') {
+    if (provider === 'acp') return provider;
+    throw new Error(`Invalid Doubao provider "${raw}". Expected acp.`);
   }
   if (provider === 'sdk' || provider === 'tmux') return provider;
   throw new Error(`Invalid Claude provider "${raw}". Expected sdk or tmux.`);
@@ -1442,9 +1453,10 @@ function printUsage(): void {
     '  --scenario <name>          runtime-message|basic-dialogue-suite|command-state|session-management|history-boundaries|history-attachments|history-empty-isolation|history-long-truncation|history-suite|card-forms|agent-question-forms|markdown-rendering|doc-as-chat-from-scratch|message-only|require-at-toggle',
     '  --commands <list>          Extra commands to run before the final message; JSON array or ;; separated',
     '  --chat-id <oc_>            Existing real test group; skips /new creation',
-    '  --runtime <claude|codex|kimi|cursor|zcode> Runtime to validate after group creation',
+    '  --runtime <claude|codex|kimi|cursor|zcode|doubao> Runtime to validate after group creation',
     '  --cursor-model <model>    Cursor model for the isolated bridge; default gpt-5.3-codex',
-    '  --provider <name>          Codex/Claude: sdk|tmux; Kimi/Cursor/ZCode: tmux. Default tmux.',
+    '  --doubao-model <model>    Doubao model for the isolated bridge; default follows Doubao CLI',
+    '  --provider <name>          Codex/Claude: sdk|tmux; Kimi/ZCode: tmux; Cursor: acp|tmux; Doubao: acp.',
     '  --channel-type <id>        Bridge channel type, default feishu-env',
     '  --workdir <path>           Working directory for /new',
     '  --message <text>           Test message to send as user',
@@ -1484,6 +1496,7 @@ function providerMatrixForScenario(scenario: ScenarioDefinition): string[] {
       `${scenario.testNamePrefix}::kimi-tmux`,
       `${scenario.testNamePrefix}::cursor-tmux`,
       `${scenario.testNamePrefix}::zcode-tmux`,
+      `${scenario.testNamePrefix}::doubao-acp`,
     ];
   }
   if (scenario.providerCoverage === 'representative-provider') {
@@ -1572,8 +1585,8 @@ function listScenarioMetadata(): unknown[] {
 function parseRuntimeProviderFromTestName(testName: string): { runtime?: RuntimeName; provider?: ProviderName } {
   const suffix = testName.split('::').pop() || '';
   const [runtime, provider] = suffix.split('-');
-  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode')
-    && (provider === 'sdk' || provider === 'tmux')) {
+  if ((runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' || runtime === 'doubao')
+    && (provider === 'sdk' || provider === 'tmux' || provider === 'acp')) {
     return { runtime, provider };
   }
   return {};
@@ -1581,7 +1594,7 @@ function parseRuntimeProviderFromTestName(testName: string): { runtime?: Runtime
 
 function coverageEntriesForScenario(scenario: ScenarioDefinition): Omit<CoverageMatrixEntry, 'evidence'>[] {
   if (scenario.providerCoverage === 'runtime-neutral') {
-    const matchingTestNames = ['codex', 'claude', 'kimi', 'cursor', 'zcode'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
+    const matchingTestNames = ['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao'].map((runtime) => `${scenario.testNamePrefix}::${runtime}`);
     return [{
       scenario: scenario.name,
       testName: `${scenario.testNamePrefix}::runtime-neutral`,
@@ -3173,7 +3186,7 @@ function prepareRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
 
   return {
     runtimeHome: options.runtimeHome,
-    bridgeHome: options.runtime === 'cursor' ? os.homedir() : options.runtimeHome,
+    bridgeHome: options.runtime === 'cursor' || options.runtime === 'doubao' ? os.homedir() : options.runtimeHome,
     codexHome: options.codexHome,
     claudeHome: options.claudeHome,
     kimiHome: options.kimiHome,
@@ -3207,7 +3220,7 @@ function plannedRuntimeEnvironment(options: CliOptions): RuntimeEnvironmentPlan 
     : resolveKimiExecutablePath();
   return {
     runtimeHome: options.runtimeHome,
-    bridgeHome: options.runtime === 'cursor' ? os.homedir() : options.runtimeHome,
+    bridgeHome: options.runtime === 'cursor' || options.runtime === 'doubao' ? os.homedir() : options.runtimeHome,
     codexHome: options.codexHome,
     claudeHome: options.claudeHome,
     kimiHome: options.kimiHome,
@@ -4618,7 +4631,7 @@ function unexpectedMirrorIssues(options: CliOptions, report: ReturnType<typeof l
   const mirrorKeys = report.streamKeys.filter((key) => key.startsWith('mirror:'));
   const directKeys = report.streamKeys.filter((key) => key.startsWith('im:'));
   const issues: string[] = [];
-  const directProvider = options.provider === 'sdk' || options.runtime === 'cursor' || options.runtime === 'zcode';
+  const directProvider = options.provider === 'sdk' || options.provider === 'acp' || options.runtime === 'cursor' || options.runtime === 'zcode' || options.runtime === 'doubao';
   if (directProvider && mirrorKeys.length > 0) {
     issues.push(`${options.runtime}-${options.provider} direct provider produced mirror streams: ${mirrorKeys.join(', ')}`);
   }
@@ -4644,7 +4657,7 @@ function providerOutputPathIssues(options: CliOptions, report: ReturnType<typeof
   if (options.scenario === 'require-at-toggle') return [];
 
   const issues: string[] = [];
-  if (options.provider === 'sdk' || options.runtime === 'cursor' || options.runtime === 'zcode') {
+  if (options.provider === 'sdk' || options.provider === 'acp' || options.runtime === 'cursor' || options.runtime === 'zcode' || options.runtime === 'doubao') {
     if (directKeys.length === 0) {
       issues.push(`${options.runtime}-${options.provider} direct provider did not produce a direct IM stream; streamKeys=${report.streamKeys.join(', ') || '[none]'}`);
     }
@@ -4978,12 +4991,14 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     if (options.runtime === 'kimi') return ['当前 Kimi Code 模型'];
     if (options.runtime === 'cursor') return ['当前 Cursor Agent 模型'];
     if (options.runtime === 'zcode') return ['当前 ZCode 模型'];
+    if (options.runtime === 'doubao') return ['当前 Doubao 模型'];
     return ['当前模型'];
   }
   if (command === '/mode') {
     if (options.runtime === 'kimi') return ['Kimi Code 模式固定'];
     if (options.runtime === 'cursor') return ['当前 Cursor Agent 模式'];
     if (options.runtime === 'zcode') return ['当前 ZCode 模式'];
+    if (options.runtime === 'doubao') return ['当前 Doubao 模式'];
     return ['当前模式', 'Runtime', options.runtime];
   }
   if (command === '/provider') {
@@ -4991,6 +5006,7 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     if (options.runtime === 'kimi') return ['当前 Kimi Provider'];
     if (options.runtime === 'cursor') return ['当前 Cursor Provider'];
     if (options.runtime === 'zcode') return ['当前 ZCode Provider'];
+    if (options.runtime === 'doubao') return ['当前 Doubao Provider'];
     return ['当前 Codex Provider'];
   }
   if (command === '/sandbox') {
@@ -4998,6 +5014,7 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 沙箱设置'];
     if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 沙箱设置'];
     if (options.runtime === 'zcode') return ['ZCode 不支持 Bridge 沙箱设置'];
+    if (options.runtime === 'doubao') return ['Doubao 不支持 Bridge 沙箱设置'];
     return ['当前 Codex 沙箱'];
   }
   if (command === '/network') {
@@ -5005,6 +5022,7 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     if (options.runtime === 'kimi') return ['Kimi Code 不支持 Bridge 网络开关'];
     if (options.runtime === 'cursor') return ['Cursor Agent 不支持 Bridge 网络开关'];
     if (options.runtime === 'zcode') return ['ZCode 不支持 Bridge 网络开关'];
+    if (options.runtime === 'doubao') return ['Doubao 不支持 Bridge 网络开关'];
     return ['当前 Codex 网络'];
   }
   if (command === '/reasoning') {
@@ -5012,6 +5030,7 @@ function commandStateExpectedTexts(options: CliOptions, text: string): string[] 
     if (options.runtime === 'kimi') return ['当前 Kimi Code Thinking 模式'];
     if (options.runtime === 'cursor') return ['当前 Cursor Agent 思考级别'];
     if (options.runtime === 'zcode') return ['ZCode 思考级别由模型管理'];
+    if (options.runtime === 'doubao') return ['当前 Doubao 思考级别'];
     return ['当前思考级别'];
   }
   if (command === '//goal' && options.runtime === 'zcode') {
@@ -5084,6 +5103,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
     if (options.runtime === 'kimi') return ['已更新全局配置', 'runtime.kimi.provider', 'tmux'];
     if (options.runtime === 'cursor') return ['已更新全局配置', 'runtime.cursor.provider', 'tmux'];
     if (options.runtime === 'zcode') return ['已更新全局配置', 'runtime.zcode.provider', 'tmux'];
+    if (options.runtime === 'doubao') return ['已更新全局配置', 'runtime.doubao.provider', 'acp'];
     return ['已更新全局配置', 'runtime.claude.provider', options.runtime === 'claude' ? options.provider : 'tmux'];
   }
   if (command === `/new mgmt-${options.runId} ${options.workDir}`) {
@@ -5120,7 +5140,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
       'runtime',
       runtimeDisplayLabel(options.runtime),
       runtimeIdentityFieldName(options.runtime),
-      ...(options.runtime === 'claude' || options.runtime === 'kimi' || options.runtime === 'cursor' || options.runtime === 'zcode' ? ['runtime_cwd'] : []),
+      ...(options.runtime === 'claude' || options.runtime === 'kimi' || options.runtime === 'cursor' || options.runtime === 'zcode' || options.runtime === 'doubao' ? ['runtime_cwd'] : []),
     ];
   }
   if (command === '/t') return ['本地会话'];
@@ -5131,6 +5151,7 @@ function sessionManagementExpectedTexts(options: CliOptions, text: string): stri
     if (options.runtime === 'kimi') return ['已归档本地 Kimi Code 会话'];
     if (options.runtime === 'cursor') return ['已归档本地 Cursor Agent 会话'];
     if (options.runtime === 'zcode') return ['已归档本地 ZCode 会话'];
+    if (options.runtime === 'doubao') return ['已归档本地 Doubao 会话'];
     return ['已归档本地 Codex 会话'];
   }
   return [];
@@ -5333,7 +5354,7 @@ function expectedReplyForMessage(options: CliOptions, text: string, label: strin
     const semanticTexts = basicDialogueExpectedTexts(options, text, label);
     if (semanticTexts.length > 0) return { ...empty, texts: semanticTexts };
   }
-  if (label.includes('final message') && (options.provider === 'sdk' || options.runtime === 'cursor')) {
+  if (label.includes('final message') && (options.provider === 'sdk' || options.provider === 'acp' || options.runtime === 'cursor' || options.runtime === 'doubao')) {
     return { ...empty, texts: [expectedRuntimePromptResponseText(options, text)].filter(Boolean) };
   }
   if (options.scenario === 'command-state') {
@@ -5641,7 +5662,7 @@ function plannedSuccessCheckNames(options: CliOptions): string[] {
   if (scenarioRequiresRuntimeOutput(options)) {
     names.push('provider_output_path');
   }
-  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.runtime !== 'cursor' && options.runtime !== 'zcode') {
+  if (scenarioRequiresRuntimeOutput(options) && options.provider !== 'sdk' && options.provider !== 'acp' && options.runtime !== 'cursor' && options.runtime !== 'zcode' && options.runtime !== 'doubao') {
     names.push('mirror_final_not_duplicated_in_direct_reply');
   }
   if (options.scenario === 'doc-as-chat-from-scratch') {
@@ -5968,7 +5989,9 @@ function automatedSuccessChecks(params: {
   const finalExpectedText = expectedFinalResponseText(params.options);
   const directMirrorDuplicate = Boolean(
     params.options.provider !== 'sdk'
+    && params.options.provider !== 'acp'
     && params.options.runtime !== 'cursor'
+    && params.options.runtime !== 'doubao'
     && finalObservation?.sentMessageId
     && finalExpectedText
     && directReplyToContainsText(
@@ -6042,7 +6065,7 @@ function automatedSuccessChecks(params: {
     },
   ];
 
-  if (scenarioRequiresRuntimeOutput(params.options) && params.options.provider !== 'sdk' && params.options.runtime !== 'cursor' && params.options.runtime !== 'zcode') {
+  if (scenarioRequiresRuntimeOutput(params.options) && params.options.provider !== 'sdk' && params.options.provider !== 'acp' && params.options.runtime !== 'cursor' && params.options.runtime !== 'zcode' && params.options.runtime !== 'doubao') {
     checks.push({
       name: 'mirror_final_not_duplicated_in_direct_reply',
       ok: !directMirrorDuplicate,
@@ -6173,8 +6196,10 @@ function shouldObserveFinalPromptByMirrorEvidence(options: CliOptions, label: st
   }
   return label.includes('final message')
     && options.provider !== 'sdk'
+    && options.provider !== 'acp'
     && options.runtime !== 'cursor'
     && options.runtime !== 'zcode'
+    && options.runtime !== 'doubao'
     && (isEmptyReplyExpectation(expectation) || scenarioCommandsIncludeFinalMessage(options));
 }
 
@@ -6193,7 +6218,7 @@ function providerStreamTerminalStateInDump(
 ) {
   const logText = dump.logWindow?.text || '';
   if (!logText) return undefined;
-  const streamPrefix = options.runtime === 'cursor' || options.runtime === 'zcode' ? 'im:' : 'mirror:';
+  const streamPrefix = options.runtime === 'cursor' || options.runtime === 'zcode' || options.runtime === 'doubao' ? 'im:' : 'mirror:';
   return findLatestProviderStreamTerminalState({
     streamKeys: dump.streamKeys,
     logText,
@@ -6365,6 +6390,11 @@ function writeIsolatedBridgeConfig(options: CliOptions): void {
           ? { model: process.env.CODELARK_ZCODE_MODEL }
           : {}),
       },
+      doubao: {
+        provider: 'acp',
+        mode: 'normal',
+        ...(options.doubaoModel ? { model: options.doubaoModel } : {}),
+      },
     },
     channels: [{
       id: options.channelType,
@@ -6458,9 +6488,15 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
         ...(options.codexAppServerEndpoint ? { CODELARK_CODEX_APP_SERVER_URL: options.codexAppServerEndpoint } : {}),
         HOME: runtimeEnvironment.bridgeHome,
         USERPROFILE: runtimeEnvironment.bridgeHome,
-        XDG_DATA_HOME: path.join(runtimeEnvironment.runtimeHome, '.local', 'share'),
-        XDG_CONFIG_HOME: path.join(runtimeEnvironment.runtimeHome, '.config'),
-        XDG_CACHE_HOME: path.join(runtimeEnvironment.runtimeHome, '.cache'),
+        XDG_DATA_HOME: options.runtime === 'doubao'
+          ? (process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share'))
+          : path.join(runtimeEnvironment.runtimeHome, '.local', 'share'),
+        XDG_CONFIG_HOME: options.runtime === 'doubao'
+          ? (process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'))
+          : path.join(runtimeEnvironment.runtimeHome, '.config'),
+        XDG_CACHE_HOME: options.runtime === 'doubao'
+          ? (process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'))
+          : path.join(runtimeEnvironment.runtimeHome, '.cache'),
         CODEX_HOME: runtimeEnvironment.codexHome,
         CODELARK_CLAUDE_HOME: runtimeEnvironment.claudeHome,
         KIMI_CODE_HOME: runtimeEnvironment.kimiHome,
@@ -6478,6 +6514,12 @@ async function launchBridgeChild(options: CliOptions, runtimeEnvironment: Runtim
         CODELARK_CLAUDE_PROVIDER: options.runtime === 'claude' ? options.provider : (process.env.CODELARK_CLAUDE_PROVIDER || 'tmux'),
         CODELARK_KIMI_PROVIDER: 'tmux',
         CODELARK_ZCODE_PROVIDER: 'tmux',
+        ...(process.env.CODELARK_DOUBAO_EXECUTABLE
+          ? { CODELARK_DOUBAO_EXECUTABLE: process.env.CODELARK_DOUBAO_EXECUTABLE }
+          : {}),
+        ...(process.env.DOUBAO_EXECUTABLE
+          ? { DOUBAO_EXECUTABLE: process.env.DOUBAO_EXECUTABLE }
+          : {}),
         ...(usesFakeKimiBackend(options)
           ? {
             KIMI_MODEL_NAME: 'clk-fake-kimi',

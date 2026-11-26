@@ -34,7 +34,7 @@ import { guardBindingChangeWhileRunning } from './status-guards.js';
 import { auditCommandBindingChange } from './thread-targets.js';
 import type { SessionCommandDeps, SessionCommandResult } from './types.js';
 
-type InheritedRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+type InheritedRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 
 const CLOUD_DOCUMENT_GROUP_TITLE_CHARS = 8;
 
@@ -80,7 +80,7 @@ function buildCloudDocumentBootstrapPrompt(cloudDocument: CloudDocumentAddress):
 
 function activeRuntimeForNewSession(previousSession: BridgeSession | null): InheritedRuntime {
   const activeRuntime = getSessionActiveRuntime(previousSession);
-  return activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' ? activeRuntime : 'codex';
+  return activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao' ? activeRuntime : 'codex';
 }
 
 function formatInheritedRuntimeLabel(runtime: InheritedRuntime): string {
@@ -88,6 +88,7 @@ function formatInheritedRuntimeLabel(runtime: InheritedRuntime): string {
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor Agent';
   if (runtime === 'zcode') return 'ZCode';
+  if (runtime === 'doubao') return 'Doubao';
   return 'Codex';
 }
 

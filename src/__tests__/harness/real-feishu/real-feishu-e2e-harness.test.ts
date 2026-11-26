@@ -19,6 +19,7 @@ const RUNTIME_PROVIDER_MATRIX_SUFFIXES = [
   'kimi-tmux',
   'cursor-tmux',
   'zcode-tmux',
+  'doubao-acp',
 ];
 
 it('rejects a copied keychain reference before initializing or overwriting app credentials', () => {
@@ -907,6 +908,11 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
         1,
         `${scenario.scenario} should include ZCode exactly once through the shared matrix`,
       );
+      assert.equal(
+        scenario.providerMatrix.filter((name) => name.endsWith('::doubao-acp')).length,
+        1,
+        `${scenario.scenario} should include Doubao ACP exactly once through the shared matrix`,
+      );
     }
 
     const basicDialogue = parsed.scenarios.find((item) => item.scenario === 'basic-dialogue-suite');
@@ -920,7 +926,7 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
     ]);
 
     const helpText = runHarness(['--help']);
-    assert.match(helpText, /--runtime <claude\|codex\|kimi\|cursor\|zcode>/);
+    assert.match(helpText, /--runtime <claude\|codex\|kimi\|cursor\|zcode\|doubao>/);
     assert.doesNotMatch(helpText, /--kimi[\w-]*/);
   });
 
@@ -1372,16 +1378,16 @@ describe('unit::real-feishu-e2e-harness::scenario-coverage-metadata', () => {
       executedPercent: 28.6,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontend, {
-      total: 30,
+      total: 34,
       canonicalPass: 1,
       legacyPass: 0,
       diagnosticPass: 0,
       diagnosticFailure: 0,
       dryRun: 1,
-      plannedOnly: 28,
+      plannedOnly: 32,
       executed: 2,
-      canonicalPercent: 3.3,
-      executedPercent: 6.7,
+      canonicalPercent: 2.9,
+      executedPercent: 5.9,
     });
     assert.deepEqual(parsed.coverageRates.cardFrontendTmux, {
       total: 21,
@@ -4466,5 +4472,26 @@ describe('app-server real Feishu execution selection', () => {
   it('refuses an app-server test against a live bridge or a different runtime', () => {
     assert.match(runHarnessFailure(['--dry-run', '--codex-app-server', '--runtime', 'codex']), /requires an isolated Codex bridge/);
     assert.match(runHarnessFailure(['--dry-run', '--launch-bridge', '--codex-app-server', '--runtime', 'claude']), /requires an isolated Codex bridge/);
+  });
+
+  it('dry-runs Doubao ACP runtime-message through the shared real Feishu matrix', () => {
+    const report = JSON.parse(runHarness([
+      '--dry-run',
+      '--launch-bridge',
+      '--scenario',
+      'runtime-message',
+      '--runtime',
+      'doubao',
+      '--provider',
+      'acp',
+      '--run-id',
+      'unit-doubao-acp',
+    ]));
+    assert.equal(report.dryRun, true);
+    assert.equal(report.coverage.testName, 'real-feishu::runtime-message::doubao-acp');
+    assert.equal(report.coverage.providerCoverage, 'runtime-parameterized');
+    assert.equal(report.canonicalEligibility.eligible, true);
+    assert.ok(report.commands.includes('/runtime doubao'));
+    assert.ok(report.commands.includes('/p acp'));
   });
 });

@@ -140,6 +140,9 @@
         },
         {
           "$ref": "#/$defs/zcodeSessionRuntime"
+        },
+        {
+          "$ref": "#/$defs/doubaoSessionRuntime"
         }
       ]
     },
@@ -189,6 +192,9 @@
           "not": {}
         },
         "zcode": {
+          "not": {}
+        },
+        "doubao": {
           "not": {}
         },
         "general": {
@@ -244,6 +250,9 @@
         "zcode": {
           "not": {}
         },
+        "doubao": {
+          "not": {}
+        },
         "general": {
           "$ref": "#/$defs/sessionRuntimeGeneral"
         }
@@ -288,6 +297,9 @@
           "not": {}
         },
         "zcode": {
+          "not": {}
+        },
+        "doubao": {
           "not": {}
         },
         "general": {
@@ -357,6 +369,9 @@
         "zcode": {
           "not": {}
         },
+        "doubao": {
+          "not": {}
+        },
         "general": {
           "$ref": "#/$defs/sessionRuntimeGeneral"
         }
@@ -399,6 +414,61 @@
             },
             "mode": {
               "enum": ["build", "edit", "plan", "yolo"]
+            }
+          },
+          "additionalProperties": true
+        },
+        "doubao": {
+          "not": {}
+        },
+        "general": {
+          "$ref": "#/$defs/sessionRuntimeGeneral"
+        }
+      },
+      "additionalProperties": true
+    },
+    "doubaoSessionRuntime": {
+      "type": "object",
+      "required": ["activeRuntime"],
+      "properties": {
+        "activeRuntime": {
+          "const": "doubao"
+        },
+        "codex": {
+          "not": {}
+        },
+        "claude": {
+          "not": {}
+        },
+        "kimi": {
+          "not": {}
+        },
+        "cursor": {
+          "not": {}
+        },
+        "zcode": {
+          "not": {}
+        },
+        "doubao": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "provider": {
+              "const": "acp"
+            },
+            "mode": {
+              "enum": ["normal", "plan", "yolo"]
+            },
+            "reasoningEffort": {
+              "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
           },
           "additionalProperties": true

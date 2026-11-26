@@ -75,6 +75,12 @@ export function overviewPageHtml(version: string): string {
                 <span class="runtime-status-config" id="runtime-zcode-config">默认配置检查中</span>
                 <span class="runtime-status-recent" id="runtime-zcode-recent">最近活动检查中</span>
               </button>
+              <button type="button" class="runtime-status-item" data-runtime="doubao" aria-label="查看 Doubao 会话">
+                <span class="runtime-status-head"><strong>Doubao</strong><span class="runtime-state" id="runtime-doubao-state">检查中</span></span>
+                <span class="runtime-status-counts" id="runtime-doubao-counts">正在读取会话与入口</span>
+                <span class="runtime-status-config" id="runtime-doubao-config">默认配置检查中</span>
+                <span class="runtime-status-recent" id="runtime-doubao-recent">最近活动检查中</span>
+              </button>
             </div>
           </section>
 
@@ -191,6 +197,7 @@ export const sessionsPageHtml = `        <section class="page" data-page="sessio
                 <option value="kimi">Kimi Code</option>
                 <option value="cursor">Cursor Agent</option>
                 <option value="zcode">ZCode</option>
+                <option value="doubao">Doubao</option>
               </select></label>
               <button type="button" id="clearSessionFiltersBtn">清除筛选</button>
             </div>
@@ -269,6 +276,7 @@ export const configPageHtml = `        <section class="page" data-page="config">
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="kimi">Kimi</button>
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="cursor">Cursor</button>
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="zcode">ZCode</button>
+              <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="doubao">Doubao</button>
               <button type="button" class="config-tab" role="tab" aria-selected="false" data-config-tab="web">Web 与 Bridge</button>
             </div>
 
@@ -386,6 +394,7 @@ export const configPageHtml = `        <section class="page" data-page="config">
                       <option value="kimi">kimi</option>
                       <option value="cursor">cursor</option>
                       <option value="zcode">zcode</option>
+                      <option value="doubao">doubao</option>
                     </select>
                   </label>
                 </div>
@@ -444,6 +453,28 @@ export const configPageHtml = `        <section class="page" data-page="config">
                   <label>
                     <span class="field-title">ZCode 默认模式</span>
                     <select id="zcodeMode"><option value="build">build</option><option value="edit">edit</option><option value="plan">plan</option><option value="yolo">yolo</option></select>
+                  </label>
+                </div>
+              </div>
+
+              <div class="panel-block" data-config-section="doubao" hidden>
+                <p class="panel-subtitle">Doubao 默认值</p>
+                <div class="field-row triple">
+                  <label>
+                    <span class="field-title">默认 Doubao Provider <span class="help-tip" tabindex="0" data-tip="Doubao CLI 使用原生 ACP 实时事件路径，支持运行期热切换模型、思考级别与权限模式。">?</span></span>
+                    <select id="doubaoProvider"><option value="acp">acp</option></select>
+                  </label>
+                  <label>
+                    <span class="field-title">Doubao 默认模型 <span class="help-tip" tabindex="0" data-tip="留空则跟随 Doubao CLI 默认模型。">?</span></span>
+                    <input id="doubaoDefaultModel" placeholder="留空则跟随 Doubao CLI 默认" />
+                  </label>
+                  <label>
+                    <span class="field-title">Doubao 默认模式</span>
+                    <select id="doubaoMode"><option value="normal">normal</option><option value="plan">plan</option><option value="yolo">yolo</option></select>
+                  </label>
+                  <label>
+                    <span class="field-title">Doubao 思考级别</span>
+                    <select id="doubaoReasoningEffort"><option value="">跟随 Doubao</option><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select>
                   </label>
                 </div>
               </div>
@@ -509,7 +540,7 @@ export const commandsPageHtml = `        <section class="page" data-page="comman
               </div>
             </div>
 
-            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
+            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode / Doubao 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
 
             <div class="command-sections">
               <section class="command-section">
@@ -523,9 +554,9 @@ export const commandsPageHtml = `        <section class="page" data-page="comman
                   <div class="command-item"><div class="command-col-command"><code>/doctor [bridge_id|描述]</code></div><div class="command-col-original"><code>/doctor</code></div><div class="command-col-desc">把目标 id、故障描述和结构化 JSONL bridge.log 路径交给当前会话诊断，不会把整段日志贴进上下文。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>//...</code></div><div class="command-col-original">—</div><div class="command-col-desc">向模型发送以 <code>/</code> 开头的文本，避免被当成桥接命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/h</code></div><div class="command-col-original"><code>/help</code></div><div class="command-col-desc">查看帮助。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">默认显示当前 runtime 最近 20 条；飞书卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude/Kimi/Cursor/ZCode。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">默认显示当前 runtime 最近 20 条；飞书卡片是一张表，可用数量下拉切换 20/50/100，也可用 runtime 下拉切换 Codex/Claude/Kimi/Cursor/ZCode/Doubao。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">最多列出当前 runtime 最近 100 条本地会话。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出当前 runtime 最近 100 条本地会话；也可用 <code>/t codex n 100</code>、<code>/t claude n 100</code>、<code>/t kimi n 100</code>、<code>/t cursor n 100</code> 或 <code>/t zcode n 100</code>。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出当前 runtime 最近 100 条本地会话；也可用 <code>/t codex n 100</code>、<code>/t claude n 100</code>、<code>/t kimi n 100</code>、<code>/t cursor n 100</code>、<code>/t zcode n 100</code> 或 <code>/t doubao n 100</code>。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread/session id|bridge id|名称&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread/session id|bridge id|名称&gt;</code></div><div class="command-col-desc">按当前 runtime 表序号、thread/session id、bridge_id 或唯一名称接管本地会话，并设为当前会话；接管其他聊天已绑定的会话需要确认，目标运行中会拒绝。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t 标记</code></div><div class="command-col-original"><code>/t</code></div><div class="command-col-desc">卡片首列会标出当前激活的对话和其他人激活的对话，bridge_id 存在表示曾经接入过 codelark。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t archive [序号|bridge id|thread/session id|名称]</code></div><div class="command-col-original"><code>/t archive [序号|bridge id|thread/session id|名称]</code></div><div class="command-col-desc">归档当前或指定本地会话，并解除相关绑定。</div></div>
@@ -562,8 +593,8 @@ export const commandsPageHtml = `        <section class="page" data-page="comman
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 固定 <code>tmux</code>（app-server 自动执行），Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Kimi、Cursor 与 ZCode 当前只支持 <code>tmux</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">Codex 可选 <code>minimal</code> 到 <code>ultra</code>；Claude 可选 <code>low</code> 到 <code>max</code>；Kimi 使用 <code>on/off/default</code>；Cursor 使用模型 <code>effort</code>；ZCode 不映射该命令。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话 active runtime 的 Provider；Codex 固定 <code>tmux</code>（app-server 自动执行），Claude 可选 <code>sdk</code>、<code>pty</code>、<code>tmux</code>，Cursor 支持 <code>acp</code> / <code>tmux</code>，Doubao 固定 <code>acp</code>，Kimi 与 ZCode 当前只支持 <code>tmux</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">Codex 可选 <code>minimal</code> 到 <code>ultra</code>；Claude 可选 <code>low</code> 到 <code>max</code>；Kimi 使用 <code>on/off/default</code>；Cursor 使用模型 <code>effort</code>；Doubao 可选 <code>none</code> 到 <code>max</code>；ZCode 不映射该命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示策略；工具调用详情始终展示。</div></div>

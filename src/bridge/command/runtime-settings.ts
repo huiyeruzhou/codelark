@@ -33,10 +33,17 @@ import {
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
   resolveZcodeRuntimeConfig,
+  resolveDoubaoRuntimeConfig,
   resolveSessionWorkingDirectoryPath,
 } from '../session/support.js';
 import type { BridgeSession, BridgeStore } from '../../domain/index.js';
-import type { CursorReasoningEffort, KimiThinkingMode, ZcodeMode } from '../../domain/session.js';
+import type { CursorReasoningEffort, DoubaoMode, DoubaoReasoningEffort, KimiThinkingMode, ZcodeMode } from '../../domain/session.js';
+import { listDoubaoModels, resolveDoubaoModelChoice, type DoubaoModelInfo } from '../../runtime/doubao/models.js';
+import {
+  buildDoubaoModelPickerCard,
+  DOUBAO_MODEL_REFRESH_ARG,
+  formatDoubaoModelDisplay,
+} from './doubao-model-picker.js';
 import { parseMode } from '../../shared/security/validators.js';
 import {
   getSessionActiveRuntime,
@@ -88,11 +95,12 @@ export {
 } from './runtime-session.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（YOLO模式：允许 agent 无需审批绕过沙箱）。';
-const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent） `zcode`（ZCode）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
+const RUNTIME_OPTIONS_TEXT = '可选：`codex`（OpenAI Codex，默认） `claude`（Claude Code） `kimi`（Kimi Code） `cursor`（Cursor Agent） `zcode`（ZCode） `doubao`（Doubao CLI）。`/provider` 选择使用何种方式运行 agent，不切换 runtime。';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh` `6=max` `7=ultra`；`m=max`，`u=ultra`。';
 const CLAUDE_REASONING_OPTIONS_TEXT = '可选：`1=low` `2=medium` `3=high` `4=xhigh` `5=max`；`m` 等同于 `max`，`minimal` 会映射为 Claude Code `low`。';
 const KIMI_THINKING_OPTIONS_TEXT = 'Kimi Code 只支持 Thinking 开关：`on`、`off`、`default`；`high` 等同于 `on`。';
 const CURSOR_REASONING_OPTIONS_TEXT = 'Cursor 的 effort 是模型参数，可选：`low`、`medium`、`high`、`xhigh`、`max`；实际可用值由所选模型和账号决定。';
+const DOUBAO_REASONING_OPTIONS_TEXT = 'Doubao 思考级别可选：`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 或 `default`；ACP 会话会在下一轮自动热更新。';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const CLAUDE_PTY_RUNTIME_UPDATE_NOTE = '已保存为当前会话的 Claude Code 启动配置；如果 Claude Code pty 已经启动，不会向运行中的 TUI 注入切换命令，下一条普通消息会按新参数启动或重启 Claude Code pty。';
@@ -156,6 +164,13 @@ function parseCursorReasoningCommandArg(raw: string): CursorReasoningEffort | un
   const normalized = raw.trim().toLowerCase();
   return ['low', 'medium', 'high', 'xhigh', 'max'].includes(normalized)
     ? normalized as CursorReasoningEffort
+    : undefined;
+}
+
+function parseDoubaoReasoningCommandArg(raw: string): DoubaoReasoningEffort | undefined {
+  const normalized = raw.trim().toLowerCase();
+  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(normalized)
+    ? normalized as DoubaoReasoningEffort
     : undefined;
 }
 
@@ -337,6 +352,41 @@ function setSessionZcodeModeToml(sessionId: string, mode: ZcodeMode): void {
   );
 }
 
+function setSessionDoubaoModelToml(sessionId: string, model: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { doubao: { model } } },
+  );
+}
+
+function clearSessionDoubaoModelToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.doubao.model',
+  );
+}
+
+function setSessionDoubaoModeToml(sessionId: string, mode: DoubaoMode): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { doubao: { mode } } },
+  );
+}
+
+function setSessionDoubaoReasoningToml(sessionId: string, reasoningEffort: DoubaoReasoningEffort): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { doubao: { reasoningEffort } } },
+  );
+}
+
+function clearSessionDoubaoReasoningToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.doubao.reasoningEffort',
+  );
+}
+
 function clearSessionKimiModelToml(sessionId: string): void {
   createConfigService({ migrate: false }).unset(
     { kind: 'session', sessionId },
@@ -394,12 +444,21 @@ export function handleReasoningCommand(options: {
     return CURSOR_DESKTOP_MODEL_CONTROL_NOTICE;
   }
   if (!options.args) {
+    if (activeRuntime === 'doubao') {
+      const doubaoConfig = resolveDoubaoRuntimeConfig(session, options.binding);
+      return buildCommandFields(
+        '当前 Doubao 思考级别',
+        [['级别', doubaoConfig.reasoningEffort || 'default'], ['模型', doubaoConfig.model || 'default']],
+        [DOUBAO_REASONING_OPTIONS_TEXT],
+        options.markdown,
+      );
+    }
     if (activeRuntime === 'cursor') {
       const cursorConfig = resolveCursorRuntimeConfig(session, options.binding);
       return buildCommandFields(
         '当前 Cursor Agent 思考级别',
         [['级别', cursorConfig.reasoningEffort || 'default'], ['模型', cursorConfig.model || 'default']],
-        [CURSOR_REASONING_OPTIONS_TEXT, 'CodeLark 会把设置合并为 Cursor 参数化模型的 `effort`，不会把 `force` 当作思考级别。'],
+        [CURSOR_REASONING_OPTIONS_TEXT, 'CodeLark 会通过 Cursor ACP `session/set_config_option` 应用思考级别（`xhigh` 会自动兼容 `extra-high`）；部分模型已在模型名后缀自带档位。'],
         options.markdown,
       );
     }
@@ -430,12 +489,21 @@ export function handleReasoningCommand(options: {
     );
   }
   if (options.args.trim().toLowerCase() === 'default' || options.args.trim().toLowerCase() === 'reset') {
+    if (activeRuntime === 'doubao') {
+      clearSessionDoubaoReasoningToml(session.id);
+      return buildCommandFields(
+        '已恢复默认 Doubao 思考级别',
+        [['级别', resolveDoubaoRuntimeConfig(options.store.getSession(session.id), options.binding).reasoningEffort || 'default']],
+        ['当前会话已清除 Doubao effort 覆盖值，后续将跟随全局默认或 Doubao CLI 默认配置。'],
+        options.markdown,
+      );
+    }
     if (activeRuntime === 'cursor') {
       clearSessionCursorReasoningToml(session.id);
       return buildCommandFields(
         '已恢复默认 Cursor Agent 思考级别',
         [['级别', resolveCursorRuntimeConfig(options.store.getSession(session.id), options.binding).reasoningEffort || 'default']],
-        ['当前会话已清除 Cursor effort 覆盖值，后续启动会跟随全局 CodeLark 默认值；如果全局也为 default，则不向模型字符串添加 `effort`。'],
+        ['当前会话已清除 Cursor effort 覆盖值，下一轮发消息时 ACP 会恢复模型默认思考级别。'],
         options.markdown,
       );
     }
@@ -466,6 +534,24 @@ export function handleReasoningCommand(options: {
       options.markdown,
     );
   }
+  if (activeRuntime === 'doubao') {
+    const doubaoReasoning = parseDoubaoReasoningCommandArg(options.args);
+    if (!doubaoReasoning) {
+      return buildCommandFields(
+        'Doubao 思考级别用法',
+        [['命令', '`/reasoning none|minimal|low|medium|high|xhigh|max|default`']],
+        [DOUBAO_REASONING_OPTIONS_TEXT],
+        options.markdown,
+      );
+    }
+    setSessionDoubaoReasoningToml(session.id, doubaoReasoning);
+    return buildCommandFields(
+      '已更新 Doubao 思考级别',
+      [['级别', doubaoReasoning], ['Provider', 'acp']],
+      ['下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热更新思考级别。'],
+      options.markdown,
+    );
+  }
   if (activeRuntime === 'cursor') {
     const cursorReasoning = parseCursorReasoningCommandArg(options.args);
     if (!cursorReasoning) {
@@ -476,16 +562,12 @@ export function handleReasoningCommand(options: {
         options.markdown,
       );
     }
-    const cursorProvider = resolveCursorRuntimeConfig(session, options.binding).provider;
     setSessionCursorReasoningToml(session.id, cursorReasoning);
     return buildCommandFields(
       '已更新 Cursor Agent 思考级别',
       [['级别', cursorReasoning]],
       [
-        `后续 Cursor ${cursorProvider} 启动会把模型写成 \`model[effort=${cursorReasoning}]\`；具体模型不支持该值时 Cursor CLI 会明确报错。`,
-        cursorProvider === 'acp'
-          ? '下一次发消息时 ACP 会按新参数重新启动并恢复会话。'
-          : '如果 Cursor TUI 已启动，发送 `/p tmux`，确认“结束并重启”后生效。',
+        `下一轮发消息时 Cursor ACP 会通过 \`session/set_config_option\` 设置思考强度 \`${cursorReasoning}\`（\`xhigh\` 自动兼容 \`extra-high\`）；若所选模型不支持该档位（或仅支持思考开关）会明确报错。`,
       ],
       options.markdown,
     );
@@ -563,6 +645,28 @@ export function handleModeCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
   const mode = formatSessionRuntimeMode(binding, session);
+  if (activeRuntime === 'doubao') {
+    const current = resolveDoubaoRuntimeConfig(session, binding).mode;
+    if (!options.args) {
+      return buildCommandFields(
+        '当前 Doubao 模式',
+        [['Runtime', 'doubao'], ['模式', current], ['Provider', 'acp']],
+        ['可选：`normal`（默认审批）、`plan`（只读规划）、`yolo`（跳过权限审批）。Doubao ACP 支持运行期热切换，下一轮对话自动生效。'],
+        options.markdown,
+      );
+    }
+    const requested = options.args.trim().toLowerCase();
+    if (requested !== 'normal' && requested !== 'plan' && requested !== 'yolo') {
+      return buildCommandFields('Doubao 模式用法', [['命令', '`/mode normal|plan|yolo`']], [], options.markdown);
+    }
+    setSessionDoubaoModeToml(session!.id, requested);
+    return buildCommandFields(
+      '已更新 Doubao 模式',
+      [['模式', requested], ['Provider', 'acp']],
+      ['下一轮发消息时 Doubao ACP 会通过 `session/set_mode` 自动热更新权限模式，无需重启进程。'],
+      options.markdown,
+    );
+  }
   if (activeRuntime === 'zcode') {
     const current = resolveZcodeRuntimeConfig(session, binding).mode;
     if (!options.args) {
@@ -784,16 +888,16 @@ export function handleRuntimeCommand(options: {
       options.markdown,
     );
   }
-  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi' && requested !== 'cursor' && requested !== 'zcode') {
+  if (requested !== 'codex' && requested !== 'claude' && requested !== 'kimi' && requested !== 'cursor' && requested !== 'zcode' && requested !== 'doubao') {
     return buildCommandFields(
       'Runtime 用法',
-      [['命令', '`/runtime codex|claude|kimi|cursor|zcode`']],
+      [['命令', '`/runtime codex|claude|kimi|cursor|zcode|doubao`']],
       [RUNTIME_OPTIONS_TEXT],
       options.markdown,
     );
   }
   if (requested === currentRuntime) {
-    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : requested === 'zcode' ? 'ZCode' : 'Codex';
+    const label = requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : requested === 'zcode' ? 'ZCode' : requested === 'doubao' ? 'Doubao' : 'Codex';
     return buildCommandFields(
       'Runtime 未变化',
       [['Runtime', currentRuntime]],
@@ -844,7 +948,7 @@ export function handleRuntimeCommand(options: {
       ['新 BridgeSession', nextSession.id],
       ['目录', getSessionWorkingDirectory(nextSession) || '-'],
     ],
-    [`当前聊天已切到独立 ${requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : requested === 'zcode' ? 'ZCode' : 'Codex'} BridgeSession；其它 runtime 会话不会参与后续 turn。再次使用 \`/runtime codex|claude|kimi|cursor|zcode\` 会切回本聊天记住的对应 BridgeSession。`],
+    [`当前聊天已切到独立 ${requested === 'claude' ? 'Claude Code' : requested === 'kimi' ? 'Kimi Code' : requested === 'cursor' ? 'Cursor Agent' : requested === 'zcode' ? 'ZCode' : requested === 'doubao' ? 'Doubao' : 'Codex'} BridgeSession；其它 runtime 会话不会参与后续 turn。再次使用 \`/runtime codex|claude|kimi|cursor|zcode|doubao\` 会切回本聊天记住的对应 BridgeSession。`],
     options.markdown,
   );
 }
@@ -862,8 +966,8 @@ export function handleSandboxCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') {
-    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : 'Claude Code';
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : activeRuntime === 'doubao' ? 'Doubao' : 'Claude Code';
     return buildCommandFields(
       `${label} 不支持 Bridge 沙箱设置`,
       [['Runtime', activeRuntime]],
@@ -924,8 +1028,8 @@ export function handleNetworkCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') {
-    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : 'Claude Code';
+  if (activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao') {
+    const label = activeRuntime === 'kimi' ? 'Kimi Code' : activeRuntime === 'cursor' ? 'Cursor Agent' : activeRuntime === 'zcode' ? 'ZCode' : activeRuntime === 'doubao' ? 'Doubao' : 'Claude Code';
     return buildCommandFields(
       `${label} 不支持 Bridge 网络开关`,
       [['Runtime', activeRuntime]],
@@ -996,6 +1100,34 @@ export function handleModelCommand(options: {
     return '当前会话不存在。';
   }
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  if (activeRuntime === 'doubao') {
+    const currentModel = resolveDoubaoRuntimeConfig(session, binding).model || session.runtime?.doubao?.model || 'default';
+    if (!options.args) {
+      return buildCommandFields(
+        '当前 Doubao 模型',
+        [['模型', currentModel], ['Provider', 'acp']],
+        ['发送 `/model <model-id|名称>` 可切换；发送 `/model default` 回到 Doubao 默认模型。Doubao ACP 支持下一轮热切换。'],
+        options.markdown,
+      );
+    }
+    const requestedModel = options.args.trim();
+    if (requestedModel === 'default') {
+      clearSessionDoubaoModelToml(session.id);
+      return buildCommandFields(
+        '已恢复默认 Doubao 模型',
+        [['模型', resolveDoubaoRuntimeConfig(options.store.getSession(session.id), binding).model || 'default'], ['Provider', 'acp']],
+        ['当前会话已清除 Doubao 模型覆盖值，后续将跟随全局默认或 Doubao CLI 默认配置。'],
+        options.markdown,
+      );
+    }
+    setSessionDoubaoModelToml(session.id, requestedModel);
+    return buildCommandFields(
+      '已更新 Doubao 模型',
+      [['模型', requestedModel], ['Provider', 'acp']],
+      ['下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热切换模型。'],
+      options.markdown,
+    );
+  }
   if (activeRuntime === 'zcode') {
     const currentModel = resolveZcodeRuntimeConfig(session, binding).model || 'default';
     if (!options.args) {
@@ -1204,12 +1336,67 @@ export async function handleModelCommandRequest(options: {
   store: BridgeStore;
   markdown: boolean;
   listCursorModels?: () => Promise<CursorAvailableModel[]>;
+  listDoubaoModels?: (opts?: { forceRefresh?: boolean }) => Promise<DoubaoModelInfo[]>;
   desktopModels?: { get: typeof getCursorDesktopModels; set: typeof setCursorDesktopModel };
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
+  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  if (session && activeRuntime === 'doubao') {
+    const trimmed = options.args.trim();
+    const isPickerRequest = !trimmed || trimmed === DOUBAO_MODEL_REFRESH_ARG;
+    if (isPickerRequest) {
+      const currentModel = resolveDoubaoRuntimeConfig(session, binding).model || session.runtime?.doubao?.model || 'default';
+      try {
+        const models = await (options.listDoubaoModels || listDoubaoModels)(
+          trimmed === DOUBAO_MODEL_REFRESH_ARG ? { forceRefresh: true } : undefined,
+        );
+        const modelSummary = models.length > 0
+          ? `可用模型（${models.length}）：${models.map((m) => `\`${m.id}\` (${m.name})`).join('、')}`
+          : '未能获取到模型列表；仍可发送 `/model <model-id>` 直接指定模型。';
+        const response = buildCommandFields(
+          '当前 Doubao 模型',
+          [['模型', formatDoubaoModelDisplay(currentModel === 'default' ? undefined : currentModel, models)], ['Provider', 'acp']],
+          [modelSummary, '发送 `/model <model-id|名称>` 可切换，发送 `/model default` 恢复默认；Doubao ACP 下一轮自动热更新。'],
+          options.markdown,
+        );
+        if (models.length > 0) {
+          const picker = buildDoubaoModelPickerCard({
+            session,
+            address: options.msg.address,
+            models,
+            effectiveModel: currentModel === 'default' ? undefined : currentModel,
+          });
+          return { response, richCard: picker.card };
+        }
+        return { response };
+      } catch {
+        return { response: handleModelCommand({ ...options, args: '' }) };
+      }
+    }
+    if (trimmed !== 'default') {
+      try {
+        const models = await (options.listDoubaoModels || listDoubaoModels)();
+        const matched = resolveDoubaoModelChoice(trimmed, models);
+        if (matched) {
+          setSessionDoubaoModelToml(session.id, matched.id);
+          return {
+            response: buildCommandFields(
+              '已更新 Doubao 模型',
+              [['模型', formatDoubaoModelDisplay(matched.id, models)], ['Provider', 'acp']],
+              ['下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热切换模型。'],
+              options.markdown,
+            ),
+          };
+        }
+      } catch {
+        // Fallback to raw requested model ID.
+      }
+    }
+    return { response: handleModelCommand(options) };
+  }
   const pickerRequest = parseCursorModelPickerArgs(options.args);
-  if (!session || (getSessionActiveRuntime(session) || 'codex') !== 'cursor') {
+  if (!session || activeRuntime !== 'cursor') {
     return { response: handleModelCommand(options) };
   }
   if (pickerRequest.invalid) {

@@ -95,7 +95,7 @@ describe('published JSON schemas', () => {
 
     const schema = readJson(path.join(schemasDir, 'config.v2.schema.json')) as any;
     assert.equal(schema.properties.schema_version.const, 2);
-    assert.deepEqual(schema.$defs.runtime.properties.agent.enum, ['codex', 'claude', 'kimi', 'cursor', 'zcode']);
+    assert.deepEqual(schema.$defs.runtime.properties.agent.enum, ['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao']);
     assert.deepEqual(schema.$defs.codex.properties.provider.enum, ['', 'tmux']);
     assert.deepEqual(schema.$defs.codex.properties.reasoning_effort.enum, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
     assert.deepEqual(schema.$defs.claude.properties.provider.enum, ['sdk', 'pty', 'tmux']);
@@ -106,6 +106,9 @@ describe('published JSON schemas', () => {
     assert.deepEqual(schema.$defs.cursor.properties.reasoning_effort.enum, ['', 'low', 'medium', 'high', 'xhigh', 'max']);
     assert.equal(schema.$defs.zcode.properties.provider.const, 'tmux');
     assert.deepEqual(schema.$defs.zcode.properties.mode.enum, ['build', 'edit', 'plan', 'yolo']);
+    assert.equal(schema.$defs.doubao.properties.provider.const, 'acp');
+    assert.deepEqual(schema.$defs.doubao.properties.mode.enum, ['normal', 'plan', 'yolo']);
+    assert.deepEqual(schema.$defs.doubao.properties.reasoning_effort.enum, ['', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
     assert.equal(schema.$defs.channelConfig.properties.stream_status_idle_start_seconds.minimum, 0);
     assert.equal(schema.$defs.channelConfig.properties.group_authorized.type, 'boolean');
 
@@ -118,6 +121,9 @@ describe('published JSON schemas', () => {
     assert.equal(defaults.runtime.cursor.reasoning_effort, '');
     assert.equal(defaults.runtime.zcode.provider, 'tmux');
     assert.equal(defaults.runtime.zcode.mode, 'build');
+    assert.equal(defaults.runtime.doubao.provider, 'acp');
+    assert.equal(defaults.runtime.doubao.mode, 'normal');
+    assert.equal(defaults.runtime.doubao.reasoning_effort, '');
     assert.equal(defaults.channels[0].config.stream_status_check_interval_seconds, 5);
     assert.equal(fs.existsSync(path.join(schemasDir, 'config.v1.schema.json')), false);
   });
@@ -176,7 +182,7 @@ describe('published JSON schemas', () => {
     assert.equal(bridgeSession.properties.codex_thread_id, undefined);
     assert.equal(bridgeSession.properties.model, undefined);
     assert.equal(bridgeSession.properties.runtime.$ref, '#/$defs/sessionRuntime');
-    assert.equal(sessionsSchema.$defs.sessionRuntime.oneOf.length, 5);
+    assert.equal(sessionsSchema.$defs.sessionRuntime.oneOf.length, 6);
     assert.equal(sessionsSchema.$defs.codexSessionRuntime.properties.codex.properties.threadId.type, 'string');
     assert.equal(sessionsSchema.$defs.codexSessionRuntime.properties.codex.properties.model.type, 'string');
     assert.deepEqual(sessionsSchema.$defs.claudeSessionRuntime.required, ['activeRuntime']);
@@ -194,6 +200,9 @@ describe('published JSON schemas', () => {
     assert.equal(sessionsSchema.$defs.zcodeSessionRuntime.properties.activeRuntime.const, 'zcode');
     assert.equal(sessionsSchema.$defs.zcodeSessionRuntime.properties.zcode.properties.provider.const, 'tmux');
     assert.deepEqual(sessionsSchema.$defs.zcodeSessionRuntime.properties.zcode.properties.mode.enum, ['build', 'edit', 'plan', 'yolo']);
+    assert.equal(sessionsSchema.$defs.doubaoSessionRuntime.properties.activeRuntime.const, 'doubao');
+    assert.equal(sessionsSchema.$defs.doubaoSessionRuntime.properties.doubao.properties.provider.const, 'acp');
+    assert.deepEqual(sessionsSchema.$defs.doubaoSessionRuntime.properties.doubao.properties.mode.enum, ['normal', 'plan', 'yolo']);
     assert.equal(sessionsSchema.$defs.sessionRuntimeGeneral.properties.tmuxSessionName.type, 'string');
     assert.ok(JSON.stringify(sessionsSchema.$defs.noRetiredRuntimeTopLevelFields).includes('codex_thread_id'));
 
@@ -201,5 +210,6 @@ describe('published JSON schemas', () => {
     assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.kimi.type, 'string');
     assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.cursor.type, 'string');
     assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.zcode.type, 'string');
+    assert.equal(channelChatsSchema.$defs.channelChat.properties.runtimeBridgeSessionIds.properties.doubao.type, 'string');
   });
 });

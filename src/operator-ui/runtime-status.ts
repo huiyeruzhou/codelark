@@ -1,4 +1,4 @@
-export type OperatorRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+export type OperatorRuntime = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 
 export interface RuntimeStatusProjection {
   tone: 'running' | 'queued' | 'attention' | 'idle' | 'available' | 'missing';
@@ -71,6 +71,11 @@ export const projectRuntimeStatusBrowserSource = String.raw`function projectRunt
     config = {
       provider: String(globalConfig.zcodeProvider || 'tmux'),
       model: String(globalConfig.zcodeDefaultModel || '跟随 ZCode'),
+    };
+  } else if (runtime === 'doubao') {
+    config = {
+      provider: String(globalConfig.doubaoProvider || 'acp'),
+      model: String(globalConfig.doubaoDefaultModel || '跟随 Doubao CLI'),
     };
   } else {
     const inheritedProvider = globalConfig.defaultProviderInherited === true;

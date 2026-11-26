@@ -3,7 +3,7 @@ import { z } from 'zod';
 // 当前 v2 TOML shape 的运行时校验与 camelCase/snake_case 转换。
 // sources.ts 负责读写文件，service.ts 负责调用链路，这里只维护结构和类型。
 
-export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor', 'zcode']);
+export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao']);
 // Keep historical values parseable so existing TOML files still load. Runtime
 // resolution normalizes every Codex value to tmux and every Cursor value to acp;
 // new user-facing writes only accept the supported public provider.
@@ -13,6 +13,9 @@ export const kimiProviderSchema = z.enum(['tmux']);
 export const cursorProviderSchema = z.enum(['tmux', 'acp']);
 export const zcodeProviderSchema = z.enum(['tmux']);
 export const zcodeModeSchema = z.enum(['build', 'edit', 'plan', 'yolo']);
+export const doubaoProviderSchema = z.enum(['acp']);
+export const doubaoModeSchema = z.enum(['normal', 'plan', 'yolo']);
+export const doubaoReasoningEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export const claudeExecutableSchema = z.enum(['claude', 'ccr']);
 export const yoloModeSchema = z.enum(['off', 'on', 'yolo']);
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
@@ -71,6 +74,13 @@ export const zcodeConfigSchema = z.object({
   mode: zcodeModeSchema,
 });
 
+export const doubaoConfigSchema = z.object({
+  model: z.string(),
+  provider: doubaoProviderSchema,
+  mode: doubaoModeSchema,
+  reasoningEffort: z.union([doubaoReasoningEffortSchema, z.literal('')]).optional(),
+});
+
 export const runtimeConfigSchema = z.object({
   agent: runtimeAgentSchema,
   codex: codexConfigSchema,
@@ -78,6 +88,7 @@ export const runtimeConfigSchema = z.object({
   kimi: kimiConfigSchema,
   cursor: cursorConfigSchema,
   zcode: zcodeConfigSchema,
+  doubao: doubaoConfigSchema,
 });
 
 export const bridgeConfigSchema = z.object({
@@ -137,6 +148,7 @@ export const configPatchSchema = z.object({
     kimi: kimiConfigSchema.partial().optional(),
     cursor: cursorConfigSchema.partial().optional(),
     zcode: zcodeConfigSchema.partial().optional(),
+    doubao: doubaoConfigSchema.partial().optional(),
   }).optional(),
   bridge: bridgeConfigSchema.partial().optional(),
   channels: z.array(channelConfigPatchSchema).optional(),
@@ -166,6 +178,7 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
   const kimi = asRecord(runtime.kimi);
   const cursor = asRecord(runtime.cursor);
   const zcode = asRecord(runtime.zcode);
+  const doubao = asRecord(runtime.doubao);
   const bridge = asRecord(root.bridge);
   const session = asRecord(root.session);
   const patch: ConfigPatch = {};
@@ -221,6 +234,13 @@ export function tomlToConfigPatch(raw: unknown): ConfigPatch {
     ['mode', 'mode'],
   ]);
   if (Object.keys(zcodePatch).length > 0) runtimePatch.zcode = zcodePatch;
+  const doubaoPatch = copyDefined<NonNullable<NonNullable<ConfigPatch['runtime']>['doubao']>>(doubao, [
+    ['model', 'model'],
+    ['provider', 'provider'],
+    ['mode', 'mode'],
+    ['reasoningEffort', 'reasoning_effort'],
+  ]);
+  if (Object.keys(doubaoPatch).length > 0) runtimePatch.doubao = doubaoPatch;
   if (Object.keys(runtimePatch).length > 0) patch.runtime = runtimePatch;
 
   const bridgePatch = copyDefined<NonNullable<ConfigPatch['bridge']>>(bridge, [
@@ -311,6 +331,12 @@ export function configToTomlShape(config: ConfigPatch): Record<string, unknown> 
         ...(config.runtime.zcode.model !== undefined ? { model: config.runtime.zcode.model } : {}),
         ...(config.runtime.zcode.provider !== undefined ? { provider: config.runtime.zcode.provider } : {}),
         ...(config.runtime.zcode.mode !== undefined ? { mode: config.runtime.zcode.mode } : {}),
+      } } : {}),
+      ...(config.runtime.doubao ? { doubao: {
+        ...(config.runtime.doubao.model !== undefined ? { model: config.runtime.doubao.model } : {}),
+        ...(config.runtime.doubao.provider !== undefined ? { provider: config.runtime.doubao.provider } : {}),
+        ...(config.runtime.doubao.mode !== undefined ? { mode: config.runtime.doubao.mode } : {}),
+        ...(config.runtime.doubao.reasoningEffort !== undefined ? { reasoning_effort: config.runtime.doubao.reasoningEffort } : {}),
       } } : {}),
     };
   }

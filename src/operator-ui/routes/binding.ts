@@ -58,13 +58,15 @@ export async function handleUiBindingRoute(options: {
     const cursorCwd = asString(payload.cursorCwd);
     const zcodeSessionId = asString(payload.zcodeSessionId);
     const zcodeCwd = asString(payload.zcodeCwd);
-    if (!bindingId || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd) && !(zcodeSessionId && zcodeCwd))) {
+    const doubaoSessionId = asString(payload.doubaoSessionId);
+    const doubaoCwd = asString(payload.doubaoCwd);
+    if (!bindingId || (!bridgeSessionId && !codexThreadId && !(claudeSessionId && claudeCwd) && !(kimiSessionId && kimiCwd) && !(cursorSessionId && cursorCwd) && !(zcodeSessionId && zcodeCwd) && !(doubaoSessionId && doubaoCwd))) {
       json(response, 400, { error: 'bindingId 以及 bridgeSessionId、codexThreadId 或本地 runtime sessionId+cwd 不能为空。' });
       return true;
     }
 
     const { app, store } = createBindingApplication(createStore);
-    const updated = app.switchBindingTarget({ bindingId, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd, kimiSessionId, kimiCwd, cursorSessionId, cursorCwd, zcodeSessionId, zcodeCwd });
+    const updated = app.switchBindingTarget({ bindingId, bridgeSessionId, codexThreadId, claudeSessionId, claudeCwd, kimiSessionId, kimiCwd, cursorSessionId, cursorCwd, zcodeSessionId, zcodeCwd, doubaoSessionId, doubaoCwd });
     json(response, 200, {
       ok: true,
       updated,

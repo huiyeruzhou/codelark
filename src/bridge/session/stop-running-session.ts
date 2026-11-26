@@ -1,5 +1,6 @@
 import { stopCursorDesktopThread } from '../../runtime/cursor/desktop-bridge-client.js';
 import { interruptCursorAcpSession } from '../../runtime/cursor/acp-provider.js';
+import { interruptDoubaoAcpSession } from '../../runtime/doubao/acp-provider.js';
 import { resolveCursorTransport } from './cursor-transport.js';
 import type { BridgeSession, BridgeStore, ChannelChat } from '../../domain/index.js';
 import { getSessionCursorSessionId, getSessionClaudeSessionId, getSessionCodexThreadId, getSessionRuntimeTmuxSessionName } from '../../domain/session-runtime.js';
@@ -44,6 +45,7 @@ export function getProviderOwnedRuntimeTmuxTarget(
   // /tmux-attach shares the same storage field. Only names generated for this
   // runtime's own thread/session are ownership evidence; never match a prefix.
   const threadId = getSessionCodexThreadId(session);
+  if (provider.runtime === 'doubao') return undefined;
   const expected = provider.runtime === 'codex' ? (threadId ? [codexTmuxSessionName(threadId)] : [])
     : provider.runtime === 'claude' ? [claudeTmuxSessionName(session.id), claudeTmuxSessionName(getSessionClaudeSessionId(session) || session.id)]
       : provider.runtime === 'kimi' ? [kimiTmuxSessionName(session.id)]
@@ -52,14 +54,14 @@ export function getProviderOwnedRuntimeTmuxTarget(
   return expected.includes(sessionName) ? { sessionName, runtime: provider.runtime } : undefined;
 }
 
-function tmuxInterruptTarget(session: BridgeSession | null | undefined, binding: ChannelChat, hasActiveTask: boolean) {
+function tmuxInterruptTarget(session: BridgeSession | null | undefined, binding: ChannelChat, hasActiveTask: boolean): { sessionName: string; runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' } | undefined {
   const recorded = getProviderOwnedRuntimeTmuxTarget(session, binding);
   if (recorded) return recorded;
   // These providers own a deterministic session for each active IM task even
   // before its attachment metadata has been written. Do not infer an idle target.
   if (!session || session.id !== binding.bridgeSessionId || !hasActiveTask || getSessionRuntimeTmuxSessionName(session)) return undefined;
   const provider = resolveEffectiveRuntimeProvider(session, binding);
-  if (provider.provider !== 'tmux' || resolveCursorTransport(session) === 'desktop') return undefined;
+  if (provider.provider !== 'tmux' || provider.runtime === 'doubao' || resolveCursorTransport(session) === 'desktop') return undefined;
   const sessionName = provider.runtime === 'kimi' ? kimiTmuxSessionName(session.id)
     : provider.runtime === 'zcode' ? zcodeTmuxSessionName(session.id) : undefined;
   return sessionName ? { sessionName, runtime: provider.runtime } : undefined;
@@ -126,6 +128,13 @@ export async function stopRunningSession(options: {
     const interrupted = await interruptCursorAcpSession(session.id);
     return { stopped: interrupted || Boolean(task), method: interrupted || task ? 'acp_interrupt' : 'idle',
       detail: interrupted ? 'Cursor ACP 已确认中断当前轮次。' : task ? '已取消本次输入，等待连接收尾。' : 'Cursor ACP 当前没有正在运行的轮次。' };
+  }
+  if (session && resolveEffectiveRuntimeProvider(session, options.binding).identity === 'doubao:acp') {
+    const task = options.deps.getActiveTask(session.id);
+    task?.abortController.abort();
+    const interrupted = await interruptDoubaoAcpSession(session.id);
+    return { stopped: interrupted || Boolean(task), method: interrupted || task ? 'acp_interrupt' : 'idle',
+      detail: interrupted ? 'Doubao ACP 已确认中断当前轮次。' : task ? '已取消本次输入，等待连接收尾。' : 'Doubao ACP 当前没有正在运行的轮次。' };
   }
   const registered = getCodexAppServerSession(options.binding.bridgeSessionId);
   if (session && resolveEffectiveRuntimeProvider(session, options.binding).runtime === 'codex'

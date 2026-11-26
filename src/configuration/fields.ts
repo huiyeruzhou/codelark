@@ -11,6 +11,9 @@ import {
   cursorReasoningEffortSchema,
   zcodeModeSchema,
   zcodeProviderSchema,
+  doubaoModeSchema,
+  doubaoProviderSchema,
+  doubaoReasoningEffortSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -397,6 +400,53 @@ export const configFields = [
     runtimeSettingsKey: 'bridge_zcode_mode',
     parseEnv: enumFromEnv(zcodeModeSchema),
     commandAliases: ['/mode'],
+    defaultWriteScope: 'channel',
+  },
+  {
+    path: 'runtime.doubao.model',
+    tomlPath: 'runtime.doubao.model',
+    scopes: sessionScopes,
+    schema: z.string(),
+    envKey: 'CODELARK_DOUBAO_MODEL',
+    runtimeSettingsKey: 'bridge_doubao_default_model',
+    parseEnv: stringFromEnv,
+    commandAliases: ['/model'],
+    defaultWriteScope: 'channel',
+  },
+  {
+    path: 'runtime.doubao.provider',
+    tomlPath: 'runtime.doubao.provider',
+    scopes: sessionScopes,
+    schema: doubaoProviderSchema,
+    envKey: 'CODELARK_DOUBAO_PROVIDER',
+    runtimeSettingsKey: 'bridge_doubao_provider',
+    parseEnv: enumFromEnv(doubaoProviderSchema),
+  },
+  {
+    path: 'runtime.doubao.mode',
+    tomlPath: 'runtime.doubao.mode',
+    scopes: sessionScopes,
+    schema: doubaoModeSchema,
+    envKey: 'CODELARK_DOUBAO_MODE',
+    runtimeSettingsKey: 'bridge_doubao_mode',
+    parseEnv: enumFromEnv(doubaoModeSchema),
+    commandAliases: ['/mode'],
+    defaultWriteScope: 'channel',
+  },
+  {
+    path: 'runtime.doubao.reasoningEffort',
+    tomlPath: 'runtime.doubao.reasoning_effort',
+    scopes: sessionScopes,
+    schema: z.union([doubaoReasoningEffortSchema, z.literal('')]),
+    envKey: 'CODELARK_DOUBAO_REASONING_EFFORT',
+    runtimeSettingsKey: 'bridge_doubao_reasoning_effort',
+    parseEnv: (value) => {
+      const normalized = value.trim();
+      if (normalized === '') return '';
+      const parsed = doubaoReasoningEffortSchema.safeParse(normalized);
+      return parsed.success ? parsed.data : undefined;
+    },
+    commandAliases: ['/reasoning'],
     defaultWriteScope: 'channel',
   },
   {

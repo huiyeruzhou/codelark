@@ -23,12 +23,15 @@ import {
   getSessionKimiSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
 import {
   hasSessionCodexProviderOverride,
   resolveClaudeRuntimeConfig,
   resolveCursorRuntimeConfig,
+  resolveDoubaoRuntimeConfig,
   resolveEffectiveCodexProvider,
   resolveEffectiveRuntimeMode,
   resolveKimiRuntimeConfig,
@@ -36,8 +39,8 @@ import {
 } from '../support.js';
 
 export interface SessionDisplaySummary {
-  kind: 'bridge' | 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  kind: 'bridge' | 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   bridgeSessionId?: string;
   sessionId?: string;
   claudeSessionId?: string;
@@ -48,6 +51,8 @@ export interface SessionDisplaySummary {
   cursorCwd?: string;
   zcodeSessionId?: string;
   zcodeCwd?: string;
+  doubaoSessionId?: string;
+  doubaoCwd?: string;
   codexThreadId: string;
   threadId: string;
   displayTitle: string;
@@ -79,10 +84,12 @@ export interface SessionDisplayCounts {
   kimiPhysical?: number;
   cursorPhysical?: number;
   zcodePhysical?: number;
+  doubaoPhysical?: number;
   bridgeClaudeLinked?: number;
   bridgeKimiLinked?: number;
   bridgeCursorLinked?: number;
   bridgeZcodeLinked?: number;
+  bridgeDoubaoLinked?: number;
 }
 
 export interface SessionDisplayListPayload {
@@ -138,6 +145,7 @@ export function bridgeSessionExecutionProvider(session: BridgeSession | null | u
   if (activeRuntime === 'kimi') return resolveKimiRuntimeConfig(session).provider;
   if (activeRuntime === 'cursor') return resolveCursorRuntimeConfig(session).provider;
   if (activeRuntime === 'zcode') return resolveZcodeRuntimeConfig(session).provider;
+  if (activeRuntime === 'doubao') return resolveDoubaoRuntimeConfig(session).provider;
   if (activeRuntime === 'claude') return resolveClaudeRuntimeConfig(session).provider;
   return hasSessionCodexProviderOverride(session) ? resolveEffectiveCodexProvider(session) : 'default';
 }
@@ -209,6 +217,20 @@ export function findVisibleBridgeSessionByZcodeSession(
   ));
 }
 
+export function findVisibleBridgeSessionByDoubaoSession(
+  store: Pick<BridgeStore, 'listSessions'>,
+  doubaoSessionId: string,
+  cwd?: string,
+): BridgeSession | undefined {
+  if (!doubaoSessionId) return undefined;
+  return store.listSessions().find((session) => (
+    isVisibleBridgeSession(session)
+    && getSessionActiveRuntime(session) === 'doubao'
+    && getSessionDoubaoSessionId(session) === doubaoSessionId
+    && (!cwd || getSessionDoubaoCwd(session) === cwd || getSessionWorkingDirectory(session) === cwd)
+  ));
+}
+
 export function buildBridgeSessionDisplaySummary(
   session: BridgeSession,
   linkedCodexSession?: CodexSessionSummary,
@@ -223,9 +245,10 @@ export function buildBridgeSessionDisplaySummary(
   const kimiSessionId = getSessionKimiSessionId(session) || undefined;
   const cursorSessionId = getSessionCursorSessionId(session) || undefined;
   const zcodeSessionId = getSessionZcodeSessionId(session) || undefined;
+  const doubaoSessionId = getSessionDoubaoSessionId(session) || undefined;
   return {
     kind: 'bridge',
-    runtime: activeRuntime === 'claude' ? 'claude' : activeRuntime === 'kimi' ? 'kimi' : activeRuntime === 'cursor' ? 'cursor' : activeRuntime === 'zcode' ? 'zcode' : 'codex',
+    runtime: activeRuntime === 'claude' ? 'claude' : activeRuntime === 'kimi' ? 'kimi' : activeRuntime === 'cursor' ? 'cursor' : activeRuntime === 'zcode' ? 'zcode' : activeRuntime === 'doubao' ? 'doubao' : 'codex',
     bridgeSessionId: session.id,
     sessionId: session.id,
     claudeSessionId,
@@ -236,8 +259,10 @@ export function buildBridgeSessionDisplaySummary(
     cursorCwd: getSessionCursorCwd(session) || undefined,
     zcodeSessionId,
     zcodeCwd: getSessionZcodeCwd(session) || undefined,
+    doubaoSessionId,
+    doubaoCwd: getSessionDoubaoCwd(session) || undefined,
     codexThreadId,
-    threadId: codexThreadId || claudeSessionId || kimiSessionId || cursorSessionId || zcodeSessionId || '',
+    threadId: codexThreadId || claudeSessionId || kimiSessionId || cursorSessionId || zcodeSessionId || doubaoSessionId || '',
     displayTitle: title,
     title,
     codexTitle: sessionCodexTitle || linkedCodexSession?.title || '',
@@ -315,7 +340,7 @@ export function buildLocalRuntimeSessionDisplaySummary(
     }, linkedBridgeSession);
   }
 
-  const runtime = session.runtime === 'kimi' ? 'kimi' : session.runtime === 'cursor' ? 'cursor' : session.runtime === 'zcode' ? 'zcode' : 'claude';
+  const runtime = session.runtime === 'kimi' ? 'kimi' : session.runtime === 'cursor' ? 'cursor' : session.runtime === 'zcode' ? 'zcode' : session.runtime === 'doubao' ? 'doubao' : 'claude';
   const title = linkedBridgeSession
     ? getBridgeSessionDisplayTitleWithCodexFallback(linkedBridgeSession, session.title)
     : session.title;
@@ -333,6 +358,8 @@ export function buildLocalRuntimeSessionDisplaySummary(
     cursorCwd: runtime === 'cursor' ? session.cwd : undefined,
     zcodeSessionId: runtime === 'zcode' ? session.threadId : undefined,
     zcodeCwd: runtime === 'zcode' ? session.cwd : undefined,
+    doubaoSessionId: runtime === 'doubao' ? session.threadId : undefined,
+    doubaoCwd: runtime === 'doubao' ? session.cwd : undefined,
     codexThreadId: '',
     threadId: session.threadId,
     displayTitle: title,
@@ -340,14 +367,18 @@ export function buildLocalRuntimeSessionDisplaySummary(
     codexTitle: '',
     cwd: session.cwd,
     mode: '-',
-    executionProvider: runtime === 'cursor' && session.source === 'cursor-desktop'
-      ? 'desktop'
-      : runtime === 'cursor' ? 'acp'
-      : runtime === 'kimi' || runtime === 'zcode' ? 'tmux' : 'pty',
-    codexProvider: runtime === 'cursor' && session.source === 'cursor-desktop'
-      ? 'desktop'
-      : runtime === 'cursor' ? 'acp'
-      : runtime === 'kimi' || runtime === 'zcode' ? 'tmux' : '-',
+    executionProvider: runtime === 'doubao'
+      ? 'acp'
+      : runtime === 'cursor' && session.source === 'cursor-desktop'
+        ? 'desktop'
+        : runtime === 'cursor' ? 'acp'
+        : runtime === 'kimi' || runtime === 'zcode' ? 'tmux' : 'pty',
+    codexProvider: runtime === 'doubao'
+      ? 'acp'
+      : runtime === 'cursor' && session.source === 'cursor-desktop'
+        ? 'desktop'
+        : runtime === 'cursor' ? 'acp'
+        : runtime === 'kimi' || runtime === 'zcode' ? 'tmux' : '-',
     creatorKind: 'tui_cli',
     creatorLabel: creatorBadge.label,
     creatorClass: creatorBadge.className,
@@ -356,7 +387,7 @@ export function buildLocalRuntimeSessionDisplaySummary(
       source: session.source || undefined,
       cliVersion: session.cliVersion || undefined,
     },
-    originator: session.originator || (runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : runtime === 'zcode' ? 'ZCode' : 'Claude Code'),
+    originator: session.originator || (runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : runtime === 'zcode' ? 'ZCode' : runtime === 'doubao' ? 'Doubao' : 'Claude Code'),
     source: session.source || runtime,
     lastEventAt: session.lastEventAt,
   };
@@ -408,6 +439,8 @@ export class SessionDisplayQuery {
             ? findVisibleBridgeSessionByCursorSession(this.store, session.threadId, session.cwd)
             : session.runtime === 'zcode'
               ? findVisibleBridgeSessionByZcodeSession(this.store, session.threadId, session.cwd)
+              : session.runtime === 'doubao'
+                ? findVisibleBridgeSessionByDoubaoSession(this.store, session.threadId, session.cwd)
             : findVisibleBridgeSessionByClaudeSession(this.store, session.threadId, session.cwd),
     );
   }
@@ -507,6 +540,7 @@ export class SessionDisplayQuery {
     const bridgeByKimiIdentity = new Map<string, BridgeSession>();
     const bridgeByCursorIdentity = new Map<string, BridgeSession>();
     const bridgeByZcodeIdentity = new Map<string, BridgeSession>();
+    const bridgeByDoubaoIdentity = new Map<string, BridgeSession>();
     for (const session of bridgeRawSessions) {
       const codexThreadId = getBridgeSessionCodexThreadId(session);
       if (codexThreadId && !bridgeByCodexThreadId.has(codexThreadId)) {
@@ -536,6 +570,12 @@ export class SessionDisplayQuery {
         const key = `${zcodeCwd}\0${zcodeSessionId}`;
         if (!bridgeByZcodeIdentity.has(key)) bridgeByZcodeIdentity.set(key, session);
       }
+      const doubaoSessionId = getSessionDoubaoSessionId(session);
+      const doubaoCwd = getSessionDoubaoCwd(session) || getSessionWorkingDirectory(session);
+      if (doubaoSessionId && doubaoCwd) {
+        const key = `${doubaoCwd}\0${doubaoSessionId}`;
+        if (!bridgeByDoubaoIdentity.has(key)) bridgeByDoubaoIdentity.set(key, session);
+      }
     }
 
     let dedupedBridgeRows = 0;
@@ -544,6 +584,7 @@ export class SessionDisplayQuery {
     const seenKimiIdentities = new Set<string>();
     const seenCursorIdentities = new Set<string>();
     const seenZcodeIdentities = new Set<string>();
+    const seenDoubaoIdentities = new Set<string>();
     const bridgeSessions: SessionDisplaySummary[] = [];
     for (const session of bridgeRawSessions) {
       const codexThreadId = getBridgeSessionCodexThreadId(session);
@@ -594,6 +635,16 @@ export class SessionDisplayQuery {
         }
         seenZcodeIdentities.add(key);
       }
+      const doubaoSessionId = getSessionDoubaoSessionId(session);
+      const doubaoCwd = getSessionDoubaoCwd(session) || getSessionWorkingDirectory(session);
+      if (doubaoSessionId && doubaoCwd) {
+        const key = `${doubaoCwd}\0${doubaoSessionId}`;
+        if (seenDoubaoIdentities.has(key)) {
+          dedupedBridgeRows += 1;
+          continue;
+        }
+        seenDoubaoIdentities.add(key);
+      }
       const linkedCodex = codexThreadId ? codexByThreadId.get(codexThreadId) : undefined;
       bridgeSessions.push(buildBridgeSessionDisplaySummary(session, linkedCodex as CodexSessionSummary | undefined));
     }
@@ -612,6 +663,8 @@ export class SessionDisplayQuery {
             ? bridgeByCursorIdentity.has(identityKey)
             : session.runtime === 'zcode'
               ? bridgeByZcodeIdentity.has(identityKey)
+              : session.runtime === 'doubao'
+                ? bridgeByDoubaoIdentity.has(identityKey)
             : bridgeByClaudeIdentity.has(identityKey);
         if (linked) dedupedBridgeRows += 1;
         return !linked;
@@ -633,11 +686,13 @@ export class SessionDisplayQuery {
     const kimiPhysical = localRuntimeSessions.filter((session) => session.runtime === 'kimi').length;
     const cursorPhysical = localRuntimeSessions.filter((session) => session.runtime === 'cursor').length;
     const zcodePhysical = localRuntimeSessions.filter((session) => session.runtime === 'zcode').length;
+    const doubaoPhysical = localRuntimeSessions.filter((session) => session.runtime === 'doubao').length;
     const bridgeCodexLinked = bridgeRawSessions.filter((session) => Boolean(getBridgeSessionCodexThreadId(session))).length;
     const bridgeClaudeLinked = bridgeRawSessions.filter((session) => Boolean(getSessionClaudeSessionId(session))).length;
     const bridgeKimiLinked = bridgeRawSessions.filter((session) => Boolean(getSessionKimiSessionId(session))).length;
     const bridgeCursorLinked = bridgeRawSessions.filter((session) => Boolean(getSessionCursorSessionId(session))).length;
     const bridgeZcodeLinked = bridgeRawSessions.filter((session) => Boolean(getSessionZcodeSessionId(session))).length;
+    const bridgeDoubaoLinked = bridgeRawSessions.filter((session) => Boolean(getSessionDoubaoSessionId(session))).length;
 
     return {
       root: options.root,
@@ -648,6 +703,7 @@ export class SessionDisplayQuery {
         kimiPhysical,
         cursorPhysical,
         zcodePhysical,
+        doubaoPhysical,
         bridgeStored: bridgeRawSessions.length,
         bridgeWithoutCodexThread,
         bridgeCodexLinked,
@@ -655,6 +711,7 @@ export class SessionDisplayQuery {
         bridgeKimiLinked,
         bridgeCursorLinked,
         bridgeZcodeLinked,
+        bridgeDoubaoLinked,
         dedupedBridgeRows,
         totalDisplayable: combined.length,
         displayed: sessions.length,

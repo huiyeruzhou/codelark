@@ -42,11 +42,13 @@ import {
   defaultUiSessionKimiSource,
   defaultUiSessionCursorSource,
   defaultUiSessionZcodeSource,
+  defaultUiSessionDoubaoSource,
   type UiSessionCodexSource,
   type UiSessionClaudeSource,
   type UiSessionKimiSource,
   type UiSessionCursorSource,
   type UiSessionZcodeSource,
+  type UiSessionDoubaoSource,
   type UiSessionRuntimeSource,
 } from './session-source.js';
 
@@ -64,6 +66,8 @@ export interface UiSessionIdentity {
   cursorCwd?: string;
   zcodeSessionId?: string;
   zcodeCwd?: string;
+  doubaoSessionId?: string;
+  doubaoCwd?: string;
 }
 
 export interface UiSessionHistoryMessage {
@@ -118,7 +122,7 @@ function filterUiMessagesForRuntime(
   messages: UiSessionHistoryMessage[],
   runtime: RuntimeAgent | undefined,
 ): UiSessionHistoryMessage[] {
-  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor' && runtime !== 'zcode') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor' && runtime !== 'zcode' && runtime !== 'doubao') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -177,7 +181,9 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         ? 'cursor'
         : payload.activeRuntime === 'zcode'
           ? 'zcode'
-        : 'codex';
+          : payload.activeRuntime === 'doubao'
+            ? 'doubao'
+          : 'codex';
   if (typeof payload.workingDirectory === 'string') {
     const workspace = payload.workingDirectory.trim() || process.cwd();
     createConfigService({ migrate: false }).set(
@@ -320,6 +326,56 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
     return;
   }
 
+  if (activeRuntime === 'doubao') {
+    if (typeof payload.doubaoModel === 'string') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.doubao.model',
+        payload.doubaoModel.trim(),
+        (model) => ({ runtime: { doubao: { model } } }),
+      );
+    }
+    if (payload.doubaoProvider === 'acp' || payload.doubaoProvider === '') {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.doubao.provider',
+        payload.doubaoProvider,
+        (provider) => ({ runtime: { doubao: { provider } } }),
+      );
+    }
+    if (
+      payload.doubaoMode === 'normal'
+      || payload.doubaoMode === 'plan'
+      || payload.doubaoMode === 'yolo'
+      || payload.doubaoMode === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.doubao.mode',
+        payload.doubaoMode,
+        (mode) => ({ runtime: { doubao: { mode } } }),
+      );
+    }
+    if (
+      payload.doubaoReasoningEffort === 'none'
+      || payload.doubaoReasoningEffort === 'minimal'
+      || payload.doubaoReasoningEffort === 'low'
+      || payload.doubaoReasoningEffort === 'medium'
+      || payload.doubaoReasoningEffort === 'high'
+      || payload.doubaoReasoningEffort === 'xhigh'
+      || payload.doubaoReasoningEffort === 'max'
+      || payload.doubaoReasoningEffort === ''
+    ) {
+      setOrUnsetSessionConfig(
+        bridgeSessionId,
+        'runtime.doubao.reasoningEffort',
+        payload.doubaoReasoningEffort,
+        (reasoningEffort) => ({ runtime: { doubao: { reasoningEffort } } }),
+      );
+    }
+    return;
+  }
+
   if (typeof payload.model === 'string') {
     setOrUnsetSessionConfig(
       bridgeSessionId,
@@ -427,6 +483,8 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): BridgeSessionU
         ? 'cursor'
         : payload.activeRuntime === 'zcode'
           ? 'zcode'
+          : payload.activeRuntime === 'doubao'
+            ? 'doubao'
         : 'codex';
   if (typeof payload.name === 'string') {
     updates.name = payload.name.trim() || undefined;
@@ -468,6 +526,10 @@ function sessionConfigPayload(session: BridgeSession) {
     zcodeModel: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.model') || '',
     zcodeProvider: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.provider') || '',
     zcodeMode: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.mode') || '',
+    doubaoModel: getSessionConfigTomlOverride<string>(session, 'runtime.doubao.model') || '',
+    doubaoProvider: getSessionConfigTomlOverride<string>(session, 'runtime.doubao.provider') || '',
+    doubaoMode: getSessionConfigTomlOverride<string>(session, 'runtime.doubao.mode') || '',
+    doubaoReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.doubao.reasoningEffort') || '',
   };
 }
 
@@ -479,14 +541,15 @@ export class UiSessionApplication {
     private readonly kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
     private readonly cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
     private readonly zcodeSource: UiSessionZcodeSource = defaultUiSessionZcodeSource,
+    private readonly doubaoSource: UiSessionDoubaoSource = defaultUiSessionDoubaoSource,
   ) {}
 
   private createRuntimeSource(): UiSessionRuntimeSource {
-    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource, this.zcodeSource);
+    return createUiSessionRuntimeSource(this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource, this.zcodeSource, this.doubaoSource);
   }
 
   private createSessionRegistry() {
-    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource, this.zcodeSource);
+    return createUiSessionRegistry(this.store, this.codexSource, this.claudeSource, this.kimiSource, this.cursorSource, this.zcodeSource, this.doubaoSource);
   }
 
   listSessions(limit?: number): UiSessionListPayload {
@@ -604,6 +667,17 @@ export class UiSessionApplication {
       };
     }
 
+    if (identity.doubaoSessionId && identity.doubaoCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'doubao', identity.doubaoSessionId, identity.doubaoCwd);
+      if (!summary) throw new Error('指定的 Doubao 会话不存在。');
+      return {
+        session: summary,
+        source: 'doubao',
+        messages: uiRuntimeHistoryMessages(runtimeSource, 'doubao', identity.doubaoSessionId, identity.doubaoCwd),
+      };
+    }
+
     throw new Error('不支持的会话目标。');
   }
 
@@ -657,6 +731,15 @@ export class UiSessionApplication {
     };
   }
 
+  importDoubaoThread(doubaoSessionId: string, cwd: string) {
+    const session = this.createSessionRegistry().materializeDoubaoThread(doubaoSessionId, cwd);
+    return {
+      bridgeSessionId: session.id,
+      session: bridgeSessionToSummary(session),
+      config: sessionConfigPayload(session),
+    };
+  }
+
   renameSession(identity: UiSessionIdentity, name: string | undefined) {
     const registry = this.createSessionRegistry();
     const updated = identity.bridgeSessionId
@@ -669,6 +752,8 @@ export class UiSessionApplication {
             ? registry.renameKimiThread(identity.kimiSessionId, identity.kimiCwd, name)
             : identity.cursorSessionId && identity.cursorCwd
               ? registry.renameCursorThread(identity.cursorSessionId, identity.cursorCwd, name)
+              : identity.doubaoSessionId && identity.doubaoCwd
+                ? registry.renameDoubaoThread(identity.doubaoSessionId, identity.doubaoCwd, name)
               : registry.renameZcodeThread(identity.zcodeSessionId!, identity.zcodeCwd!, name);
     return sessionConfigPayload(updated);
   }
@@ -759,6 +844,14 @@ export class UiSessionApplication {
       const summary = runtimeSessionToSummary(runtimeSource, this.store, 'zcode', identity.zcodeSessionId, identity.zcodeCwd);
       if (!summary) throw new Error('指定的 ZCode 会话不存在。');
       const result = this.createSessionRegistry().archiveZcodeThread(identity.zcodeSessionId, identity.zcodeCwd);
+      return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
+    }
+
+    if (identity.doubaoSessionId && identity.doubaoCwd) {
+      const runtimeSource = this.createRuntimeSource();
+      const summary = runtimeSessionToSummary(runtimeSource, this.store, 'doubao', identity.doubaoSessionId, identity.doubaoCwd);
+      if (!summary) throw new Error('指定的 Doubao 会话不存在。');
+      const result = this.createSessionRegistry().archiveDoubaoThread(identity.doubaoSessionId, identity.doubaoCwd);
       return { deleted: summary, deletedBridgeSessionIds: result.deletedBridgeSessionIds };
     }
 

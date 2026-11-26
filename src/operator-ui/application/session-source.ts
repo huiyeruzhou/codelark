@@ -27,6 +27,12 @@ import {
   readZcodeSessionMessages,
   type ZcodeSessionSummary,
 } from '../../runtime/zcode/session-index.js';
+import {
+  archiveDoubaoSession,
+  findCachedDoubaoSessionById,
+  getCachedDoubaoSessions,
+  type DoubaoSessionSummary,
+} from '../../runtime/doubao/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../../bridge/session/local-runtime-session.js';
 import type { RuntimeAgent } from '../../domain/session.js';
 import {
@@ -77,6 +83,13 @@ export interface UiSessionZcodeSource {
   getThread(zcodeSessionId: string, cwd: string): ZcodeSessionSummary | null;
   readJsonlHistory(zcodeSessionId: string, cwd: string): CodexSessionJsonlHistoryEntry[];
   archiveThread(zcodeSessionId: string, cwd: string): boolean;
+}
+
+export interface UiSessionDoubaoSource {
+  listSessions(): DoubaoSessionSummary[];
+  getThread(doubaoSessionId: string, cwd?: string): DoubaoSessionSummary | null;
+  readJsonlHistory(doubaoSessionId: string, cwd?: string): CodexSessionJsonlHistoryEntry[];
+  archiveThread(doubaoSessionId: string, cwd?: string): boolean;
 }
 
 export interface UiSessionRuntimeSource {
@@ -218,6 +231,13 @@ export const defaultUiSessionZcodeSource: UiSessionZcodeSource = {
   },
 };
 
+export const defaultUiSessionDoubaoSource: UiSessionDoubaoSource = {
+  listSessions: () => getCachedDoubaoSessions(),
+  getThread: (doubaoSessionId, cwd) => findCachedDoubaoSessionById(doubaoSessionId, cwd),
+  readJsonlHistory: () => [],
+  archiveThread: (doubaoSessionId) => archiveDoubaoSession(doubaoSessionId),
+};
+
 function toRuntimeCodexSession(session: CodexSessionSummary): LocalRuntimeSessionSummary {
   return { ...session, runtime: 'codex' };
 }
@@ -282,12 +302,28 @@ function toRuntimeZcodeSession(session: ZcodeSessionSummary): LocalRuntimeSessio
   };
 }
 
+function toRuntimeDoubaoSession(session: DoubaoSessionSummary): LocalRuntimeSessionSummary {
+  return {
+    runtime: 'doubao',
+    threadId: session.sessionId,
+    filePath: '',
+    cwd: session.cwd,
+    originator: 'Doubao',
+    source: 'doubao',
+    firstSeenAt: session.firstSeenAt || session.lastEventAt || '',
+    lastEventAt: session.lastEventAt || session.firstSeenAt || '',
+    title: session.title || session.sessionId.slice(0, 8),
+    activeEstimate: false,
+  };
+}
+
 export function createUiSessionRuntimeSource(
   codexSource: UiSessionCodexSource = defaultUiSessionCodexSource,
   claudeSource: UiSessionClaudeSource = defaultUiSessionClaudeSource,
   kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
   cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
   zcodeSource: UiSessionZcodeSource = defaultUiSessionZcodeSource,
+  doubaoSource: UiSessionDoubaoSource = defaultUiSessionDoubaoSource,
 ): UiSessionRuntimeSource {
   return {
     listSessions() {
@@ -297,12 +333,17 @@ export function createUiSessionRuntimeSource(
         ...kimiSource.listSessions().map(toRuntimeKimiSession),
         ...cursorSource.listSessions().map(toRuntimeCursorSession),
         ...zcodeSource.listSessions().map(toRuntimeZcodeSession),
+        ...doubaoSource.listSessions().map(toRuntimeDoubaoSession),
       ].sort((left, right) => right.lastEventAt.localeCompare(left.lastEventAt));
     },
     getThread(runtime, threadId, cwd) {
       if (runtime === 'codex') {
         const session = codexSource.getThread(threadId);
         return session ? toRuntimeCodexSession(session) : null;
+      }
+      if (runtime === 'doubao') {
+        const session = doubaoSource.getThread(threadId, cwd);
+        return session ? toRuntimeDoubaoSession(session) : null;
       }
       if (!cwd) return null;
       if (runtime === 'kimi') {
@@ -325,6 +366,7 @@ export function createUiSessionRuntimeSource(
       if (runtime === 'kimi') return cwd ? kimiSource.readJsonlHistory(threadId, cwd) : [];
       if (runtime === 'cursor') return cwd ? cursorSource.readJsonlHistory(threadId, cwd) : [];
       if (runtime === 'zcode') return cwd ? zcodeSource.readJsonlHistory(threadId, cwd) : [];
+      if (runtime === 'doubao') return doubaoSource.readJsonlHistory(threadId, cwd);
       return cwd ? claudeSource.readJsonlHistory(threadId, cwd) : [];
     },
     archiveThread(runtime, threadId, cwd) {
@@ -332,6 +374,7 @@ export function createUiSessionRuntimeSource(
       if (runtime === 'kimi') return cwd ? kimiSource.archiveThread(threadId, cwd) : false;
       if (runtime === 'cursor') return cwd ? cursorSource.archiveThread(threadId, cwd) : false;
       if (runtime === 'zcode') return cwd ? zcodeSource.archiveThread(threadId, cwd) : false;
+      if (runtime === 'doubao') return doubaoSource.archiveThread(threadId, cwd);
       return cwd ? claudeSource.archiveThread(threadId, cwd) : false;
     },
     getSessionsRoot: codexSource.getSessionsRoot,
@@ -347,6 +390,7 @@ export function createUiSessionRegistry(
   kimiSource: UiSessionKimiSource = defaultUiSessionKimiSource,
   cursorSource: UiSessionCursorSource = defaultUiSessionCursorSource,
   zcodeSource: UiSessionZcodeSource = defaultUiSessionZcodeSource,
+  doubaoSource: UiSessionDoubaoSource = defaultUiSessionDoubaoSource,
 ): SessionRegistryService {
   return new SessionRegistryService(store, {
     codexThreads: {
@@ -398,6 +442,15 @@ export function createUiSessionRegistry(
           : null;
       },
       archiveThread: (zcodeSessionId, cwd) => zcodeSource.archiveThread(zcodeSessionId, cwd),
+    },
+    doubaoThreads: {
+      getThread(doubaoSessionId, cwd) {
+        const session = doubaoSource.getThread(doubaoSessionId, cwd);
+        return session
+          ? { doubaoSessionId: session.sessionId, title: session.title || session.sessionId.slice(0, 8), cwd: session.cwd || cwd }
+          : null;
+      },
+      archiveThread: (doubaoSessionId, cwd) => doubaoSource.archiveThread(doubaoSessionId, cwd),
     },
     readDefaultModel: () => codexSource.readDefaultModel(),
     defaultWorkingDirectory: () => codexSource.defaultWorkingDirectory(),

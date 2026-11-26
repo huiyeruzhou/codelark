@@ -2695,4 +2695,82 @@ stream_status_check_interval_seconds = 3
     assert.doesNotMatch(tags, /thread_id:/);
     assert.ok(errors.length >= 1);
   });
+
+  it('surfaces thrown pre-stream engine errors on the streaming card instead of finalizing an empty error card', async () => {
+    const adapter = new FakeFeishuStreamingAdapter();
+    adapter.streamEndResult = true;
+    const address = {
+      channelType: 'feishu-default',
+      chatId: 'chat-thrown-error-card',
+      userId: 'user-thrown-error-card',
+    } as const;
+    router.createBinding(address, 'D:\\workspace\\thrown-error');
+
+    const taskStateMap = new Map<string, InteractiveTaskState>();
+    const deliveredTexts: string[] = [];
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+
+    try {
+      await assert.rejects(
+        () => runInteractiveMessage(
+          adapter,
+          {
+            messageId: 'incoming-thrown-error-1',
+            address,
+            text: 'hello',
+            timestamp: Date.now(),
+          },
+          'hello',
+          undefined,
+          {
+            registerInteractiveTask(task) {
+              taskStateMap.set(task.sessionId, task);
+            },
+            resetMirrorSessionForInteractiveRun() {},
+            isCurrentInteractiveTask(sessionId, taskId) {
+              return taskStateMap.get(sessionId)?.id === taskId;
+            },
+            touchInteractiveTask() {},
+            recordInteractiveHealthStart() {},
+            recordInteractiveHealthProgress() {},
+            recordInteractiveHealthTool() {},
+            recordInteractiveHealthEnd() {},
+            beginMirrorSuppression() { return 'suppression-thrown-error'; },
+            abortMirrorSuppression() {},
+            settleMirrorSuppression() {},
+            releaseInteractiveTask(sessionId, taskId) {
+              if (taskStateMap.get(sessionId)?.id === taskId) {
+                taskStateMap.delete(sessionId);
+              }
+            },
+            async deliverResponse(_adapter, _address, responseText) {
+              deliveredTexts.push(responseText);
+            },
+            persistCodexThreadUpdate() {},
+            resolveInteractiveTurnEnvironment: resolveTestInteractiveTurnEnvironment,
+            resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
+            processMessageImpl: async () => {
+              throw new Error('当前 Cursor 历史属于旧版 CLI/tmux 会话，未能找到本地 CLI 历史库自动迁移到 ACP');
+            },
+          },
+        ),
+        /未能找到本地 CLI 历史库自动迁移到 ACP/,
+      );
+      await _testOnlyWaitForDeliveryQueuesForTests(adapter);
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.equal(adapter.streamEnds.length, 1);
+    assert.equal(adapter.streamEnds[0]?.status, 'error');
+    assert.match(adapter.streamEnds[0]?.text || '', /Error\b/);
+    assert.match(adapter.streamEnds[0]?.text || '', /未能找到本地 CLI 历史库自动迁移到 ACP/);
+    assert.match(adapter.streamEnds[0]?.text || '', /bridge_session_id:/);
+    assert.deepEqual(deliveredTexts, []);
+    assert.ok(errors.length >= 1);
+  });
 });

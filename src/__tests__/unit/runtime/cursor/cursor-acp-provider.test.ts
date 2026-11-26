@@ -554,6 +554,51 @@ describe('Cursor ACP direct provider', () => {
     assert.match(events.find(event=>event.type==='error')?.data,/不支持思考强度/);assert.equal(client.count,1);
   });
 
+  it('selects effort over boolean thinking when a model exposes multiple thought_level options and enables thinking if off', async () => {
+    const {client,provider,sessionId}=setup();client.onPrompt=()=>client.end();
+    client.configOptions=[
+      {id:'thinking',category:'thought_level',currentValue:'false',options:[{value:'false',name:'Off'},{value:'true',name:'On'}]},
+      {id:'effort',category:'thought_level',currentValue:'high',options:[{value:'low'},{value:'medium'},{value:'high'},{value:'xhigh'},{value:'max'}]},
+    ];
+    const events=await collect(provider.streamChat({sessionId,prompt:'work',model:'claude-opus-5',cursorReasoningEffort:'low'}));
+    assert.equal(events.find(event=>event.type==='result')?.data.outcome,'completed');
+    const configs=client.calls.filter(call=>call.method==='session/set_config_option').map(call=>[call.params.configId,call.params.value]);
+    assert.deepEqual(configs,[['thinking','true'],['effort','low']]);
+  });
+
+  it('maps xhigh to extra-high for models whose thought_level option uses extra-high and reconnects when cleared to default', async () => {
+    const clients:FakeAcp[]=[];
+    const provider=new CursorAcpProvider(undefined,{clientFactory:async()=>{
+      const client=new FakeAcp();
+      client.configOptions=[{id:'reasoning',category:'thought_level',currentValue:'high',options:[{value:'low'},{value:'medium'},{value:'high'},{value:'extra-high'}]}];
+      client.onPrompt=()=>client.end();
+      clients.push(client);
+      return client;
+    }});
+    const sessionId=`bridge-${randomUUID()}`;
+    const first=await collect(provider.streamChat({sessionId,prompt:'turn 1',model:'gpt-5.3-codex-high',cursorReasoningEffort:'xhigh'}));
+    assert.equal(first.find(event=>event.type==='result')?.data.outcome,'completed');
+    const configs=clients[0]!.calls.filter(call=>call.method==='session/set_config_option').map(call=>[call.params.configId,call.params.value]);
+    assert.deepEqual(configs,[['reasoning','extra-high']]);
+
+    // Clearing cursorReasoningEffort back to default must reload the session rather than keeping extra-high stuck.
+    const nativeId=clients[0]!.nativeId;
+    const second=await collect(provider.streamChat({sessionId,cursorSessionId:nativeId,prompt:'turn 2',model:'gpt-5.3-codex-high'}));
+    assert.equal(second.find(event=>event.type==='result')?.data.outcome,'completed');
+    assert.equal(clients.length,2);
+    assert.equal(clients[0]!.connected,false);
+    assert.equal(clients[1]!.calls.filter(call=>call.method==='session/set_config_option').length,0);
+    assert.equal(clients[1]!.calls.find(call=>call.method==='session/load')?.params.sessionId,nativeId);
+  });
+
+  it('reports clearly when a model only exposes a boolean thinking toggle', async () => {
+    const {client,provider,sessionId}=setup();client.onPrompt=()=>client.end();
+    client.configOptions=[{id:'thinking',category:'thought_level',currentValue:'true',options:[{value:'false'},{value:'true'}]}];
+    const events=await collect(provider.streamChat({sessionId,prompt:'work',model:'claude-opus-4-6',cursorReasoningEffort:'low'}));
+    assert.match(events.find(event=>event.type==='error')?.data,/仅支持思考开关/);
+    assert.equal(client.count,0);
+  });
+
   it('delegates the exact variant ID to native CLI and retains its returned high effort without a base-model setter', async () => {
     const {client,provider,sessionId}=setup();client.onPrompt=()=>client.end();
     client.configOptions=[

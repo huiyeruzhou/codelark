@@ -88,6 +88,7 @@ export function mergePatch(target: ConfigPatch, source: ConfigPatch): ConfigPatc
       ...(source.runtime.kimi ? { kimi: { ...(target.runtime?.kimi || {}), ...source.runtime.kimi } } : {}),
       ...(source.runtime.cursor ? { cursor: { ...(target.runtime?.cursor || {}), ...source.runtime.cursor } } : {}),
       ...(source.runtime.zcode ? { zcode: { ...(target.runtime?.zcode || {}), ...source.runtime.zcode } } : {}),
+      ...(source.runtime.doubao ? { doubao: { ...(target.runtime?.doubao || {}), ...source.runtime.doubao } } : {}),
     };
   }
   for (const channel of source.channels || []) mergeChannel(target, channel);

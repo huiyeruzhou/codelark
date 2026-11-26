@@ -63,6 +63,7 @@ export interface ChannelChat {
     kimi?: string;
     cursor?: string;
     zcode?: string;
+    doubao?: string;
   };
   feishuTopic?: ChannelAddress['feishuTopic'];
   cloudDocumentChat?: {

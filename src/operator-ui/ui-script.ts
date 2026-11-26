@@ -156,7 +156,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
       }
 
       function sessionCodexThreadId(session) {
-        if (!session || session.runtime === 'claude' || session.kind === 'claude' || session.runtime === 'kimi' || session.kind === 'kimi' || session.runtime === 'cursor' || session.kind === 'cursor' || session.runtime === 'zcode' || session.kind === 'zcode') return '';
+        if (!session || session.runtime === 'claude' || session.kind === 'claude' || session.runtime === 'kimi' || session.kind === 'kimi' || session.runtime === 'cursor' || session.kind === 'cursor' || session.runtime === 'zcode' || session.kind === 'zcode' || session.runtime === 'doubao' || session.kind === 'doubao') return '';
         return (session.codexThreadId || session.threadId) || '';
       }
 
@@ -200,8 +200,18 @@ export function uiClientScript(runtimeStatusSource: string): string {
         return session.zcodeCwd || session.cwd || '';
       }
 
+      function sessionDoubaoSessionId(session) {
+        if (!session || (session.runtime !== 'doubao' && session.kind !== 'doubao')) return '';
+        return session.doubaoSessionId || session.threadId || '';
+      }
+
+      function sessionDoubaoCwd(session) {
+        if (!session || (session.runtime !== 'doubao' && session.kind !== 'doubao')) return '';
+        return session.doubaoCwd || session.cwd || '';
+      }
+
       function sessionRuntimeThreadId(session) {
-        return sessionClaudeSessionId(session) || sessionKimiSessionId(session) || sessionCursorSessionId(session) || sessionZcodeSessionId(session) || sessionCodexThreadId(session);
+        return sessionClaudeSessionId(session) || sessionKimiSessionId(session) || sessionCursorSessionId(session) || sessionZcodeSessionId(session) || sessionDoubaoSessionId(session) || sessionCodexThreadId(session);
       }
 
       function sessionMatchesFilter(session) {
@@ -225,6 +235,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
           session.kimiSessionId,
           session.cursorSessionId,
           session.zcodeSessionId,
+          session.doubaoSessionId,
           session.executionProvider,
           session.codexProvider,
           session.creatorLabel,
@@ -244,6 +255,8 @@ export function uiClientScript(runtimeStatusSource: string): string {
         if (cursorSessionId) return 'cursor:' + encodeURIComponent(cursorSessionId) + ':' + encodeURIComponent(sessionCursorCwd(session));
         const zcodeSessionId = sessionZcodeSessionId(session);
         if (zcodeSessionId) return 'zcode:' + encodeURIComponent(zcodeSessionId) + ':' + encodeURIComponent(sessionZcodeCwd(session));
+        const doubaoSessionId = sessionDoubaoSessionId(session);
+        if (doubaoSessionId) return 'doubao:' + encodeURIComponent(doubaoSessionId) + ':' + encodeURIComponent(sessionDoubaoCwd(session));
         const codexThreadId = sessionCodexThreadId(session);
         return codexThreadId ? 'codex:' + codexThreadId : '';
       }
@@ -259,6 +272,8 @@ export function uiClientScript(runtimeStatusSource: string): string {
         const cursorCwd = sessionCursorCwd(session);
         const zcodeSessionId = sessionZcodeSessionId(session);
         const zcodeCwd = sessionZcodeCwd(session);
+        const doubaoSessionId = sessionDoubaoSessionId(session);
+        const doubaoCwd = sessionDoubaoCwd(session);
         return 'data-session-ref="' + escapeHtml(sessionRef(session)) + '"'
           + (bridgeSessionId ? ' data-bridge-session-id="' + escapeHtml(bridgeSessionId) + '"' : '')
           + (codexThreadId ? ' data-codex-thread-id="' + escapeHtml(codexThreadId) + '"' : '')
@@ -269,7 +284,9 @@ export function uiClientScript(runtimeStatusSource: string): string {
           + (cursorSessionId ? ' data-cursor-session-id="' + escapeHtml(cursorSessionId) + '"' : '')
           + (cursorCwd ? ' data-cursor-cwd="' + escapeHtml(cursorCwd) + '"' : '')
           + (zcodeSessionId ? ' data-zcode-session-id="' + escapeHtml(zcodeSessionId) + '"' : '')
-          + (zcodeCwd ? ' data-zcode-cwd="' + escapeHtml(zcodeCwd) + '"' : '');
+          + (zcodeCwd ? ' data-zcode-cwd="' + escapeHtml(zcodeCwd) + '"' : '')
+          + (doubaoSessionId ? ' data-doubao-session-id="' + escapeHtml(doubaoSessionId) + '"' : '')
+          + (doubaoCwd ? ' data-doubao-cwd="' + escapeHtml(doubaoCwd) + '"' : '');
       }
 
       function sessionIdentityPayload(ref) {
@@ -312,6 +329,15 @@ export function uiClientScript(runtimeStatusSource: string): string {
             zcodeCwd: decodeURIComponent(raw.slice(separator + 1)),
           };
         }
+        if (value.startsWith('doubao:')) {
+          const raw = value.slice('doubao:'.length);
+          const separator = raw.indexOf(':');
+          if (separator < 0) return {};
+          return {
+            doubaoSessionId: decodeURIComponent(raw.slice(0, separator)),
+            doubaoCwd: decodeURIComponent(raw.slice(separator + 1)),
+          };
+        }
         return {};
       }
 
@@ -328,6 +354,8 @@ export function uiClientScript(runtimeStatusSource: string): string {
         if (identity.cursorCwd) params.set('cursorCwd', identity.cursorCwd);
         if (identity.zcodeSessionId) params.set('zcodeSessionId', identity.zcodeSessionId);
         if (identity.zcodeCwd) params.set('zcodeCwd', identity.zcodeCwd);
+        if (identity.doubaoSessionId) params.set('doubaoSessionId', identity.doubaoSessionId);
+        if (identity.doubaoCwd) params.set('doubaoCwd', identity.doubaoCwd);
         return params.toString();
       }
 
@@ -352,6 +380,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
             && binding.currentRuntime === 'zcode'
             && binding.currentRuntimeThreadId === identity.zcodeSessionId
             && (!identity.zcodeCwd || binding.currentZcodeCwd === identity.zcodeCwd))
+          || (identity.doubaoSessionId
+            && binding.currentRuntime === 'doubao'
+            && binding.currentRuntimeThreadId === identity.doubaoSessionId
+            && (!identity.doubaoCwd || binding.currentDoubaoCwd === identity.doubaoCwd))
         );
       }
 
@@ -454,11 +486,12 @@ export function uiClientScript(runtimeStatusSource: string): string {
         const isKimi = option.runtime === 'kimi' || option.kind === 'kimi';
         const isCursor = option.runtime === 'cursor' || option.kind === 'cursor';
         const isZcode = option.runtime === 'zcode' || option.kind === 'zcode';
+        const isDoubao = option.runtime === 'doubao' || option.kind === 'doubao';
         return {
-          kind: isBridge ? 'bridge' : (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex'),
-          runtime: option.runtime || (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex'),
+          kind: isBridge ? 'bridge' : (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : isDoubao ? 'doubao' : 'codex'),
+          runtime: option.runtime || (isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : isDoubao ? 'doubao' : 'codex'),
           bridgeSessionId: option.bridgeSessionId || option.sessionId || (isBridge ? option.id : ''),
-          codexThreadId: isClaude || isKimi || isCursor || isZcode ? '' : option.codexThreadId || option.threadId || (isBridge ? '' : option.id),
+          codexThreadId: isClaude || isKimi || isCursor || isZcode || isDoubao ? '' : option.codexThreadId || option.threadId || (isBridge ? '' : option.id),
           claudeSessionId: option.claudeSessionId || (isClaude ? option.threadId || option.id : ''),
           claudeCwd: option.claudeCwd || (isClaude ? option.cwd || '' : ''),
           kimiSessionId: option.kimiSessionId || (isKimi ? option.threadId || option.id : ''),
@@ -467,12 +500,14 @@ export function uiClientScript(runtimeStatusSource: string): string {
           cursorCwd: option.cursorCwd || (isCursor ? option.cwd || '' : ''),
           zcodeSessionId: option.zcodeSessionId || (isZcode ? option.threadId || option.id : ''),
           zcodeCwd: option.zcodeCwd || (isZcode ? option.cwd || '' : ''),
+          doubaoSessionId: option.doubaoSessionId || (isDoubao ? option.threadId || option.id : ''),
+          doubaoCwd: option.doubaoCwd || (isDoubao ? option.cwd || '' : ''),
           sessionId: option.sessionId || (isBridge ? option.id : ''),
           threadId: option.threadId || (isBridge ? '' : option.id),
           title: option.label,
           cwd: option.cwd || '',
-          originator: isBridge ? 'Bridge / IM' : isKimi ? 'Kimi Code' : isClaude ? 'Claude Code' : isCursor ? 'Cursor Agent' : isZcode ? 'ZCode' : 'Codex Native',
-          source: isBridge ? 'bridge' : isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex',
+          originator: isBridge ? 'Bridge / IM' : isKimi ? 'Kimi Code' : isClaude ? 'Claude Code' : isCursor ? 'Cursor Agent' : isZcode ? 'ZCode' : isDoubao ? 'Doubao' : 'Codex Native',
+          source: isBridge ? 'bridge' : isKimi ? 'kimi' : isClaude ? 'claude' : isCursor ? 'cursor' : isZcode ? 'zcode' : isDoubao ? 'doubao' : 'codex',
           creatorKind: isBridge ? 'bridge' : 'native',
           creatorLabel: isBridge ? 'Bridge' : 'Native',
           creatorClass: isBridge ? 'bridge' : 'native',
@@ -581,6 +616,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
           zcodeProvider: document.getElementById('zcodeProvider').value,
           zcodeDefaultModel: document.getElementById('zcodeDefaultModel').value,
           zcodeMode: document.getElementById('zcodeMode').value,
+          doubaoProvider: document.getElementById('doubaoProvider').value,
+          doubaoDefaultModel: document.getElementById('doubaoDefaultModel').value,
+          doubaoMode: document.getElementById('doubaoMode').value,
+          doubaoReasoningEffort: document.getElementById('doubaoReasoningEffort').value,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
         };
@@ -714,7 +753,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
       }
 
       function setActiveConfigTab(tab) {
-        const nextTab = ['common', 'codex', 'claude', 'kimi', 'cursor', 'zcode', 'web'].includes(tab) ? tab : 'common';
+        const nextTab = ['common', 'codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao', 'web'].includes(tab) ? tab : 'common';
         state.activeConfigTab = nextTab;
         document.querySelectorAll('[data-config-tab]').forEach((element) => {
           const active = element.dataset.configTab === nextTab;
@@ -923,7 +962,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
       }
 
       function renderRuntimeStatuses() {
-        for (const runtime of ['codex', 'claude', 'kimi', 'cursor', 'zcode']) {
+        for (const runtime of ['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao']) {
           const projection = runtimeStatusProjection(runtime);
           const item = document.querySelector('.runtime-status-item[data-runtime="' + runtime + '"]');
           if (item) {
@@ -975,6 +1014,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
         zcodeProvider: '默认 ZCode Provider',
         zcodeDefaultModel: 'ZCode 默认模型',
         zcodeMode: 'ZCode 默认模式',
+        doubaoProvider: '默认 Doubao Provider',
+        doubaoDefaultModel: 'Doubao 默认模型',
+        doubaoMode: 'Doubao 默认模式',
+        doubaoReasoningEffort: 'Doubao 思考级别',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
       };
@@ -1012,6 +1055,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
         'zcodeProvider',
         'zcodeDefaultModel',
         'zcodeMode',
+        'doubaoProvider',
+        'doubaoDefaultModel',
+        'doubaoMode',
+        'doubaoReasoningEffort',
         'uiAllowLan',
         'uiAccessToken',
       ]);
@@ -1348,6 +1395,9 @@ export function uiClientScript(runtimeStatusSource: string): string {
         const zcodePhysical = Number.isFinite(Number(counts.zcodePhysical))
           ? Number(counts.zcodePhysical)
           : allSessions.filter((session) => session.kind === 'zcode').length;
+        const doubaoPhysical = Number.isFinite(Number(counts.doubaoPhysical))
+          ? Number(counts.doubaoPhysical)
+          : allSessions.filter((session) => session.kind === 'doubao').length;
         const bridgeStored = Number.isFinite(Number(counts.bridgeStored))
           ? Number(counts.bridgeStored)
           : allSessions.filter((session) => session.kind === 'bridge').length;
@@ -1365,8 +1415,9 @@ export function uiClientScript(runtimeStatusSource: string): string {
           + ' · Kimi ' + kimiPhysical + ' 条'
           + ' · Cursor ' + cursorPhysical + ' 条'
           + ' · ZCode ' + zcodePhysical + ' 条'
+          + ' · Doubao ' + doubaoPhysical + ' 条'
           + ' · Bridge 存储 ' + bridgeStored + ' 条'
-          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude、Kimi、Cursor、ZCode 或纯 Bridge 会话）' : '')
+          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条没有 Codex thread；可能是 Claude、Kimi、Cursor、ZCode、Doubao 或纯 Bridge 会话）' : '')
           + (dedupedBridgeRows > 0 ? ' · 已按 runtime identity 合并 ' + dedupedBridgeRows + ' 条重复映射' : '');
         setText('runtimeSessionsRootStatus', state.codexRoot);
 
@@ -1390,7 +1441,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
         }
 
         if (allSessions.length === 0) {
-          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode 中打开一个会话，然后刷新。</div>';
+          list.innerHTML = '<div class="notice ghost">当前没有发现本地会话。先从 IM 发一条消息，或在本机 Codex / Claude Code / Kimi Code / Cursor Agent / ZCode / Doubao 中打开一个会话，然后刷新。</div>';
           renderChannelsWorkspace();
           return;
         }
@@ -1707,6 +1758,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
         document.getElementById('zcodeProvider').value = config.zcodeProvider || 'tmux';
         document.getElementById('zcodeDefaultModel').value = config.zcodeDefaultModel || '';
         document.getElementById('zcodeMode').value = config.zcodeMode || 'build';
+        document.getElementById('doubaoProvider').value = config.doubaoProvider || 'acp';
+        document.getElementById('doubaoDefaultModel').value = config.doubaoDefaultModel || '';
+        document.getElementById('doubaoMode').value = config.doubaoMode || 'normal';
+        document.getElementById('doubaoReasoningEffort').value = config.doubaoReasoningEffort || '';
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
         renderUiAccess();
@@ -1879,6 +1934,7 @@ export function uiClientScript(runtimeStatusSource: string): string {
         if (source === 'kimi') return 'Kimi Code';
         if (source === 'cursor') return 'Cursor Agent';
         if (source === 'zcode') return 'ZCode';
+        if (source === 'doubao') return 'Doubao';
         return source === 'bridge' ? 'Bridge / IM' : 'Codex Native';
       }
 
@@ -2146,18 +2202,22 @@ export function uiClientScript(runtimeStatusSource: string): string {
               ? 'cursor'
               : config.activeRuntime === 'zcode'
                 ? 'zcode'
+                : config.activeRuntime === 'doubao'
+                  ? 'doubao'
               : 'codex';
         state.activeSessionConfigRuntime = activeRuntime;
         const isClaude = activeRuntime === 'claude';
         const isKimi = activeRuntime === 'kimi';
         const isCursor = activeRuntime === 'cursor';
         const isZcode = activeRuntime === 'zcode';
-        document.getElementById('sessionConfigCodexBlock').hidden = isClaude || isKimi || isCursor || isZcode;
-        document.getElementById('sessionConfigCodexSandboxBlock').hidden = isClaude || isKimi || isCursor || isZcode;
+        const isDoubao = activeRuntime === 'doubao';
+        document.getElementById('sessionConfigCodexBlock').hidden = isClaude || isKimi || isCursor || isZcode || isDoubao;
+        document.getElementById('sessionConfigCodexSandboxBlock').hidden = isClaude || isKimi || isCursor || isZcode || isDoubao;
         document.getElementById('sessionConfigClaudeBlock').hidden = !isClaude;
         document.getElementById('sessionConfigKimiBlock').hidden = !isKimi;
         document.getElementById('sessionConfigCursorBlock').hidden = !isCursor;
         document.getElementById('sessionConfigZcodeBlock').hidden = !isZcode;
+        document.getElementById('sessionConfigDoubaoBlock').hidden = !isDoubao;
         document.getElementById('sessionConfigName').value = config.name || config.title || '';
         document.getElementById('sessionConfigCwd').value = config.workingDirectory || '';
         renderModelOptionsForSelect(document.getElementById('sessionConfigModel'), config.model || '', '跟随全局 / Codex 默认模型');
@@ -2182,6 +2242,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
         document.getElementById('sessionConfigZcodeModel').value = config.zcodeModel || '';
         document.getElementById('sessionConfigZcodeProvider').value = config.zcodeProvider || '';
         document.getElementById('sessionConfigZcodeMode').value = config.zcodeMode || '';
+        document.getElementById('sessionConfigDoubaoModel').value = config.doubaoModel || '';
+        document.getElementById('sessionConfigDoubaoProvider').value = config.doubaoProvider || '';
+        document.getElementById('sessionConfigDoubaoMode').value = config.doubaoMode || '';
+        document.getElementById('sessionConfigDoubaoReasoning').value = config.doubaoReasoningEffort || '';
         document.getElementById('sessionConfigPrompt').value = config.systemPrompt || '';
       }
 
@@ -2213,6 +2277,10 @@ export function uiClientScript(runtimeStatusSource: string): string {
           zcodeModel: document.getElementById('sessionConfigZcodeModel').value,
           zcodeProvider: document.getElementById('sessionConfigZcodeProvider').value,
           zcodeMode: document.getElementById('sessionConfigZcodeMode').value,
+          doubaoModel: document.getElementById('sessionConfigDoubaoModel').value,
+          doubaoProvider: document.getElementById('sessionConfigDoubaoProvider').value,
+          doubaoMode: document.getElementById('sessionConfigDoubaoMode').value,
+          doubaoReasoningEffort: document.getElementById('sessionConfigDoubaoReasoning').value,
           systemPrompt: document.getElementById('sessionConfigPrompt').value,
         };
       }

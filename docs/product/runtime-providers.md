@@ -2,8 +2,8 @@
 
 CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
-- 运行时：当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。
-- 提供方：当前运行时通过哪个兼容层运行。Codex 固定为 `tmux`（app-server 优先执行），Cursor 固定为 `acp`（已通过 `/t` 接管的 Cursor Desktop 会话在内部自动走 Desktop transport，与 tmux 解耦）；对不支持 tmux 的运行时，`/p tmux` 会直接解释为 `/p acp`。
+- 运行时：当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent、ZCode 还是 Doubao。
+- 提供方：当前运行时通过哪个兼容层运行。Codex 固定为 `tmux`（app-server 优先执行），Cursor 固定为 `acp`（已通过 `/t` 接管的 Cursor Desktop 会话在内部自动走 Desktop transport，与 tmux 解耦），Doubao 固定为 `acp`，Kimi 与 ZCode 固定为 `tmux`；对不支持 tmux 的运行时（Cursor 与 Doubao），`/p tmux` 会直接解释为 `/p acp`。
 
 日常 IM 操作流程见 [会话与配置工作流](../guide/session-workflows.md)。本文主要说明 provider 能力边界和实现模块。
 
@@ -19,6 +19,7 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 | Cursor Agent | `acp` | 使用官方 `agent acp` 协议流式执行；不再支持 Cursor CLI `tmux`（`/p tmux` 自动解释为 `/p acp`） | ACP 实时文字、工具调用、原生 diff 与问答事件 |
 | Cursor Desktop | `acp`（内部 Desktop 接管） | `/t` 接管已经在 Cursor Desktop 中存在的可见对话，路由层自动优先走 Desktop transport | Cursor Desktop Bridge 单写入 + 同一 transcript 只读 mirror |
 | ZCode | `tmux` | 运行本机 `zcode` TUI，保留原生 slash 命令和可 attach 会话 | ZCode SQLite/WAL direct stream + tmux screen；后台 mirror 同步外部变化 |
+| Doubao | `acp` | 通过标准 ACP v1 直接驱动本机 `doubao acp serve`，支持运行期热切换模型/模式/思考级别 | Doubao ACP direct stream（无需 tmux 或本地文件 mirror） |
 
 补充说明：
 
@@ -38,10 +39,10 @@ Cursor tmux 是生产支持的 runtime，不是 UI 占位。真实官方 `agent`
 
 ## 用户配置入口
 
-- `/runtime codex|claude|kimi|cursor|zcode`：切换当前会话使用的运行时。
+- `/runtime codex|claude|kimi|cursor|zcode|doubao`：切换当前会话使用的运行时。
 - `/provider` 或 `/p`：查看或切换当前运行时的提供方。
 - `/model`：查看或切换当前会话模型。
-- `/reasoning`：按当前 runtime 设置 Codex/Claude effort、Kimi Thinking 开关或 Cursor 模型 effort；ZCode 不做跨产品参数映射。
+- `/reasoning`：按当前 runtime 设置 Codex/Claude effort、Kimi Thinking 开关、Cursor 模型 effort 或 Doubao 思考级别（`none` 到 `max`）；ZCode 不做跨产品参数映射。
 - `/cd <path>`：修改当前会话工作目录。
 - `/set`：查看或修改全局默认值。
 - Web 工作台配置页：编辑全局默认值。
@@ -67,6 +68,9 @@ Codex tmux 的 fresh 首消息会在 workspace trust 后继续处理模型迁移
 | Cursor session index | [src/runtime/cursor/session-index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/cursor/session-index.ts) |
 | ZCode tmux | [src/runtime/zcode/tmux-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/zcode/tmux-provider.ts) |
 | ZCode session index | [src/runtime/zcode/session-index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/zcode/session-index.ts) |
+| 共享 ACP 客户端 | [src/runtime/acp/client.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/acp/client.ts) |
+| Doubao ACP | [src/runtime/doubao/acp-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/doubao/acp-provider.ts) |
+| Doubao models & session index | [src/runtime/doubao/models.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/doubao/models.ts)、[src/runtime/doubao/session-index.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/doubao/session-index.ts) |
 | tmux session 生命周期 | [src/bridge/tmux/runtime.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/bridge/tmux/runtime.ts) |
 | Claude pty | [src/runtime/claude/pty-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/pty-provider.ts) |
 | Claude SDK | [src/runtime/claude/sdk-provider.ts](https://github.com/huiyeruzhou/codelark/blob/main/src/runtime/claude/sdk-provider.ts) |

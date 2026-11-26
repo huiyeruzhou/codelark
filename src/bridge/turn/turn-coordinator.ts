@@ -36,11 +36,11 @@ export function createTurnCoordinator(deps: TurnCoordinatorDeps = {}): TurnCoord
   }
 
   function runtimeOf(record: BridgeTurnTerminalRecord): BridgeTurnRuntime {
-    return record.runtime === 'claude' || record.runtime === 'kimi' || record.runtime === 'cursor' || record.runtime === 'zcode' ? record.runtime : 'codex';
+    return record.runtime === 'claude' || record.runtime === 'kimi' || record.runtime === 'cursor' || record.runtime === 'zcode' || record.runtime === 'doubao' ? record.runtime : 'codex';
   }
 
   function turnRuntime(turn: ActiveBridgeTurn): BridgeTurnRuntime {
-    return turn.runtime === 'claude' || turn.runtime === 'kimi' || turn.runtime === 'cursor' || turn.runtime === 'zcode' ? turn.runtime : 'codex';
+    return turn.runtime === 'claude' || turn.runtime === 'kimi' || turn.runtime === 'cursor' || turn.runtime === 'zcode' || turn.runtime === 'doubao' ? turn.runtime : 'codex';
   }
 
   function turnAcceptsTerminal(turn: ActiveBridgeTurn, terminal: BridgeTurnTerminalRecord): boolean {

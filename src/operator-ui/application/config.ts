@@ -15,6 +15,9 @@ import {
   cursorReasoningEffortSchema,
   zcodeProviderSchema,
   zcodeModeSchema,
+  doubaoProviderSchema,
+  doubaoModeSchema,
+  doubaoReasoningEffortSchema,
   reasoningEffortSchema,
   runtimeAgentSchema,
   sandboxModeSchema,
@@ -110,6 +113,13 @@ const uiConfigPayloadSchema = z.object({
   zcodeDefaultModel: optionalString(),
   zcodeProvider: optionalEnum(zcodeProviderSchema),
   zcodeMode: optionalEnum(zcodeModeSchema),
+  doubaoDefaultModel: optionalString(),
+  doubaoProvider: optionalEnum(doubaoProviderSchema),
+  doubaoMode: optionalEnum(doubaoModeSchema),
+  doubaoReasoningEffort: z.preprocess(
+    (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
+    z.union([doubaoReasoningEffortSchema, z.literal('')]),
+  ).optional(),
   uiAllowLan: z.boolean().optional(),
   uiAccessToken: optionalString(),
 }).strict();
@@ -174,6 +184,10 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     zcodeDefaultModel: config.runtime.zcode.model || '',
     zcodeProvider: config.runtime.zcode.provider || 'tmux',
     zcodeMode: config.runtime.zcode.mode || 'build',
+    doubaoDefaultModel: config.runtime.doubao.model || '',
+    doubaoProvider: config.runtime.doubao.provider || 'acp',
+    doubaoMode: config.runtime.doubao.mode || 'normal',
+    doubaoReasoningEffort: config.runtime.doubao.reasoningEffort || '',
     uiAllowLan: config.bridge.uiAllowLan === true,
     uiAccessToken: config.bridge.uiAccessToken || '',
     channels: config.channels.map(v2ChannelToPayload),
@@ -259,6 +273,14 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
           : parsed.zcodeDefaultModel || '',
         provider: parsed.zcodeProvider ?? current.runtime.zcode.provider,
         mode: parsed.zcodeMode ?? current.runtime.zcode.mode,
+      },
+      doubao: {
+        model: parsed.doubaoDefaultModel === undefined
+          ? current.runtime.doubao.model
+          : parsed.doubaoDefaultModel || '',
+        provider: parsed.doubaoProvider ?? current.runtime.doubao.provider,
+        mode: parsed.doubaoMode ?? current.runtime.doubao.mode,
+        reasoningEffort: parsed.doubaoReasoningEffort ?? current.runtime.doubao.reasoningEffort,
       },
     },
     bridge: {

@@ -12,6 +12,7 @@ import { cleanupRuntimeTmuxSession } from '../../../runtime/tmux/runtime.js';
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../../runtime/zcode/tmux-provider.js';
+import { closeDoubaoAcpSession } from '../../../runtime/doubao/acp-provider.js';
 import * as router from '../channel-router.js';
 import { getCodexAppServerSession, releaseCodexAppServerSession } from '../../../runtime/codex/app-server-registry.js';
 import { releaseAppServerRequestObserver } from '../../permission/app-server.js';
@@ -29,6 +30,7 @@ import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import { validateThreadName } from './args.js';
 import {
   listCommandLocalRuntimeSessions,
+  refreshCommandDoubaoSessions,
 } from './source.js';
 import {
   handleLocalRuntimeSessionsCommand,
@@ -43,6 +45,7 @@ import {
   findBridgeSessionByKimiIdentity,
   findBridgeSessionByCursorIdentity,
   findBridgeSessionByZcodeIdentity,
+  findBridgeSessionByDoubaoIdentity,
   resolveCurrentCodexThreadTarget,
   selectDirectThreadTarget,
 } from './thread-targets.js';
@@ -61,6 +64,10 @@ async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession 
     return;
   }
   const runtime = getSessionActiveRuntime(session) || 'codex';
+  if (runtime === 'doubao' && session) {
+    await closeDoubaoAcpSession(session.id).catch(() => {});
+    return;
+  }
   const sessionName = getSessionRuntimeTmuxSessionName(session)
     || (runtime === 'kimi' && session
       ? kimiTmuxSessionName(session.id)
@@ -69,7 +76,7 @@ async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession 
         : runtime === 'zcode' && session
           ? zcodeTmuxSessionName(session.id)
         : undefined);
-  if (!sessionName) return;
+  if (!sessionName || runtime === 'doubao') return;
   const cleanup = await cleanupRuntimeTmuxSession({
     runtime,
     sessionName,
@@ -85,7 +92,11 @@ async function cleanupBridgeSessionRuntimeTmuxBestEffort(session: BridgeSession 
 }
 
 function bindingRuntimeIdentityFieldName(display: ReturnType<CommandThreadDisplay['binding']>): string {
-  return display.originator === 'Claude Code' || display.originator === 'Kimi Code'
+  return display.originator === 'Claude Code'
+    || display.originator === 'Kimi Code'
+    || display.originator === 'Cursor Agent'
+    || display.originator === 'ZCode'
+    || display.originator === 'Doubao'
     ? 'session_id'
     : 'thread_id';
 }
@@ -195,6 +206,9 @@ export async function handleThreadBindingCommand(options: {
 
     if (targetToken) {
       const runtime = options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
+      if (runtime === 'doubao') {
+        await refreshCommandDoubaoSessions();
+      }
       const displayedThreads = listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime);
       if (!displayedThreads) {
         return { response: '读取本地会话列表失败，请稍后重试。' };
@@ -250,7 +264,7 @@ export async function handleThreadBindingCommand(options: {
         const activeRuntime = getSessionActiveRuntime(session) || 'codex';
         target = {
           threadId,
-          runtime: activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' ? activeRuntime : 'codex',
+          runtime: activeRuntime === 'claude' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao' ? activeRuntime : 'codex',
           title: options.threadDisplay.binding(selected.binding).title,
           cwd: getSessionWorkingDirectory(session),
           bridgeSessionId: selected.binding.bridgeSessionId,
@@ -327,7 +341,7 @@ export async function handleThreadBindingCommand(options: {
         if (selected.index !== undefined) {
           return { response: `会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread/session id / bridge_id / 名称。` };
         }
-        return { response: `没有找到对应会话：${targetToken}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号归档，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\`、\`/t zcode\` 切换 runtime 列表。` };
+        return { response: `没有找到对应会话：${targetToken}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号归档，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\`、\`/t zcode\`、\`/t doubao\` 切换 runtime 列表。` };
       } else {
         target = {
           threadId: selected.threadId,
@@ -422,6 +436,41 @@ export async function handleThreadBindingCommand(options: {
           activeAfterArchive
             ? ['当前聊天仍绑定到上面显示的会话。']
             : ['当前聊天已解除该 Cursor Agent 会话绑定；之后直接发送文本会自动进入临时 BridgeSession。'],
+          options.markdown,
+        ),
+        richCard,
+      };
+    }
+    if (target.runtime === 'doubao') {
+      const cwd = target.cwd || '';
+      const bridgeSessionBeforeArchive = findBridgeSessionByDoubaoIdentity(options.store, threadId, cwd);
+      const bindingsBeforeArchive = options.store.listChannelChats()
+        .filter((binding) => binding.bridgeSessionId === bridgeSessionBeforeArchive?.id);
+      let result: ReturnType<SessionRegistryService['archiveDoubaoThread']>;
+      try {
+        await cleanupBridgeSessionRuntimeTmuxBestEffort(bridgeSessionBeforeArchive, 'doubao archive');
+        result = createCommandSessionRegistry(options.store).archiveDoubaoThread(threadId, cwd);
+      } catch (error) {
+        return { response: toUserVisibleBindingError(error, '归档 Doubao 会话失败。') };
+      }
+      for (const binding of bindingsBeforeArchive) options.deps.onBindingRemoved?.(binding);
+      scheduleMirrorSubscriptionsBestEffort(options.deps, 'doubao archive');
+      const activeAfterArchive = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
+      const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      return {
+        response: buildCommandFields(
+          '已归档 Doubao 会话',
+          [
+            ['标题', target.title || threadId.slice(0, 8)],
+            ['session_id', threadId],
+            ['目录', formatCommandPath(result.cwd)],
+            ['解除绑定', `${bindingsBeforeArchive.length}`],
+            ['清理 Bridge 会话', `${result.deletedBridgeSessionIds.length}`],
+            ['当前', activeAfterArchive ? options.threadDisplay.binding(activeAfterArchive).title : '未绑定'],
+          ],
+          activeAfterArchive
+            ? ['当前聊天仍绑定到上面显示的会话。']
+            : ['当前聊天已解除该 Doubao 会话绑定；之后直接发送文本会自动进入临时 BridgeSession。'],
           options.markdown,
         ),
         richCard,
@@ -585,5 +634,5 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  return { response: '用法：/t、/t codex、/t claude、/t kimi、/t cursor、/t zcode、/t <序号|thread/session-id|bridge-id|名称>、/t archive [序号|thread/session-id|bridge-id|名称]、/t rename <名称>' };
+  return { response: '用法：/t、/t codex、/t claude、/t kimi、/t cursor、/t zcode、/t doubao、/t <序号|thread/session-id|bridge-id|名称>、/t archive [序号|thread/session-id|bridge-id|名称]、/t rename <名称>' };
 }

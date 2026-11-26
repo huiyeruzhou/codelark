@@ -10,7 +10,7 @@ export type RuntimeReasoningEffort = z.infer<typeof reasoningEffortSchema>;
 export type ClaudeReasoningEffort = z.infer<typeof claudeReasoningEffortSchema>;
 export type CodexSandboxMode = RuntimeSandboxMode;
 export type CodexReasoningEffort = RuntimeReasoningEffort;
-export type RuntimeProvider = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+export type RuntimeProvider = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 export type CodexProviderChoice = 'tmux';
 /** Read-only compatibility shape for configuration written before Codex became tmux-only. */
 export type LegacyCodexProviderChoice = 'sdk' | 'tmux' | 'pty';
@@ -53,7 +53,7 @@ export function normalizeReasoningEffort(
 export function normalizeRuntimeProvider(value: unknown): RuntimeProvider {
   if (typeof value !== 'string') return 'codex';
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'claude' || normalized === 'kimi' || normalized === 'cursor' || normalized === 'zcode') return normalized;
+  if (normalized === 'claude' || normalized === 'kimi' || normalized === 'cursor' || normalized === 'zcode' || normalized === 'doubao') return normalized;
   return 'codex';
 }
 

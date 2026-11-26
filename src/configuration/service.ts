@@ -113,6 +113,9 @@ function patchPaths(patch: ConfigPatch): ConfigPath[] {
   if (patch.runtime?.zcode) {
     for (const key of Object.keys(patch.runtime.zcode)) paths.push(`runtime.zcode.${key}`);
   }
+  if (patch.runtime?.doubao) {
+    for (const key of Object.keys(patch.runtime.doubao)) paths.push(`runtime.doubao.${key}`);
+  }
   for (const channel of patch.channels || []) {
     if (channel.enabled !== undefined) paths.push('channels[].enabled');
     if (channel.config) {

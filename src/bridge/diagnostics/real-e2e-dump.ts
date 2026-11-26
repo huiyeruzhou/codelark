@@ -25,6 +25,8 @@ import {
   getSessionKimiSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 
@@ -141,6 +143,8 @@ export interface RealE2eRuntimeSlotReport {
   zcodeSessionId?: string;
   zcodeCwd?: string;
   zcodeSessionDbPath?: string;
+  doubaoSessionId?: string;
+  doubaoCwd?: string;
 }
 
 export interface RealE2eDumpReport {
@@ -163,6 +167,7 @@ export interface RealE2eDumpReport {
   cursorStorePath?: string;
   zcodeSessionId?: string;
   zcodeSessionDbPath?: string;
+  doubaoSessionId?: string;
   messages: BridgeMessage[];
   audit: StoredAuditLogEntry[];
   streamKeys: string[];
@@ -812,7 +817,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
   const binding = findBinding(bindings, input);
   const session = findSession(sessions, binding, input);
   const bridgeSessionId = input.bridgeSessionId || binding?.bridgeSessionId || session?.id;
-  const runtimeSlots = (['codex', 'claude', 'kimi', 'cursor', 'zcode'] as const)
+  const runtimeSlots = (['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao'] as const)
     .map((slotRuntime): RealE2eRuntimeSlotReport | null => {
       const slotBridgeSessionId = binding?.runtimeBridgeSessionIds?.[slotRuntime];
       if (!slotBridgeSessionId) return null;
@@ -826,6 +831,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
             ? getSessionCursorSessionId(slotSession)
             : slotRuntime === 'zcode'
               ? getSessionZcodeSessionId(slotSession)
+              : slotRuntime === 'doubao'
+                ? getSessionDoubaoSessionId(slotSession)
               : getSessionCodexThreadId(slotSession);
       const slotClaudeSessionId = slotRuntime === 'claude' ? getSessionClaudeSessionId(slotSession) : undefined;
       const slotClaudeCwd = slotRuntime === 'claude'
@@ -860,6 +867,10 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
           includeArchived: true,
         })
         : null;
+      const slotDoubaoSessionId = slotRuntime === 'doubao' ? getSessionDoubaoSessionId(slotSession) : undefined;
+      const slotDoubaoCwd = slotRuntime === 'doubao'
+        ? getSessionDoubaoCwd(slotSession) || getSessionWorkingDirectory(slotSession)
+        : undefined;
       return {
         runtime: slotRuntime,
         bridgeSessionId: slotBridgeSessionId,
@@ -880,6 +891,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
         ...(slotZcodeSessionId ? { zcodeSessionId: slotZcodeSessionId } : {}),
         ...(slotZcodeCwd ? { zcodeCwd: slotZcodeCwd } : {}),
         ...(slotZcodeSession?.dbPath ? { zcodeSessionDbPath: slotZcodeSession.dbPath } : {}),
+        ...(slotDoubaoSessionId ? { doubaoSessionId: slotDoubaoSessionId } : {}),
+        ...(slotDoubaoCwd ? { doubaoCwd: slotDoubaoCwd } : {}),
       };
     })
     .filter((slot): slot is RealE2eRuntimeSlotReport => slot !== null);
@@ -891,7 +904,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     : [];
   const activeRuntime = getSessionActiveRuntime(session);
   const inferredRuntime = activeRuntime
-    || (getSessionZcodeSessionId(session) ? 'zcode' : getSessionCursorSessionId(session) ? 'cursor' : getSessionKimiSessionId(session) ? 'kimi' : getSessionClaudeSessionId(session) ? 'claude' : getSessionCodexThreadId(session) ? 'codex' : undefined);
+    || (getSessionDoubaoSessionId(session) ? 'doubao' : getSessionZcodeSessionId(session) ? 'zcode' : getSessionCursorSessionId(session) ? 'cursor' : getSessionKimiSessionId(session) ? 'kimi' : getSessionClaudeSessionId(session) ? 'claude' : getSessionCodexThreadId(session) ? 'codex' : undefined);
   const runtime = inferredRuntime;
   const runtimeThreadId = runtime === 'claude'
     ? getSessionClaudeSessionId(session)
@@ -901,6 +914,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
         ? getSessionCursorSessionId(session)
         : runtime === 'zcode'
           ? getSessionZcodeSessionId(session)
+          : runtime === 'doubao'
+            ? getSessionDoubaoSessionId(session)
           : getSessionCodexThreadId(session);
   const claudeSessionId = runtime === 'claude' ? getSessionClaudeSessionId(session) : undefined;
   const claudeCwd = runtime === 'claude'
@@ -935,6 +950,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
       includeArchived: true,
     })
     : null;
+  const doubaoSessionId = runtime === 'doubao' ? getSessionDoubaoSessionId(session) : undefined;
   const auditNeedles = [
     input.runId,
     input.messageId,
@@ -980,6 +996,8 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
               ? Boolean(cursorSessionId)
               : runtime === 'zcode'
                 ? Boolean(zcodeSessionId)
+                : runtime === 'doubao'
+                  ? Boolean(doubaoSessionId)
                 : false,
       detail: runtimeThreadId || 'No local runtime identity is bound.',
     },
@@ -1042,6 +1060,7 @@ export function collectRealE2eDump(input: RealE2eDumpInput = {}): RealE2eDumpRep
     ...(cursorTranscript?.storePath ? { cursorStorePath: cursorTranscript.storePath } : {}),
     ...(zcodeSessionId ? { zcodeSessionId } : {}),
     ...(zcodeSession?.dbPath ? { zcodeSessionDbPath: zcodeSession.dbPath } : {}),
+    ...(doubaoSessionId ? { doubaoSessionId } : {}),
     messages: messages.slice(-messageLimit),
     audit: relevantAudit.slice(-auditLimit),
     streamKeys,

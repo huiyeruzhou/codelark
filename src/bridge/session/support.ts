@@ -31,6 +31,7 @@ import {
   getSessionActiveRuntime,
   getSessionCodexThreadId,
   getSessionCursorSessionId,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat } from '../../domain/channel.js';
@@ -43,6 +44,9 @@ import type {
   CursorProviderChoice,
   CursorTransport,
   CursorReasoningEffort,
+  DoubaoMode,
+  DoubaoProviderChoice,
+  DoubaoReasoningEffort,
   RuntimeAgent,
   RuntimeProviderChoice,
   RuntimeProviderIdentity,
@@ -206,6 +210,14 @@ export interface ZcodeRuntimeConfig {
   mode: ZcodeMode;
 }
 
+export interface DoubaoRuntimeConfig {
+  runtime: 'doubao';
+  provider: DoubaoProviderChoice;
+  model?: string;
+  mode: DoubaoMode;
+  reasoningEffort?: DoubaoReasoningEffort;
+}
+
 export interface RuntimeMetadataConfig {
   runtime: RuntimeAgent;
   reasoningEffort: string;
@@ -257,6 +269,14 @@ export function hasSessionZcodeProviderOverride(session?: BridgeSession | null):
   return getSessionZcodeProviderOverride(session) !== undefined;
 }
 
+export function getSessionDoubaoProviderOverride(session?: BridgeSession | null): DoubaoProviderChoice | undefined {
+  return getSessionTomlOverride<DoubaoProviderChoice>(session, 'runtime.doubao.provider') === 'acp' ? 'acp' : undefined;
+}
+
+export function hasSessionDoubaoProviderOverride(session?: BridgeSession | null): boolean {
+  return getSessionDoubaoProviderOverride(session) !== undefined;
+}
+
 export function resolveEffectiveMode(
   binding?: ChannelChat | null,
   session?: BridgeSession | null,
@@ -282,6 +302,9 @@ export function resolveEffectiveRuntimeMode(
   if (activeRuntime === 'zcode') {
     return resolveZcodeRuntimeConfig(session, binding).mode === 'yolo' ? 'yolo' : 'normal';
   }
+  if (activeRuntime === 'doubao') {
+    return resolveDoubaoRuntimeConfig(session, binding).mode === 'yolo' ? 'yolo' : 'normal';
+  }
   return resolveEffectiveMode(binding, session);
 }
 
@@ -303,7 +326,7 @@ export function hasSessionCodexProviderOverride(session?: BridgeSession | null):
 
 export interface EffectiveRuntimeProvider {
   runtime: RuntimeAgent;
-  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice;
+  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice | DoubaoProviderChoice;
   identity: RuntimeProviderIdentity;
 }
 
@@ -313,7 +336,9 @@ export function resolveEffectiveRuntimeProvider(
 ): EffectiveRuntimeProvider {
   const configuredRuntime = scopedConfigForRuntime(binding, session).config.runtime.agent;
   const runtime = getSessionActiveRuntime(session) || configuredRuntime;
-  const provider = runtime === 'zcode'
+  const provider = runtime === 'doubao'
+    ? resolveDoubaoRuntimeConfig(session, binding).provider
+    : runtime === 'zcode'
     ? resolveZcodeRuntimeConfig(session, binding).provider
     : runtime === 'cursor'
     ? resolveCursorRuntimeConfig(session, binding).provider
@@ -488,6 +513,33 @@ export function resolveZcodeRuntimeConfig(session?: BridgeSession | null, bindin
   };
 }
 
+export function resolveDoubaoRuntimeConfig(session?: BridgeSession | null, binding?: ChannelChat | null): DoubaoRuntimeConfig {
+  const { config } = scopedConfigForRuntime(binding, session);
+  return {
+    runtime: 'doubao',
+    provider: 'acp',
+    model: config.runtime.doubao.model.trim() || undefined,
+    mode: config.runtime.doubao.mode,
+    ...(config.runtime.doubao.reasoningEffort ? { reasoningEffort: config.runtime.doubao.reasoningEffort } : {}),
+  };
+}
+
+export function resolveDisplayedDoubaoModel(
+  session?: BridgeSession | null,
+  binding?: ChannelChat | null,
+): string {
+  const { effective, config } = scopedConfigForRuntime(binding, session);
+  const configured = config.runtime.doubao.model.trim();
+  if (configured && effective.provenance.get('runtime.doubao.model')?.source === 'session') return configured;
+  const doubaoSessionId = getSessionDoubaoSessionId(session);
+  if (doubaoSessionId) {
+    const stored = session?.runtime?.doubao?.model?.trim();
+    if (stored) return stored;
+    return configured || '跟随会话';
+  }
+  return configured || 'default';
+}
+
 export function resolveRuntimeMetadataConfig(
   session: BridgeSession | null | undefined,
   runtime: RuntimeAgent = session?.runtime?.activeRuntime === 'claude'
@@ -498,6 +550,8 @@ export function resolveRuntimeMetadataConfig(
         ? 'cursor'
         : session?.runtime?.activeRuntime === 'zcode'
           ? 'zcode'
+          : session?.runtime?.activeRuntime === 'doubao'
+            ? 'doubao'
         : 'codex',
   binding?: ChannelChat | null,
 ): RuntimeMetadataConfig {
@@ -531,6 +585,14 @@ export function resolveRuntimeMetadataConfig(
       runtime: 'zcode',
       reasoningEffort: '',
       model: zcodeConfig.model || 'default',
+    };
+  }
+  if (runtime === 'doubao') {
+    const doubaoConfig = resolveDoubaoRuntimeConfig(session, binding);
+    return {
+      runtime: 'doubao',
+      reasoningEffort: doubaoConfig.reasoningEffort || '',
+      model: resolveDisplayedDoubaoModel(session, binding),
     };
   }
   const codexThreadId = getSessionCodexThreadId(session);

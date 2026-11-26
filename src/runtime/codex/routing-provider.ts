@@ -9,6 +9,7 @@ import { KimiTmuxProvider } from '../kimi/tmux-provider.js';
 import { CursorDesktopTransport } from '../cursor/desktop-provider.js';
 import { CursorAcpProvider } from '../cursor/acp-provider.js';
 import { ZcodeTmuxProvider } from '../zcode/tmux-provider.js';
+import { DoubaoAcpProvider } from '../doubao/acp-provider.js';
 import { CodexTmuxProvider } from './tmux-provider.js';
 import { streamCodexAppServer } from './app-server-provider.js';
 
@@ -25,6 +26,7 @@ export class CodexRoutingProvider implements LLMProvider {
   private readonly cursorDesktopProvider: LLMProvider;
   private readonly cursorAcpProvider: LLMProvider;
   private readonly zcodeTmuxProvider: LLMProvider;
+  private readonly doubaoAcpProvider: LLMProvider;
 
   constructor(pendingPerms?: PendingPermissions, _legacyDefaultProvider?: unknown) {
     this.tmuxProvider = new CodexTmuxProvider(pendingPerms);
@@ -35,9 +37,18 @@ export class CodexRoutingProvider implements LLMProvider {
     this.cursorDesktopProvider = new CursorDesktopTransport();
     this.cursorAcpProvider = new CursorAcpProvider(pendingPerms);
     this.zcodeTmuxProvider = new ZcodeTmuxProvider();
+    this.doubaoAcpProvider = new DoubaoAcpProvider(pendingPerms);
   }
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
+    if (params.runtime === 'doubao') {
+      console.log('[codex-routing-provider] Route Doubao request:', {
+        bridge_session_id: params.sessionId,
+        runtime: params.runtime,
+        provider: params.doubaoProvider || 'acp',
+      });
+      return this.doubaoAcpProvider.streamChat(params);
+    }
     if (params.runtime === 'zcode') {
       console.log('[codex-routing-provider] Route ZCode request:', {
         bridge_session_id: params.sessionId,

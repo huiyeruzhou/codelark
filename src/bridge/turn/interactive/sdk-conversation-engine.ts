@@ -47,7 +47,8 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../../../shared/progress/context-usage.js';
-import { resolveClaudeRuntimeConfig, resolveCodexInvocationModel, resolveCursorInvocationModel, resolveCursorRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
+import { resolveClaudeRuntimeConfig, resolveCodexInvocationModel, resolveCursorInvocationModel, resolveCursorRuntimeConfig, resolveDoubaoRuntimeConfig, resolveKimiRuntimeConfig, resolveSessionRuntimeConfig, resolveZcodeRuntimeConfig } from '../../session/support.js';
+import { migrateLegacyCursorCliSessionToAcp } from '../../../runtime/cursor/acp-session-policy.js';
 import {
   getSessionActiveRuntime,
   getSessionClaudeSessionId,
@@ -56,6 +57,7 @@ import {
   getSessionCursorSessionId,
   getSessionCursorSessionIdForProvider,
   getSessionZcodeSessionId,
+  getSessionDoubaoSessionId,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
   setSessionClaudeSessionIdUpdate,
@@ -63,6 +65,7 @@ import {
   setSessionKimiIdentityUpdate,
   setSessionCursorIdentityUpdate,
   setSessionZcodeIdentityUpdate,
+  setSessionDoubaoIdentityUpdate,
 } from '../../../domain/session-runtime.js';
 import type { RuntimeAgent } from '../../../domain/session.js';
 
@@ -218,7 +221,7 @@ export async function processMessage(
 
   try {
     // Resolve session early — needed for workingDirectory and provider resolution
-    const session = store.getSession(sessionId);
+    let session = store.getSession(sessionId);
     const workDir = getSessionWorkingDirectory(session) || '';
     const activeRuntime = getSessionActiveRuntime(session) || 'codex';
     const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
@@ -226,10 +229,21 @@ export async function processMessage(
     const kimiRuntimeConfig = activeRuntime === 'kimi' ? resolveKimiRuntimeConfig(session, binding) : null;
     const cursorRuntimeConfig = activeRuntime === 'cursor' ? resolveCursorRuntimeConfig(session, binding) : null;
     const zcodeRuntimeConfig = activeRuntime === 'zcode' ? resolveZcodeRuntimeConfig(session, binding) : null;
+    const doubaoRuntimeConfig = activeRuntime === 'doubao' ? resolveDoubaoRuntimeConfig(session, binding) : null;
 
     if (cursorRuntimeConfig && cursorRuntimeConfig.transport !== 'desktop' && getSessionCursorSessionId(session)
       && !getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider)) {
-      throw new Error(`当前 Cursor 历史属于旧版 CLI/tmux 会话，请先用 /p ${cursorRuntimeConfig.provider} 切换到新 ACP 会话；尚未提交本条输入。`);
+      const legacySessionId = getSessionCursorSessionId(session)!;
+      const legacyCwd = session?.runtime?.cursor?.cwd?.trim() || workDir || process.cwd();
+      const migration = cursorRuntimeConfig.provider === 'acp'
+        ? migrateLegacyCursorCliSessionToAcp(legacySessionId, legacyCwd)
+        : { migrated: false };
+      if (migration.migrated) {
+        store.updateSession(sessionId, setSessionCursorIdentityUpdate(legacySessionId, legacyCwd, 'acp', 'cli'));
+        session = store.getSession(sessionId) || session;
+      } else {
+        throw new Error(`当前 Cursor 历史属于旧版 CLI/tmux 会话，未能找到本地 CLI 历史库自动迁移到 ACP；请先用 /p ${cursorRuntimeConfig.provider} 切换到新 ACP 会话，尚未提交本条输入。`);
+      }
     }
     const { savedContent, llmFiles, persistedFileMeta } = prepareMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
@@ -256,9 +270,12 @@ export async function processMessage(
         : getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider))
       : undefined;
     const zcodeSessionId = getSessionZcodeSessionId(session);
+    const doubaoSessionId = getSessionDoubaoSessionId(session);
 
     // Effective model
-    const effectiveModel = activeRuntime === 'zcode'
+    const effectiveModel = activeRuntime === 'doubao'
+      ? doubaoRuntimeConfig?.model
+      : activeRuntime === 'zcode'
       ? zcodeRuntimeConfig?.model
       : activeRuntime === 'cursor'
       ? resolveCursorInvocationModel(binding, session, { resuming: Boolean(cursorSessionId) })
@@ -301,6 +318,10 @@ export async function processMessage(
       cursorReasoningEffort: cursorRuntimeConfig?.reasoningEffort,
       zcodeSessionId,
       zcodeMode: zcodeRuntimeConfig?.mode,
+      doubaoSessionId,
+      doubaoProvider: doubaoRuntimeConfig?.provider,
+      doubaoMode: doubaoRuntimeConfig?.mode,
+      doubaoReasoningEffort: doubaoRuntimeConfig?.reasoningEffort,
       claudeExecutable: claudeRuntimeConfig?.executable,
       claudeProvider: claudeRuntimeConfig?.provider,
       model: effectiveModel,
@@ -347,7 +368,10 @@ export async function processMessage(
         // ACP cancellation is a request, not the terminal event. Its owner must
         // drain the remaining text/tool results until session/prompt settles.
         // A genuinely superseded task still cannot write to the next turn.
-        isCurrentTask: cursorRuntimeConfig?.provider === 'acp' && cursorRuntimeConfig.transport !== 'desktop'
+        isCurrentTask: (
+          (cursorRuntimeConfig?.provider === 'acp' && cursorRuntimeConfig.transport !== 'desktop')
+          || doubaoRuntimeConfig?.provider === 'acp'
+        )
           ? () => options?.isCurrentTask?.() !== false
           : isCurrentTask,
       },
@@ -409,6 +433,7 @@ async function consumeStream(
   const permissionRequests: PermissionRequestInfo[] = [];
   let capturedCodexThreadId: string | null = null;
   let capturedCursorSessionId = getSessionCursorSessionId(store.getSession(sessionId)) || null;
+  let capturedDoubaoSessionId = getSessionDoubaoSessionId(store.getSession(sessionId)) || null;
   const outboundAttachments: OutboundAttachment[] = [];
   const outboundQuestions: OutboundQuestion[] = [];
   const outboundPlatformMessages: OutboundPlatformMessage[] = [];
@@ -600,7 +625,20 @@ async function consumeStream(
           try {
             const statusData = JSON.parse(event.data);
             if (statusData.session_id) {
-              if (activeRuntime === 'zcode') {
+              if (activeRuntime === 'doubao') {
+                capturedDoubaoSessionId = statusData.session_id;
+                store.updateSession(sessionId, setSessionDoubaoIdentityUpdate(
+                  statusData.session_id,
+                  typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
+                  typeof statusData.model === 'string' ? statusData.model : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'doubao',
+                  sessionId: statusData.session_id,
+                  ...(typeof statusData.cwd === 'string' ? { cwd: statusData.cwd } : {}),
+                  ...(typeof statusData.model === 'string' ? { model: statusData.model } : {}),
+                });
+              } else if (activeRuntime === 'zcode') {
                 store.updateSession(sessionId, setSessionZcodeIdentityUpdate(
                   statusData.session_id,
                   typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
@@ -664,6 +702,16 @@ async function consumeStream(
               await options?.onRuntimeIdentity?.({
                 runtime: 'cursor',
                 sessionId: capturedCursorSessionId,
+                model: statusData.model,
+              });
+            }
+            if (typeof statusData.model === 'string' && activeRuntime === 'doubao' && capturedDoubaoSessionId) {
+              store.updateSession(sessionId, {
+                runtime: { activeRuntime: 'doubao', doubao: { model: statusData.model } },
+              });
+              await options?.onRuntimeIdentity?.({
+                runtime: 'doubao',
+                sessionId: capturedDoubaoSessionId,
                 model: statusData.model,
               });
             }
@@ -769,7 +817,20 @@ async function consumeStream(
             }
             if (resultData.is_error) hasError = true;
             if (resultData.session_id) {
-              if (activeRuntime === 'zcode') {
+              if (activeRuntime === 'doubao') {
+                capturedDoubaoSessionId = resultData.session_id;
+                store.updateSession(sessionId, setSessionDoubaoIdentityUpdate(
+                  resultData.session_id,
+                  typeof resultData.cwd === 'string' ? resultData.cwd : undefined,
+                  typeof resultData.model === 'string' ? resultData.model : undefined,
+                ));
+                await options?.onRuntimeIdentity?.({
+                  runtime: 'doubao',
+                  sessionId: resultData.session_id,
+                  ...(typeof resultData.cwd === 'string' ? { cwd: resultData.cwd } : {}),
+                  ...(typeof resultData.model === 'string' ? { model: resultData.model } : {}),
+                });
+              } else if (activeRuntime === 'zcode') {
                 store.updateSession(sessionId, setSessionZcodeIdentityUpdate(
                   resultData.session_id,
                   typeof resultData.cwd === 'string' ? resultData.cwd : undefined,

@@ -24,6 +24,8 @@ import {
   getSessionCursorSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
 } from '../../domain/session-runtime.js';
 
 export {
@@ -89,12 +91,18 @@ export interface ZcodeThreadRegistryPort {
   archiveThread?(zcodeSessionId: string, cwd: string): boolean;
 }
 
+export interface DoubaoThreadRegistryPort {
+  getThread(doubaoSessionId: string, cwd: string): { doubaoSessionId: string; title: string; cwd: string } | null;
+  archiveThread?(doubaoSessionId: string, cwd: string): boolean;
+}
+
 export interface SessionRegistryOptions {
   codexThreads?: CodexThreadRegistryPort;
   claudeThreads?: ClaudeThreadRegistryPort;
   kimiThreads?: KimiThreadRegistryPort;
   cursorThreads?: CursorThreadRegistryPort;
   zcodeThreads?: ZcodeThreadRegistryPort;
+  doubaoThreads?: DoubaoThreadRegistryPort;
   readDefaultModel?: () => string | null | undefined;
   defaultWorkingDirectory?: () => string;
 }
@@ -133,6 +141,13 @@ export interface ArchiveCursorThreadResult {
 
 export interface ArchiveZcodeThreadResult {
   zcodeSessionId: string;
+  cwd: string;
+  deletedBridgeSessions: BridgeSession[];
+  deletedBridgeSessionIds: string[];
+}
+
+export interface ArchiveDoubaoThreadResult {
+  doubaoSessionId: string;
   cwd: string;
   deletedBridgeSessions: BridgeSession[];
   deletedBridgeSessionIds: string[];
@@ -240,6 +255,16 @@ export class SessionRegistryService {
       && getSessionActiveRuntime(session) === 'zcode'
       && getSessionZcodeSessionId(session) === zcodeSessionId
       && getSessionZcodeCwd(session) === resolvedCwd
+    )) || null;
+  }
+
+  findVisibleBridgeSessionByDoubaoThread(doubaoSessionId: string, cwd: string): BridgeSession | null {
+    const resolvedCwd = this.options.doubaoThreads?.getThread(doubaoSessionId, cwd)?.cwd || cwd;
+    return this.store.listSessions().find((session) => (
+      isVisibleBridgeSession(session)
+      && getSessionActiveRuntime(session) === 'doubao'
+      && getSessionDoubaoSessionId(session) === doubaoSessionId
+      && (!resolvedCwd || getSessionDoubaoCwd(session) === resolvedCwd)
     )) || null;
   }
 
@@ -396,6 +421,34 @@ export class SessionRegistryService {
     return this.store.getSession(session.id) || session;
   }
 
+  materializeDoubaoThread(doubaoSessionId: string, cwd: string): BridgeSession {
+    const existing = this.findVisibleBridgeSessionByDoubaoThread(doubaoSessionId, cwd);
+    if (existing) return existing;
+    const localThread = this.options.doubaoThreads?.getThread(doubaoSessionId, cwd) || null;
+    if (!localThread) throw new Error('指定的 Doubao 会话不存在。');
+    const session = this.store.createSession(
+      localThread.title || '',
+      this.options.readDefaultModel?.() || 'default',
+      undefined,
+      localThread.cwd || this.options.defaultWorkingDirectory?.() || process.cwd(),
+      'normal',
+      { activeRuntime: 'doubao' },
+    );
+    this.store.updateSession(session.id, {
+      name: localThread.title || session.name,
+      runtime: {
+        activeRuntime: 'doubao',
+        doubao: {
+          sessionId: localThread.doubaoSessionId,
+          cwd: localThread.cwd,
+          provider: 'acp',
+        },
+        general: { workingDirectory: localThread.cwd },
+      },
+    }, { touch: false });
+    return this.store.getSession(session.id) || session;
+  }
+
   renameBridgeSession(bridgeSessionId: string, name: string | undefined): BridgeSession {
     const session = this.getVisibleBridgeSession(bridgeSessionId);
     this.store.updateSession(session.id, { name });
@@ -424,6 +477,11 @@ export class SessionRegistryService {
 
   renameZcodeThread(zcodeSessionId: string, cwd: string, name: string | undefined): BridgeSession {
     const session = this.materializeZcodeThread(zcodeSessionId, cwd);
+    return this.renameBridgeSession(session.id, name);
+  }
+
+  renameDoubaoThread(doubaoSessionId: string, cwd: string, name: string | undefined): BridgeSession {
+    const session = this.materializeDoubaoThread(doubaoSessionId, cwd);
     return this.renameBridgeSession(session.id, name);
   }
 
@@ -557,6 +615,28 @@ export class SessionRegistryService {
     return {
       zcodeSessionId,
       cwd: localThread.cwd,
+      deletedBridgeSessions: linkedSessions,
+      deletedBridgeSessionIds: linkedSessions.map((session) => session.id),
+    };
+  }
+
+  archiveDoubaoThread(doubaoSessionId: string, cwd: string): ArchiveDoubaoThreadResult {
+    if (!this.options.doubaoThreads?.archiveThread) {
+      throw new Error('Local Doubao archive is not configured.');
+    }
+    const localThread = this.options.doubaoThreads.getThread(doubaoSessionId, cwd);
+    const resolvedCwd = localThread?.cwd || cwd;
+    const archived = this.options.doubaoThreads.archiveThread(doubaoSessionId, resolvedCwd);
+    if (!archived) throw new Error('指定的 Doubao 会话不存在或删除失败。');
+    const linkedSessions = this.store.listSessions().filter((session) => (
+      getSessionActiveRuntime(session) === 'doubao'
+      && getSessionDoubaoSessionId(session) === doubaoSessionId
+      && (!resolvedCwd || getSessionDoubaoCwd(session) === resolvedCwd)
+    ));
+    for (const session of linkedSessions) this.store.deleteSession(session.id);
+    return {
+      doubaoSessionId,
+      cwd: resolvedCwd,
       deletedBridgeSessions: linkedSessions,
       deletedBridgeSessionIds: linkedSessions.map((session) => session.id),
     };

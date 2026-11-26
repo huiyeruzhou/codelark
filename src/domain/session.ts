@@ -5,18 +5,22 @@ export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhig
 export type KimiThinkingMode = 'default' | 'on' | 'off';
 export type CursorReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type ZcodeMode = 'build' | 'edit' | 'plan' | 'yolo';
+export type DoubaoMode = 'normal' | 'plan' | 'yolo';
+export type DoubaoReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type RuntimeProviderChoice = 'sdk' | 'pty' | 'tmux';
 export type ClaudeProviderChoice = RuntimeProviderChoice;
 export type KimiProviderChoice = 'tmux';
 export type CursorProviderChoice = 'tmux' | 'acp';
 export type CursorTransport = 'cli' | 'desktop';
 export type ZcodeProviderChoice = 'tmux';
-export type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+export type DoubaoProviderChoice = 'acp';
+export type RuntimeAgent = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 export type RuntimeProviderIdentity =
   | `${'codex' | 'claude'}:${RuntimeProviderChoice}`
   | `kimi:${KimiProviderChoice}`
   | `cursor:${CursorProviderChoice}`
-  | `zcode:${ZcodeProviderChoice}`;
+  | `zcode:${ZcodeProviderChoice}`
+  | `doubao:${DoubaoProviderChoice}`;
 export type ClaudeExecutable = 'claude' | 'ccr';
 
 export type BridgeSessionHealthStatus =
@@ -120,7 +124,8 @@ export type BridgeSessionRuntimeState =
   | BridgeSessionClaudeRuntimeContainer
   | BridgeSessionKimiRuntimeContainer
   | BridgeSessionCursorRuntimeContainer
-  | BridgeSessionZcodeRuntimeContainer;
+  | BridgeSessionZcodeRuntimeContainer
+  | BridgeSessionDoubaoRuntimeContainer;
 
 export interface BridgeSessionCodexRuntimeContainer {
   activeRuntime?: 'codex';
@@ -129,6 +134,7 @@ export interface BridgeSessionCodexRuntimeContainer {
   kimi?: never;
   cursor?: never;
   zcode?: never;
+  doubao?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -139,6 +145,7 @@ export interface BridgeSessionClaudeRuntimeContainer {
   kimi?: never;
   cursor?: never;
   zcode?: never;
+  doubao?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -149,6 +156,7 @@ export interface BridgeSessionKimiRuntimeContainer {
   kimi?: BridgeSessionKimiRuntimeState;
   cursor?: never;
   zcode?: never;
+  doubao?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -159,6 +167,7 @@ export interface BridgeSessionCursorRuntimeContainer {
   kimi?: never;
   cursor?: BridgeSessionCursorRuntimeState;
   zcode?: never;
+  doubao?: never;
   general?: BridgeSessionGeneralState;
 }
 
@@ -169,6 +178,18 @@ export interface BridgeSessionZcodeRuntimeContainer {
   kimi?: never;
   cursor?: never;
   zcode?: BridgeSessionZcodeRuntimeState;
+  doubao?: never;
+  general?: BridgeSessionGeneralState;
+}
+
+export interface BridgeSessionDoubaoRuntimeContainer {
+  activeRuntime: 'doubao';
+  codex?: never;
+  claude?: never;
+  kimi?: never;
+  cursor?: never;
+  zcode?: never;
+  doubao?: BridgeSessionDoubaoRuntimeState;
   general?: BridgeSessionGeneralState;
 }
 
@@ -231,6 +252,15 @@ export interface BridgeSessionZcodeRuntimeState {
   mode?: ZcodeMode;
 }
 
+export interface BridgeSessionDoubaoRuntimeState {
+  sessionId?: string;
+  cwd?: string;
+  model?: string;
+  provider?: DoubaoProviderChoice;
+  mode?: DoubaoMode;
+  reasoningEffort?: DoubaoReasoningEffort;
+}
+
 export interface BridgeSessionGeneralState {
   workingDirectory?: string;
   systemPrompt?: string;
@@ -248,6 +278,7 @@ export type BridgeSessionUpdate = Omit<Partial<BridgeSession>, 'runtime'> & {
 	    kimi?: Partial<BridgeSessionKimiRuntimeState>;
 	    cursor?: Partial<BridgeSessionCursorRuntimeState>;
 	    zcode?: Partial<BridgeSessionZcodeRuntimeState>;
+	    doubao?: Partial<BridgeSessionDoubaoRuntimeState>;
 	    general?: Partial<BridgeSessionGeneralState>;
 	  };
 	};

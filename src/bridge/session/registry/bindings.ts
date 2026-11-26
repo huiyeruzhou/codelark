@@ -27,6 +27,8 @@ import {
   getSessionCursorSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
   setSessionCodexTitleUpdate,
 } from '../../../domain/session-runtime.js';
@@ -68,13 +70,14 @@ export interface BindingSummary {
   currentTargetLabel: string;
   currentSessionId: string;
   currentSessionName: string;
-  currentRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  currentRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   currentThreadId?: string;
   currentRuntimeThreadId?: string;
   currentClaudeCwd?: string;
   currentKimiCwd?: string;
   currentCursorCwd?: string;
   currentZcodeCwd?: string;
+  currentDoubaoCwd?: string;
   runtimeStatus?: BridgeSession['runtime_status'];
   queuedCount?: number;
   mirrorStatus?: BridgeSession['mirror_status'];
@@ -204,13 +207,14 @@ function describeBridgeSessionTarget(
 ): {
   targetLabel: string;
   targetSessionId: string;
-  targetRuntime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  targetRuntime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   targetThreadId?: string;
   targetRuntimeThreadId?: string;
   targetClaudeCwd?: string;
   targetKimiCwd?: string;
   targetCursorCwd?: string;
   targetZcodeCwd?: string;
+  targetDoubaoCwd?: string;
 } {
   const session = store.getSession(bridgeSessionId);
   if (!session) {
@@ -225,12 +229,15 @@ function describeBridgeSessionTarget(
         ? 'cursor'
         : rawRuntime === 'zcode'
           ? 'zcode'
+          : rawRuntime === 'doubao'
+            ? 'doubao'
         : 'codex';
   const codexThreadId = getCodexThreadId(session) || undefined;
   const claudeSessionId = getSessionClaudeSessionId(session) || undefined;
   const kimiSessionId = getSessionKimiSessionId(session) || undefined;
   const cursorSessionId = getSessionCursorSessionId(session) || undefined;
   const zcodeSessionId = getSessionZcodeSessionId(session) || undefined;
+  const doubaoSessionId = getSessionDoubaoSessionId(session) || undefined;
 
   return {
     targetLabel: getSessionName(session),
@@ -245,11 +252,14 @@ function describeBridgeSessionTarget(
           ? cursorSessionId
           : activeRuntime === 'zcode'
             ? zcodeSessionId
+            : activeRuntime === 'doubao'
+              ? doubaoSessionId
           : codexThreadId,
     targetClaudeCwd: activeRuntime === 'claude' ? getSessionClaudeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
     targetKimiCwd: activeRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
     targetCursorCwd: activeRuntime === 'cursor' ? getSessionCursorCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
     targetZcodeCwd: activeRuntime === 'zcode' ? getSessionZcodeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
+    targetDoubaoCwd: activeRuntime === 'doubao' ? getSessionDoubaoCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
   };
 }
 
@@ -446,7 +456,7 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
     const session = store.getSession(binding.bridgeSessionId);
     const currentThreadId = getCodexThreadId(session) || undefined;
     const rawRuntime = getSessionActiveRuntime(session);
-    const currentRuntime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' = rawRuntime === 'claude'
+    const currentRuntime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao' = rawRuntime === 'claude'
       ? 'claude'
       : rawRuntime === 'kimi'
         ? 'kimi'
@@ -454,6 +464,8 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
           ? 'cursor'
           : rawRuntime === 'zcode'
             ? 'zcode'
+            : rawRuntime === 'doubao'
+              ? 'doubao'
           : 'codex';
     const currentRuntimeThreadId = currentRuntime === 'claude'
       ? getSessionClaudeSessionId(session) || undefined
@@ -463,6 +475,8 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
           ? getSessionCursorSessionId(session) || undefined
           : currentRuntime === 'zcode'
             ? getSessionZcodeSessionId(session) || undefined
+            : currentRuntime === 'doubao'
+              ? getSessionDoubaoSessionId(session) || undefined
           : currentThreadId;
     const fallbackSession = { id: binding.bridgeSessionId } as BridgeSession;
     const currentTargetLabel = getSessionName(session || fallbackSession);
@@ -491,6 +505,7 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       currentKimiCwd: currentRuntime === 'kimi' ? getSessionKimiCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
       currentCursorCwd: currentRuntime === 'cursor' ? getSessionCursorCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
       currentZcodeCwd: currentRuntime === 'zcode' ? getSessionZcodeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
+      currentDoubaoCwd: currentRuntime === 'doubao' ? getSessionDoubaoCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined,
       runtimeStatus: session?.runtime_status,
       queuedCount: session?.queued_count,
       mirrorStatus: session?.mirror_status,

@@ -18,6 +18,7 @@ import {
 import { kimiTmuxSessionName } from '../../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../../runtime/cursor/tmux-provider.js';
 import { zcodeTmuxSessionName } from '../../../runtime/zcode/tmux-provider.js';
+import { closeDoubaoAcpSession } from '../../../runtime/doubao/acp-provider.js';
 import { getSessionDisplayName } from '../display/session-title.js';
 import {
   buildCommandFields,
@@ -145,6 +146,9 @@ export async function handleClearSessionCommand(options: {
   if (previousSession && options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== previousSession.id) {
     return { response: '处理期间当前聊天已切换会话，未覆盖新的绑定。' };
   }
+  if (previousRuntime === 'doubao' && previousSession) {
+    await closeDoubaoAcpSession(previousSession.id).catch(() => {});
+  }
   if (usesProtocol && previousSession) {
     // Confirmation authorizes a new context. Old execution state is not an eligibility check.
     releaseAppServerRequestObserver(previousSession.id);
@@ -156,7 +160,7 @@ export async function handleClearSessionCommand(options: {
     if (options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId !== previousSession.id) {
       return { response: '处理期间当前聊天已切换会话，未覆盖新的绑定。' };
     }
-  } else if (previousRuntimeTmuxSessionName) {
+  } else if (previousRuntimeTmuxSessionName && previousRuntime !== 'doubao') {
     const cleanup = await cleanupRuntimeTmuxSession({
       runtime: previousRuntime,
       sessionName: previousRuntimeTmuxSessionName,

@@ -63,6 +63,8 @@ import {
 } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import { closeCursorAcpSessions } from '../../runtime/cursor/acp-provider.js';
+import { closeAllDoubaoAcpSessions, closeDoubaoAcpSession } from '../../runtime/doubao/acp-provider.js';
+import { archiveDoubaoSession } from '../../runtime/doubao/session-index.js';
 import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
 import {
   sanitizeInput,
@@ -173,6 +175,8 @@ import {
   getSessionCursorSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionActiveRuntime,
   getSessionSystemPrompt,
   getSessionWorkingDirectory,
@@ -479,6 +483,8 @@ async function probeTmuxProviderExitAfterAutoForward(params: {
         ? 'Cursor'
         : runtimeProvider.runtime === 'zcode'
           ? 'ZCode'
+          : runtimeProvider.runtime === 'doubao'
+            ? 'Doubao'
         : 'Codex';
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   SESSION_HEALTH_RUNTIME.recordInteractiveEnd(
@@ -770,7 +776,7 @@ function parseMirrorCodexSelectionSessionId(permissionRequestId: string): string
 function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolean {
   if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return false;
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
+  if (activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao') return false;
   if (activeRuntime === 'claude') return resolveEffectiveClaudeProvider(session) === 'tmux';
   return true;
 }
@@ -778,7 +784,7 @@ function sessionSupportsTmuxSelectionPromptProbe(session: BridgeSession): boolea
 function sessionSupportsCodexTuiRuntimeSignals(session: BridgeSession): boolean {
   if (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id)) return false;
   const activeRuntime = getSessionActiveRuntime(session);
-  if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor' || activeRuntime === 'zcode') return false;
+  if (activeRuntime === 'kimi' || activeRuntime === 'claude' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao') return false;
   return true;
 }
 
@@ -2769,7 +2775,10 @@ function cursorAcpInputSession(msg: InboundMessage): string | undefined {
   const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const session = binding && store.getSession(binding.bridgeSessionId);
   const effective = resolveEffectiveRuntimeProvider(session, binding);
-  return binding && effective.runtime === 'cursor' && effective.provider === 'acp' && resolveCursorTransport(session) !== 'desktop' ? binding.bridgeSessionId : undefined;
+  return binding && (
+    (effective.runtime === 'cursor' && effective.provider === 'acp' && resolveCursorTransport(session) !== 'desktop')
+    || (effective.runtime === 'doubao' && effective.provider === 'acp')
+  ) ? binding.bridgeSessionId : undefined;
 }
 
 const pendingCursorAcpInputs = new Map<string, { messages: InboundMessage[]; completion: Promise<void> }>();
@@ -3140,6 +3149,7 @@ export async function stop(): Promise<void> {
   // Stop all adapters
   await closeCodexAppServerSessions();
   await closeCursorAcpSessions();
+  await closeAllDoubaoAcpSessions();
   closeAppServerRequestObservers();
   clearCursorQuestions();
   clearCursorAcpQuestions();
@@ -3570,6 +3580,10 @@ function formatLifecycleArchiveDetail(result: Awaited<ReturnType<typeof archiveL
       return result.zcodeSessionId
         ? `archived ZCode session ${result.zcodeSessionId.slice(0, 8)}`
         : 'archived ZCode session';
+    case 'doubao_archive':
+      return result.doubaoSessionId
+        ? `archived Doubao session ${result.doubaoSessionId.slice(0, 8)}`
+        : 'archived Doubao session';
     case 'bridge_delete':
       return 'deleted BridgeSession';
     case 'binding_delete':
@@ -4286,6 +4300,10 @@ function createLifecycleSessionRegistry(store: BridgeStore): SessionRegistryServ
         return session ? archiveZcodeSession(session) : false;
       },
     },
+    doubaoThreads: {
+      getThread: () => null,
+      archiveThread: (doubaoSessionId) => archiveDoubaoSession(doubaoSessionId),
+    },
   });
 }
 
@@ -4293,7 +4311,7 @@ async function archiveLifecycleBindingSession(
   store: BridgeStore,
   binding: ChannelChat,
 ): Promise<{
-  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'cursor_archive' | 'zcode_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
+  action: 'codex_archive' | 'claude_archive' | 'kimi_archive' | 'cursor_archive' | 'zcode_archive' | 'doubao_archive' | 'bridge_delete' | 'delete_after_archive_failure' | 'binding_delete';
   codexThreadId?: string;
   claudeSessionId?: string;
   claudeCwd?: string;
@@ -4303,6 +4321,8 @@ async function archiveLifecycleBindingSession(
   cursorCwd?: string;
   zcodeSessionId?: string;
   zcodeCwd?: string;
+  doubaoSessionId?: string;
+  doubaoCwd?: string;
   deletedBridgeSessionIds: string[];
   tmuxSessionNames: string[];
   tmuxCleanupCommands: string[];
@@ -4332,6 +4352,11 @@ async function archiveLifecycleBindingSession(
   const cursorCwd = activeRuntime === 'cursor' ? getSessionCursorCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
   const zcodeSessionId = activeRuntime === 'zcode' ? getSessionZcodeSessionId(session) || undefined : undefined;
   const zcodeCwd = activeRuntime === 'zcode' ? getSessionZcodeCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
+  const doubaoSessionId = activeRuntime === 'doubao' ? getSessionDoubaoSessionId(session) || undefined : undefined;
+  const doubaoCwd = activeRuntime === 'doubao' ? getSessionDoubaoCwd(session) || getSessionWorkingDirectory(session) || undefined : undefined;
+  if (activeRuntime === 'doubao') {
+    await closeDoubaoAcpSession(session.id).catch(() => {});
+  }
   const tmuxCleanup = await cleanupLifecycleTmuxSessions(store, session, {
     codexThreadId,
     claudeSessionId,
@@ -4342,6 +4367,8 @@ async function archiveLifecycleBindingSession(
     cursorCwd,
     zcodeSessionId,
     zcodeCwd,
+    doubaoSessionId,
+    doubaoCwd,
   });
   try {
     if (codexThreadId) {
@@ -4393,6 +4420,16 @@ async function archiveLifecycleBindingSession(
         ...tmuxCleanup,
       };
     }
+    if (doubaoSessionId) {
+      const result = registry.archiveDoubaoThread(doubaoSessionId, doubaoCwd || '');
+      return {
+        action: 'doubao_archive',
+        doubaoSessionId,
+        doubaoCwd,
+        deletedBridgeSessionIds: result.deletedBridgeSessionIds,
+        ...tmuxCleanup,
+      };
+    }
 
     const result = registry.deleteBridgeSession(session.id);
     return {
@@ -4414,6 +4451,8 @@ async function archiveLifecycleBindingSession(
       cursorCwd,
       zcodeSessionId,
       zcodeCwd,
+      doubaoSessionId,
+      doubaoCwd,
       deletedBridgeSessionIds: [session.id],
       ...tmuxCleanup,
       error,
@@ -4434,6 +4473,8 @@ async function cleanupLifecycleTmuxSessions(
     cursorCwd?: string;
     zcodeSessionId?: string;
     zcodeCwd?: string;
+    doubaoSessionId?: string;
+    doubaoCwd?: string;
   },
 ): Promise<{
   tmuxSessionNames: string[];
@@ -4465,6 +4506,10 @@ async function cleanupLifecycleTmuxSessions(
           && getSessionZcodeSessionId(candidate) === identity.zcodeSessionId
           && getSessionZcodeCwd(candidate) === identity.zcodeCwd;
       }
+      if (identity.doubaoSessionId) {
+        return getSessionActiveRuntime(candidate) === 'doubao'
+          && getSessionDoubaoSessionId(candidate) === identity.doubaoSessionId;
+      }
       return candidate.id === session.id;
     });
   const targets = linkedSessions.length > 0 ? linkedSessions : [session];
@@ -4487,7 +4532,7 @@ async function cleanupLifecycleTmuxSessions(
     seen.add(tmuxSessionName);
     tmuxSessionNames.push(tmuxSessionName);
     const cleanup = await cleanupRuntimeTmuxSession({
-      runtime: activeRuntime,
+      runtime: activeRuntime === 'doubao' ? undefined : activeRuntime,
       sessionName: tmuxSessionName,
       ignoreMissing: true,
     });
@@ -5278,7 +5323,7 @@ async function handleMessage(
         || (tmuxProviderRuntime.runtime === 'kimi'
           ? kimiTmuxSessionName(tmuxProviderSession.id)
           : undefined);
-      if (activeTmuxSessionName) {
+      if (activeTmuxSessionName && tmuxProviderRuntime.runtime !== 'doubao') {
         transitionRuntimeTmuxInputState(
           tmuxProviderRuntime.runtime,
           activeTmuxSessionName,

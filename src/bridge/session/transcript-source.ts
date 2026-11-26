@@ -43,7 +43,7 @@ import {
 import { getCodexThreadId } from '../turn/turn-classifier.js';
 
 export interface SessionTranscriptFile {
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   filePath: string;
   fileName: string;
   threadId: string;
@@ -66,7 +66,7 @@ export interface SessionTranscriptHistoryEntry {
 }
 
 export interface SessionTranscriptSource {
-  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  readonly runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   resolve(session: BridgeSession | null, binding: ChannelChat): SessionTranscriptFile | null;
   readMessages(transcript: SessionTranscriptFile, limit: number): SessionTranscriptMessage[];
   readHistory(transcript: SessionTranscriptFile): SessionTranscriptHistoryEntry[];

@@ -24,6 +24,7 @@ import {
   hasSessionKimiProviderOverride,
   hasSessionCursorProviderOverride,
   hasSessionZcodeProviderOverride,
+  hasSessionDoubaoProviderOverride,
 } from '../session/support.js';
 import { createConfigService } from '../../configuration/service.js';
 import { projectSessionConfiguration } from '../session/command-use-cases/inherit-session-configuration.js';
@@ -44,7 +45,7 @@ export function formatSessionRuntimeMode(binding: ChannelChat | null | undefined
 
 export function sessionRuntimeName(session: BridgeSession | null | undefined): SupportedRuntimeName {
   const runtime = getSessionActiveRuntime(session);
-  return runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? runtime : 'codex';
+  return runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' || runtime === 'doubao' ? runtime : 'codex';
 }
 
 export function mappedRuntimeSessionId(
@@ -72,8 +73,8 @@ export function createRuntimeSessionForChat(options: {
   const workDir = getSessionWorkingDirectory(options.baseSession) || process.cwd();
   const systemPrompt = getSessionSystemPrompt(options.baseSession);
   const rawBaseName = options.baseSession.name?.trim() || `Bridge: ${options.chatId}`;
-  const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Kimi Code|Cursor Agent|ZCode|Codex)\)$/u, '');
-  const suffix = options.runtime === 'claude' ? 'Claude Code' : options.runtime === 'kimi' ? 'Kimi Code' : options.runtime === 'cursor' ? 'Cursor Agent' : options.runtime === 'zcode' ? 'ZCode' : 'Codex';
+  const baseName = rawBaseName.replace(/\s+\((?:Claude Code|Kimi Code|Cursor Agent|ZCode|Doubao|Codex)\)$/u, '');
+  const suffix = options.runtime === 'claude' ? 'Claude Code' : options.runtime === 'kimi' ? 'Kimi Code' : options.runtime === 'cursor' ? 'Cursor Agent' : options.runtime === 'zcode' ? 'ZCode' : options.runtime === 'doubao' ? 'Doubao' : 'Codex';
   const { config } = scopedConfigForRuntime(options.binding, options.baseSession);
   const patch = projectSessionConfiguration(config, workDir, options.runtime);
   const created = options.store.createSession(
@@ -126,6 +127,8 @@ export function formatSessionRuntimeProvider(session?: BridgeSession | null, bin
       ? hasSessionCursorProviderOverride(session)
       : effective.runtime === 'zcode'
         ? hasSessionZcodeProviderOverride(session)
+      : effective.runtime === 'doubao'
+        ? hasSessionDoubaoProviderOverride(session)
       : effective.runtime === 'kimi'
       ? hasSessionKimiProviderOverride(session)
     : hasSessionCodexProviderOverride(session);

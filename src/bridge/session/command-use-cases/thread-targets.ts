@@ -19,6 +19,8 @@ import {
   getSessionCursorSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
   mergeSessionRuntimeUpdates,
   setSessionActiveRuntimeUpdate,
@@ -46,6 +48,7 @@ import {
   archiveCommandKimiThread,
   archiveCommandCursorThread,
   archiveCommandZcodeThread,
+  archiveCommandDoubaoThread,
   getCommandLocalRuntimeThreadByIdSafe,
   getCommandCodexThreadByIdSafe,
   listCommandLocalRuntimeSessions,
@@ -221,6 +224,15 @@ export function createCommandSessionRegistry(store: BridgeStore): SessionRegistr
       },
       archiveThread: (zcodeSessionId, cwd) => Boolean(archiveCommandZcodeThread(zcodeSessionId, cwd)),
     },
+    doubaoThreads: {
+      getThread: (doubaoSessionId, cwd) => {
+        const thread = getCommandLocalRuntimeThreadByIdSafe(doubaoSessionId, cwd, 'doubao registry lookup').thread;
+        return thread?.runtime === 'doubao'
+          ? { doubaoSessionId: thread.threadId, title: thread.title, cwd: thread.cwd }
+          : null;
+      },
+      archiveThread: (doubaoSessionId, cwd) => Boolean(archiveCommandDoubaoThread(doubaoSessionId, cwd)),
+    },
     readDefaultModel: () => readConfiguredCodexModel(),
     defaultWorkingDirectory: () => DEFAULT_WORKSPACE_ROOT,
   });
@@ -314,6 +326,27 @@ export function findBridgeSessionByZcodeIdentity(
   return findBridgeSessionByZcodeThread(store, { threadId: sessionId, cwd });
 }
 
+function findBridgeSessionByDoubaoThread(
+  store: BridgeStore,
+  thread: Pick<LocalRuntimeSessionSummary, 'threadId' | 'cwd'>,
+): BridgeSession | null {
+  return store.listSessions().find((session) => (
+    session.hidden !== true
+    && session.session_type !== 'draft'
+    && session.runtime?.activeRuntime === 'doubao'
+    && session.runtime?.doubao?.sessionId === thread.threadId
+    && (!thread.cwd || session.runtime?.doubao?.cwd === thread.cwd)
+  )) || null;
+}
+
+export function findBridgeSessionByDoubaoIdentity(
+  store: BridgeStore,
+  sessionId: string,
+  cwd: string,
+): BridgeSession | null {
+  return findBridgeSessionByDoubaoThread(store, { threadId: sessionId, cwd });
+}
+
 function materializeClaudeThread(store: BridgeStore, thread: LocalRuntimeSessionSummary): BridgeSession {
   const existing = findBridgeSessionByClaudeThread(store, thread);
   if (existing) return existing;
@@ -397,8 +430,26 @@ function materializeZcodeThread(store: BridgeStore, thread: LocalRuntimeSessionS
   return store.getSession(session.id) || session;
 }
 
+function materializeDoubaoThread(store: BridgeStore, thread: LocalRuntimeSessionSummary): BridgeSession {
+  const existing = findBridgeSessionByDoubaoThread(store, thread);
+  if (existing) return existing;
+  const session = store.createSession(
+    thread.title || thread.threadId.slice(0, 8),
+    'default',
+    undefined,
+    thread.cwd || DEFAULT_WORKSPACE_ROOT,
+    'normal',
+  );
+  store.updateSession(session.id, mergeSessionRuntimeUpdates(
+    {},
+    setSessionActiveRuntimeUpdate('doubao'),
+    { runtime: { doubao: { sessionId: thread.threadId, cwd: thread.cwd, provider: 'acp' } } },
+  ));
+  return store.getSession(session.id) || session;
+}
+
 export function localRuntimeOf(thread: LocalRuntimeSessionSummary | undefined): RuntimeAgent {
-  return thread?.runtime === 'claude' || thread?.runtime === 'kimi' || thread?.runtime === 'cursor' || thread?.runtime === 'zcode'
+  return thread?.runtime === 'claude' || thread?.runtime === 'kimi' || thread?.runtime === 'cursor' || thread?.runtime === 'zcode' || thread?.runtime === 'doubao'
     ? thread.runtime
     : 'codex';
 }
@@ -409,6 +460,12 @@ export function bindToLocalRuntimeThread(
   thread: LocalRuntimeSessionSummary,
   opts?: { codexTitle?: string },
 ): ChannelChat {
+  if (localRuntimeOf(thread) === 'doubao') {
+    const session = materializeDoubaoThread(store, thread);
+    const binding = router.attachToSession(address, session.id);
+    if (!binding) throw new Error('指定的 Doubao 会话无法绑定。');
+    return binding;
+  }
   if (localRuntimeOf(thread) === 'zcode') {
     const session = materializeZcodeThread(store, thread);
     const binding = router.attachToSession(address, session.id);
@@ -485,6 +542,19 @@ export function resolveCurrentCodexThreadTarget(
 
   const session = store.getSession(binding.bridgeSessionId);
   const activeRuntime = getSessionActiveRuntime(session) || 'codex';
+  if (activeRuntime === 'doubao') {
+    const sessionId = getSessionDoubaoSessionId(session);
+    const cwd = getSessionDoubaoCwd(session) || getSessionWorkingDirectory(session);
+    if (!sessionId) return { binding, bridgeSessionId: binding.bridgeSessionId };
+    return {
+      threadId: sessionId,
+      title: session ? getBridgeSessionDisplayTitle(session) : threadDisplay.binding(binding).title,
+      cwd,
+      binding,
+      bridgeSessionId: binding.bridgeSessionId,
+      runtime: 'doubao',
+    };
+  }
   if (activeRuntime === 'zcode') {
     const sessionId = getSessionZcodeSessionId(session);
     const cwd = getSessionZcodeCwd(session) || getSessionWorkingDirectory(session);

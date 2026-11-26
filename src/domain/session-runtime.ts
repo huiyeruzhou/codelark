@@ -7,7 +7,9 @@ import type {
   BridgeSessionKimiRuntimeState,
   BridgeSessionCursorRuntimeState,
   BridgeSessionZcodeRuntimeState,
+  BridgeSessionDoubaoRuntimeState,
   CursorProviderChoice,
+  DoubaoProviderChoice,
   KimiProviderChoice,
   RuntimeAgent,
   BridgeSessionRuntimeState,
@@ -49,6 +51,11 @@ export type SessionRuntimeLike = {
       cwd?: string | null;
       model?: string | null;
     };
+    doubao?: Omit<Partial<BridgeSessionDoubaoRuntimeState>, 'sessionId' | 'cwd' | 'model'> & {
+      sessionId?: string | null;
+      cwd?: string | null;
+      model?: string | null;
+    };
     general?: Partial<BridgeSessionGeneralState>;
   };
 };
@@ -67,6 +74,18 @@ function isCursorRuntime(session: SessionRuntimeLike | null | undefined): boolea
 
 function isZcodeRuntime(session: SessionRuntimeLike | null | undefined): boolean {
   return session?.runtime?.activeRuntime === 'zcode';
+}
+
+function isDoubaoRuntime(session: SessionRuntimeLike | null | undefined): boolean {
+  return session?.runtime?.activeRuntime === 'doubao';
+}
+
+function isNonCodexRuntime(session: SessionRuntimeLike | null | undefined): boolean {
+  return isClaudeRuntime(session)
+    || isKimiRuntime(session)
+    || isCursorRuntime(session)
+    || isZcodeRuntime(session)
+    || isDoubaoRuntime(session);
 }
 
 function trimOrUndefined(value: string | null | undefined): string | undefined {
@@ -88,29 +107,29 @@ function getSessionTomlOverride<T>(session: SessionRuntimeLike | null | undefine
 }
 
 export function getSessionCodexThreadId(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.threadId);
 }
 
 export function getSessionActiveRuntime(session: SessionRuntimeLike | null | undefined): BridgeSessionRuntimeState['activeRuntime'] {
   const activeRuntime = session?.runtime?.activeRuntime;
-  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode'
+  return activeRuntime === 'claude' || activeRuntime === 'codex' || activeRuntime === 'kimi' || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao'
     ? activeRuntime
     : undefined;
 }
 
 export function getSessionCodexTitle(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   return trimOrUndefined(session?.runtime?.codex?.title);
 }
 
 export function getSessionCodexModel(session: SessionRuntimeLike | null | undefined): string | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.codex.model'));
 }
 
 export function getSessionCodexMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['mode'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   const mode = getSessionTomlOverride<'off' | 'on' | 'yolo'>(session, 'runtime.codex.yoloMode');
   if (mode === 'on' || mode === 'yolo') return 'yolo';
   if (mode === 'off') return 'normal';
@@ -118,13 +137,13 @@ export function getSessionCodexMode(session: SessionRuntimeLike | null | undefin
 }
 
 export function getSessionCodexProvider(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['provider'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   const provider = getSessionTomlOverride<string>(session, 'runtime.codex.provider');
   return isRuntimeProviderChoice(provider) ? 'tmux' : undefined;
 }
 
 export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['sandboxMode'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   const sandboxMode = getSessionTomlOverride<string>(session, 'runtime.codex.sandboxMode');
   return sandboxMode === 'read-only' || sandboxMode === 'workspace-write' || sandboxMode === 'danger-full-access'
     ? sandboxMode
@@ -132,13 +151,13 @@ export function getSessionCodexSandboxMode(session: SessionRuntimeLike | null | 
 }
 
 export function getSessionCodexNetworkAccess(session: SessionRuntimeLike | null | undefined): boolean | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   const networkAccess = getSessionTomlOverride<boolean>(session, 'runtime.codex.networkAccess');
   return typeof networkAccess === 'boolean' ? networkAccess : undefined;
 }
 
 export function getSessionCodexReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionCodexRuntimeState['reasoningEffort'] | undefined {
-  if (isClaudeRuntime(session) || isKimiRuntime(session) || isCursorRuntime(session) || isZcodeRuntime(session)) return undefined;
+  if (isNonCodexRuntime(session)) return undefined;
   const reasoningEffort = getSessionTomlOverride<string>(session, 'runtime.codex.reasoningEffort');
   return reasoningEffort === 'minimal'
     || reasoningEffort === 'low'
@@ -240,7 +259,48 @@ export function getSessionZcodeMode(session: SessionRuntimeLike | null | undefin
   return mode === 'build' || mode === 'edit' || mode === 'plan' || mode === 'yolo' ? mode : undefined;
 }
 
-export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice | undefined {
+export function getSessionDoubaoSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isDoubaoRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.doubao?.sessionId);
+}
+
+export function getSessionDoubaoCwd(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isDoubaoRuntime(session)) return undefined;
+  return trimOrUndefined(session?.runtime?.doubao?.cwd);
+}
+
+export function getSessionDoubaoModel(session: SessionRuntimeLike | null | undefined): string | undefined {
+  if (!isDoubaoRuntime(session)) return undefined;
+  return trimOrUndefined(getSessionTomlOverride<string>(session, 'runtime.doubao.model'));
+}
+
+export function getSessionDoubaoProvider(session: SessionRuntimeLike | null | undefined): DoubaoProviderChoice | undefined {
+  if (!isDoubaoRuntime(session)) return undefined;
+  return getSessionTomlOverride<string>(session, 'runtime.doubao.provider') === 'acp' ? 'acp' : undefined;
+}
+
+export function getSessionDoubaoMode(session: SessionRuntimeLike | null | undefined): BridgeSessionDoubaoRuntimeState['mode'] | undefined {
+  if (!isDoubaoRuntime(session)) return undefined;
+  const mode = getSessionTomlOverride<string>(session, 'runtime.doubao.mode');
+  return mode === 'normal' || mode === 'plan' || mode === 'yolo' ? mode : undefined;
+}
+
+export function getSessionDoubaoReasoningEffort(session: SessionRuntimeLike | null | undefined): BridgeSessionDoubaoRuntimeState['reasoningEffort'] | undefined {
+  if (!isDoubaoRuntime(session)) return undefined;
+  const effort = getSessionTomlOverride<string>(session, 'runtime.doubao.reasoningEffort');
+  return effort === 'none'
+    || effort === 'minimal'
+    || effort === 'low'
+    || effort === 'medium'
+    || effort === 'high'
+    || effort === 'xhigh'
+    || effort === 'max'
+    ? effort
+    : undefined;
+}
+
+export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | undefined): RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice | DoubaoProviderChoice | undefined {
+  if (isDoubaoRuntime(session)) return getSessionDoubaoProvider(session);
   if (isZcodeRuntime(session)) return getSessionZcodeProvider(session);
   if (isCursorRuntime(session)) return getSessionCursorProvider(session);
   if (isKimiRuntime(session)) return getSessionKimiProvider(session);
@@ -249,13 +309,16 @@ export function getSessionRuntimeProvider(session: SessionRuntimeLike | null | u
 
 export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | null | undefined): RuntimeProviderIdentity | undefined {
   const provider = getSessionRuntimeProvider(session)
-    || (isZcodeRuntime(session)
+    || (isDoubaoRuntime(session)
+      ? session?.runtime?.doubao?.provider
+      : isZcodeRuntime(session)
       ? session?.runtime?.zcode?.provider
       : isCursorRuntime(session)
       ? session?.runtime?.cursor?.provider
       : isKimiRuntime(session)
       ? session?.runtime?.kimi?.provider
       : isClaudeRuntime(session) ? session?.runtime?.claude?.provider : session?.runtime?.codex?.provider);
+  if (isDoubaoRuntime(session)) return 'doubao:acp';
   if (isZcodeRuntime(session)) return provider === 'tmux' ? 'zcode:tmux' : undefined;
   if (isCursorRuntime(session)) return provider === 'acp' ? 'cursor:acp' : 'cursor:tmux';
   if (isKimiRuntime(session)) return provider === 'tmux' ? 'kimi:tmux' : undefined;
@@ -266,8 +329,9 @@ export function getSessionRuntimeProviderIdentity(session: SessionRuntimeLike | 
 
 export function buildRuntimeProviderIdentity(
   runtime: RuntimeAgent,
-  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice,
+  provider: RuntimeProviderChoice | KimiProviderChoice | CursorProviderChoice | ZcodeProviderChoice | DoubaoProviderChoice,
 ): RuntimeProviderIdentity {
+  if (runtime === 'doubao') return 'doubao:acp';
   if (runtime === 'zcode') return 'zcode:tmux';
   if (runtime === 'cursor') return provider === 'acp' ? 'cursor:acp' : 'cursor:tmux';
   if (runtime === 'kimi') return 'kimi:tmux';
@@ -327,6 +391,8 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
         ? 'cursor'
         : rawSession.runtime?.activeRuntime === 'zcode'
           ? 'zcode'
+          : rawSession.runtime?.activeRuntime === 'doubao'
+            ? 'doubao'
         : 'codex';
   const codex = {
     ...rawSession.runtime?.codex,
@@ -339,6 +405,9 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
   };
   const zcode = {
     ...rawSession.runtime?.zcode,
+  };
+  const doubao = {
+    ...rawSession.runtime?.doubao,
   };
   const general = {
     ...rawSession.runtime?.general,
@@ -370,6 +439,12 @@ export function materializeBridgeSessionRuntime(rawSession: BridgeSession): Brid
                 ...(Object.keys(zcode).length > 0 ? { zcode } : {}),
                 ...(Object.keys(general).length > 0 ? { general } : {}),
               } satisfies BridgeSessionRuntimeState
+            : activeRuntime === 'doubao'
+              ? {
+                  activeRuntime: 'doubao',
+                  ...(Object.keys(doubao).length > 0 ? { doubao } : {}),
+                  ...(Object.keys(general).length > 0 ? { general } : {}),
+                } satisfies BridgeSessionRuntimeState
           : {
             ...(rawSession.runtime?.activeRuntime === 'codex' ? { activeRuntime: 'codex' as const } : {}),
             ...(Object.keys(codex).length > 0 ? { codex } : {}),
@@ -485,6 +560,24 @@ export function setSessionZcodeIdentityUpdate(
   return { runtime: { activeRuntime: 'zcode', zcode: { sessionId, cwd } } };
 }
 
+export function setSessionDoubaoIdentityUpdate(
+  sessionId: string | undefined,
+  cwd: string | undefined,
+  model?: string,
+): BridgeSessionRuntimeUpdate {
+  return {
+    runtime: {
+      activeRuntime: 'doubao',
+      doubao: {
+        sessionId,
+        cwd,
+        provider: 'acp',
+        ...(model ? { model } : {}),
+      },
+    },
+  };
+}
+
 export function setSessionSystemPromptUpdate(systemPrompt: string | undefined): BridgeSessionRuntimeUpdate {
   return { runtime: { general: { systemPrompt } } };
 }
@@ -555,6 +648,9 @@ export function mergeSessionRuntimeUpdates(...updates: BridgeSessionRuntimeUpdat
         zcode: update.runtime.zcode
           ? { ...acc.runtime?.zcode, ...update.runtime.zcode }
           : acc.runtime?.zcode,
+        doubao: update.runtime.doubao
+          ? { ...acc.runtime?.doubao, ...update.runtime.doubao }
+          : acc.runtime?.doubao,
         general: update.runtime.general
           ? { ...acc.runtime?.general, ...update.runtime.general }
           : acc.runtime?.general,

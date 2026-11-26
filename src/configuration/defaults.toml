@@ -48,6 +48,12 @@ model = ""
 provider = "tmux"
 mode = "build"
 
+[runtime.doubao]
+model = ""
+provider = "acp"
+mode = "normal"
+reasoning_effort = ""
+
 [[channels]]
 id = "feishu-default"
 alias = "飞书"

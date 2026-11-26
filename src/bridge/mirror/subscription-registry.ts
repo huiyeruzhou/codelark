@@ -10,7 +10,7 @@ export interface MirrorRegistryBinding {
 
 export interface MirrorRegistrySession {
   runtime?: {
-    activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+    activeRuntime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
     codex?: {
       threadId?: string | null;
     };
@@ -27,6 +27,10 @@ export interface MirrorRegistrySession {
       cwd?: string | null;
     };
     zcode?: {
+      sessionId?: string | null;
+      cwd?: string | null;
+    };
+    doubao?: {
       sessionId?: string | null;
       cwd?: string | null;
     };

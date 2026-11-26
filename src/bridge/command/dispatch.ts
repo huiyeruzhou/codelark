@@ -83,6 +83,7 @@ import type { ConfigPath } from '../../configuration/fields.js';
 import { resolveEffectiveRuntimeProvider, resolveSessionWorkingDirectoryPath, scopedConfigForRuntime } from '../session/support.js';
 import { getSessionActiveRuntime, getSessionCursorNativeProvider, getSessionWorkingDirectory, setSessionCursorProviderUpdate } from '../../domain/session-runtime.js';
 import { listCursorAvailableModels } from '../../runtime/cursor/models.js';
+import { listDoubaoModels } from '../../runtime/doubao/models.js';
 import {
   attachCursorDesktopModelNotice,
   attachCursorModelPickerControls,
@@ -90,6 +91,10 @@ import {
   extractCursorModelPageArg,
   sessionCursorModelOverride,
 } from './cursor-model-picker.js';
+import {
+  attachDoubaoModelPickerControls,
+  sessionDoubaoModelOverride,
+} from './doubao-model-picker.js';
 import { resolveCursorCapabilities } from '../session/cursor-transport.js';
 import {
   handleEveryCommand,
@@ -263,6 +268,24 @@ async function buildCurrentCommandRichCardWithCursorModels(
   const session = options.store.getSession(options.binding.bridgeSessionId);
   if (!session) return card;
   const section = options.configSection || options.previewRuntime || getSessionActiveRuntime(session) || 'codex';
+  if (section === 'doubao') {
+    const targetId = mappedRuntimeSessionId(options.store, options.binding, 'doubao') || session.id;
+    try {
+      const models = await listDoubaoModels();
+      if (models.length === 0) return card;
+      return attachDoubaoModelPickerControls({
+        card,
+        models,
+        target: 'session',
+        selectedModelId: sessionDoubaoModelOverride(targetId),
+        scopeSessionId: session.id,
+        configuredLabel: '当前会话配置',
+        controlIdPrefix: 'current_doubao',
+      }).card;
+    } catch {
+      return card;
+    }
+  }
   if (section !== 'cursor') return card;
   const targetId = mappedRuntimeSessionId(options.store, options.binding, 'cursor') || session.id;
   const targetSession = options.store.getSession(targetId) || session;
@@ -295,6 +318,23 @@ async function buildSetCommandRichCardWithCursorModels(
   requestedPage?: number,
 ): Promise<OutboundRichCard> {
   const card = buildSetCommandRichCard(selectedGroup, address);
+  if (selectedGroup === 'runtime.doubao') {
+    try {
+      const models = await listDoubaoModels();
+      if (models.length === 0) return card;
+      const configured = createConfigService({ migrate: false }).snapshot({ kind: 'global' }).config.runtime.doubao.model.trim() || undefined;
+      return attachDoubaoModelPickerControls({
+        card,
+        models,
+        target: 'global',
+        selectedModelId: configured,
+        configuredLabel: '全局默认配置',
+        controlIdPrefix: 'set_doubao',
+      }).card;
+    } catch {
+      return card;
+    }
+  }
   if (selectedGroup !== 'runtime.cursor') return card;
   try {
     const models = await listCursorAvailableModels();
@@ -573,7 +613,7 @@ async function handleCurrentRuntimeCommand(options: {
   if (cursorPage.invalid) return { response: 'Cursor 模型分页参数无效，请重新打开配置卡。' };
   const section = parseCurrentConfigSectionArg(cursorPage.args);
   if (!section) {
-    return { response: '请选择有效配置分栏：common、codex、claude、kimi、cursor 或 zcode。' };
+    return { response: '请选择有效配置分栏：common、codex、claude、kimi、cursor、zcode 或 doubao。' };
   }
 
   const session = options.store.getSession(binding.bridgeSessionId);
@@ -588,7 +628,7 @@ async function handleCurrentRuntimeCommand(options: {
   };
 }
 
-function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | undefined {
+function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao' | undefined {
   const section = parseCurrentConfigSectionArg(args);
   return section === 'common' ? undefined : section;
 }
@@ -596,7 +636,7 @@ function parseCurrentRuntimeArg(args: string): 'codex' | 'claude' | 'kimi' | 'cu
 function parseCurrentConfigSectionArg(args: string): CurrentSessionConfigSection | undefined {
   const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const runtime = parts[0] === 'runtime' ? parts[1] : parts[0];
-  return runtime === 'common' || runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode'
+  return runtime === 'common' || runtime === 'codex' || runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' || runtime === 'doubao'
     ? runtime
     : undefined;
 }
@@ -787,7 +827,7 @@ export async function handleBridgeCommand(
     }
 
     case '/threads': {
-      const result = handleLocalRuntimeSessionsCommand({
+      const result = await handleLocalRuntimeSessionsCommand({
         msg,
         args,
         threadDisplay,

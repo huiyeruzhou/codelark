@@ -7,6 +7,8 @@ import type {
   CodexReasoningEffort,
   CodexSandboxMode,
   CursorTransport,
+  DoubaoMode,
+  DoubaoReasoningEffort,
   RuntimeProviderChoice,
 } from '../domain/session.js';
 import type { ClaudePermissionMode } from './options.js';
@@ -66,7 +68,7 @@ export interface BridgeApiProvider {
 export interface StreamChatParams {
   prompt: string;
   sessionId: string;
-  runtime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  runtime?: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   codexThreadId?: string;
   codexAppServerEndpoint?: string;
   claudeSessionId?: string;
@@ -82,6 +84,10 @@ export interface StreamChatParams {
   cursorReasoningEffort?: string;
   zcodeSessionId?: string;
   zcodeMode?: 'build' | 'edit' | 'plan' | 'yolo';
+  doubaoSessionId?: string;
+  doubaoProvider?: 'acp';
+  doubaoMode?: DoubaoMode;
+  doubaoReasoningEffort?: DoubaoReasoningEffort;
   claudeExecutable?: ClaudeExecutable;
   claudeProvider?: ClaudeProviderChoice;
   model?: string;

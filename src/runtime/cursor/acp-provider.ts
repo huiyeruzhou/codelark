@@ -45,6 +45,7 @@ interface Session {
   cwd: string;
   force: boolean;
   model?: string;
+  appliedReasoningEffort?: string;
   configOptions: Array<Record<string, any>>;
   todos: Map<string, { content: string; status: TaskProgressInfo['status'] | 'cancelled' }>;
   disposalError?: Error;
@@ -131,14 +132,75 @@ export async function closeAllCursorAcpSessions(): Promise<void> {
 
 export const closeCursorAcpSessions = closeAllCursorAcpSessions;
 
+function isBooleanThoughtOption(option: Record<string, any>): boolean {
+  const values = Array.isArray(option.options)
+    ? option.options.map((entry: any) => String(entry?.value ?? '').trim().toLowerCase()).filter(Boolean)
+    : [];
+  return values.length > 0 && values.every(value => value === 'true' || value === 'false');
+}
+
+function thoughtLevelCandidateValues(requestedEffort: string): string[] {
+  const normalized = requestedEffort.trim().toLowerCase();
+  if (normalized === 'xhigh') return ['xhigh', 'extra-high'];
+  if (normalized === 'extra-high') return ['extra-high', 'xhigh'];
+  return normalized ? [normalized] : [];
+}
+
+function resolveCursorThoughtLevelOption(
+  configOptions: Array<Record<string, any>>,
+  requestedEffort: string,
+): {
+  option?: Record<string, any>;
+  targetValue?: string;
+  thinkingToggle?: Record<string, any>;
+  availableSummary?: string;
+} {
+  const thoughtOptions = configOptions.filter(option => option.category === 'thought_level');
+  if (thoughtOptions.length === 0) return {};
+  const rank = (option: Record<string, any>): number => {
+    if (isBooleanThoughtOption(option)) return 2;
+    const id = String(option.id || '').toLowerCase();
+    return id === 'effort' || id === 'reasoning_effort' || id === 'reasoning' ? 0 : 1;
+  };
+  const ordered = [...thoughtOptions].sort((a, b) => rank(a) - rank(b));
+  const candidates = thoughtLevelCandidateValues(requestedEffort);
+  const thinkingToggle = thoughtOptions.find(option => isBooleanThoughtOption(option));
+  for (const option of ordered) {
+    const entries = Array.isArray(option.options) ? option.options : [];
+    for (const candidate of candidates) {
+      const matched = entries.find((entry: any) => String(entry?.value ?? '').trim().toLowerCase() === candidate);
+      if (matched && typeof matched.value === 'string') {
+        return {
+          option,
+          targetValue: matched.value,
+          ...(thinkingToggle && thinkingToggle !== option ? { thinkingToggle } : {}),
+        };
+      }
+    }
+  }
+  const effortOption = ordered.find(option => !isBooleanThoughtOption(option));
+  const availableValues = Array.isArray(effortOption?.options)
+    ? effortOption.options.map((entry: any) => String(entry?.value ?? '').trim()).filter(Boolean)
+    : [];
+  const availableSummary = availableValues.length > 0
+    ? `可选：${availableValues.join(' / ')}`
+    : thinkingToggle
+      ? '该模型仅支持思考开关（true/false），不支持分档思考强度'
+      : undefined;
+  return { availableSummary };
+}
+
 async function prepareSession(params: StreamChatParams, options: CursorAcpProviderOptions): Promise<Session> {
   const cwd = path.resolve(params.workingDirectory || process.cwd());
   const model = params.model?.trim() || undefined;
+  const requestedEffort = params.cursorReasoningEffort?.trim() || undefined;
   const existing = sessions.get(params.sessionId);
   if (existing) {
     await existing.ready;
+    const clearedReasoningOverride = Boolean(existing.appliedReasoningEffort && !requestedEffort);
     if (existing.cwd === cwd && existing.nativeId === params.cursorSessionId
-      && existing.force === (params.cursorForce === true) && existing.model === model && existing.client?.connected) return existing;
+      && existing.force === (params.cursorForce === true) && existing.model === model
+      && !clearedReasoningOverride && existing.client?.connected) return existing;
     // A cleared binding explicitly requests a new session. Finish disposing the old
     // process before changing identity, cwd or startup permissions.
     await disposeSession(existing);
@@ -364,15 +426,34 @@ export class CursorAcpProvider implements LLMProvider {
           const client = session.client!;
           emit('status', { session_id: session.nativeId, cwd: session.cwd });
           if (params.cursorReasoningEffort) {
-            const reasoning = session.configOptions.find(option => option.category === 'thought_level');
-            if (!reasoning || !reasoning.options?.some((option: any) => option.value === params.cursorReasoningEffort)) {
-              throw new Error(`当前 Cursor ACP 模型不支持思考强度 ${params.cursorReasoningEffort}，未忽略设置或提交输入。`);
+            const resolved = resolveCursorThoughtLevelOption(session.configOptions, params.cursorReasoningEffort);
+            if (!resolved.option || !resolved.targetValue) {
+              const detail = resolved.availableSummary ? `（${resolved.availableSummary}）` : '';
+              throw new Error(`当前 Cursor ACP 模型不支持思考强度 ${params.cursorReasoningEffort}${detail}，未忽略设置或提交输入。`);
             }
-            const configured = await client.request<Record<string, any>>('session/set_config_option', { sessionId: session.nativeId, configId: reasoning.id, value: params.cursorReasoningEffort });
+            if (
+              resolved.thinkingToggle
+              && String(resolved.thinkingToggle.currentValue ?? '').trim().toLowerCase() === 'false'
+              && Array.isArray(resolved.thinkingToggle.options)
+              && resolved.thinkingToggle.options.some((entry: any) => String(entry?.value ?? '').trim().toLowerCase() === 'true')
+            ) {
+              const enabled = await client.request<Record<string, any>>('session/set_config_option', {
+                sessionId: session.nativeId,
+                configId: resolved.thinkingToggle.id,
+                value: 'true',
+              });
+              if (Array.isArray(enabled.configOptions)) session.configOptions = enabled.configOptions;
+            }
+            const configured = await client.request<Record<string, any>>('session/set_config_option', {
+              sessionId: session.nativeId,
+              configId: resolved.option.id,
+              value: resolved.targetValue,
+            });
             if (Array.isArray(configured.configOptions)) session.configOptions = configured.configOptions;
-            if (session.configOptions.find(option => option.id === reasoning.id)?.currentValue !== params.cursorReasoningEffort) {
+            if (session.configOptions.find(option => option.id === resolved.option!.id)?.currentValue !== resolved.targetValue) {
               throw new Error(`Cursor ACP 未确认思考强度 ${params.cursorReasoningEffort}，未提交输入。`);
             }
+            session.appliedReasoningEffort = resolved.targetValue;
           }
           const tools = new Map<string, { name: string; kind?: string; complete: boolean }>();
           const handleRequest = async (message: CursorAcpMessage) => {

@@ -1,8 +1,11 @@
 import '../../../setup/test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 import {
   processMessage,
@@ -747,3 +750,116 @@ for (const scenario of ['acp-cancel', 'acp-replaced', 'codex-cancel'] as const) 
     }
   });
 }
+
+it('auto-migrates a legacy Cursor CLI/tmux session to ACP when local CLI store.db exists, and errors clearly when missing', async () => {
+  resetBridgeTestState();
+  const tmpCursorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-engine-cursor-migrate-'));
+  const prevCursorConfigDir = process.env.CURSOR_CONFIG_DIR;
+  process.env.CURSOR_CONFIG_DIR = tmpCursorDir;
+
+  try {
+    const cwd = path.join(tmpCursorDir, 'workspace-exp');
+    const legacySessionId = 'a0fcb6f5-df09-422c-a36c-7ad353def799';
+    const cwdHash = crypto.createHash('md5').update(path.resolve(cwd)).digest('hex');
+    const legacyStorePath = path.join(tmpCursorDir, 'chats', cwdHash, legacySessionId, 'store.db');
+    fs.mkdirSync(path.dirname(legacyStorePath), { recursive: true });
+    const db = new DatabaseSync(legacyStorePath);
+    try {
+      db.exec('CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);');
+      db.exec('CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);');
+      db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run(
+        '0',
+        Buffer.from(JSON.stringify({ agentId: legacySessionId, name: 'exp', isRunEverything: true }), 'utf8').toString('hex'),
+      );
+      db.prepare('INSERT INTO blobs (id, data) VALUES (?, ?)').run('b1', Buffer.from('history', 'utf8'));
+    } finally {
+      db.close();
+    }
+
+    const store = initBridgeTestContext();
+    const session = store.createSession('exp-legacy', 'gemini-4-neon-high', undefined, cwd, 'code');
+    store.updateSession(session.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: { provider: 'tmux', sessionProvider: 'tmux', sessionId: legacySessionId, cwd },
+      },
+    });
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: session.id },
+      { runtime: { agent: 'cursor', cursor: { provider: 'acp', force: true } } },
+    );
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'exp-legacy-chat', bridgeSessionId: session.id });
+
+    let capturedCursorSessionId: string | undefined;
+    const llm: LLMProvider = {
+      streamChat(params) {
+        capturedCursorSessionId = params.cursorSessionId;
+        return new ReadableStream({
+          start(controller) {
+            controller.enqueue(sseEvent('text', '已无缝恢复旧会话。'));
+            controller.enqueue(sseEvent('result', { session_id: legacySessionId }));
+            controller.close();
+          },
+        });
+      },
+    };
+
+    const result = await processMessage(
+      binding,
+      '继续任务',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createTestSdkConversationRuntime(store, llm),
+    );
+    assert.equal(result.hasError, false);
+    assert.equal(result.responseText, '已无缝恢复旧会话。');
+    assert.equal(capturedCursorSessionId, legacySessionId);
+    const updatedSession = store.getSession(session.id)!;
+    assert.equal(updatedSession.runtime?.cursor?.sessionProvider, 'acp');
+    assert.equal(updatedSession.runtime?.cursor?.provider, 'acp');
+    assert.equal(updatedSession.runtime?.cursor?.sessionId, legacySessionId);
+    assert.ok(fs.existsSync(path.join(tmpCursorDir, 'acp-sessions', legacySessionId, 'store.db')));
+
+    // Missing legacy store.db still throws a clear migration error
+    const missingSession = store.createSession('missing-legacy', 'gemini-4-neon-high', undefined, cwd, 'code');
+    store.updateSession(missingSession.id, {
+      runtime: {
+        activeRuntime: 'cursor',
+        cursor: { provider: 'tmux', sessionProvider: 'tmux', sessionId: 'missing-cli-id-999', cwd },
+      },
+    });
+    createConfigService({ migrate: false }).set(
+      { kind: 'session', sessionId: missingSession.id },
+      { runtime: { agent: 'cursor', cursor: { provider: 'acp', force: true } } },
+    );
+    const missingBinding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'missing-legacy-chat', bridgeSessionId: missingSession.id });
+    await assert.rejects(
+      () => processMessage(
+        missingBinding,
+        'hello',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        createTestSdkConversationRuntime(store, llm),
+      ),
+      /未能找到本地 CLI 历史库自动迁移到 ACP/,
+    );
+  } finally {
+    if (prevCursorConfigDir === undefined) delete process.env.CURSOR_CONFIG_DIR;
+    else process.env.CURSOR_CONFIG_DIR = prevCursorConfigDir;
+    fs.rmSync(tmpCursorDir, { recursive: true, force: true });
+  }
+});

@@ -11,6 +11,8 @@ import {
   getSessionKimiSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 
@@ -254,6 +256,8 @@ export function computeBaseDiagnosis(
         ? trimOrNull(getSessionCursorSessionId(session))
         : activeRuntime === 'zcode'
           ? trimOrNull(getSessionZcodeSessionId(session))
+          : activeRuntime === 'doubao'
+            ? trimOrNull(getSessionDoubaoSessionId(session))
       : codexThreadId;
   const runtimeIdentityCwd = activeRuntime === 'kimi'
     ? trimOrNull(getSessionKimiCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
@@ -263,6 +267,8 @@ export function computeBaseDiagnosis(
         ? trimOrNull(getSessionCursorCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
         : activeRuntime === 'zcode'
           ? trimOrNull(getSessionZcodeCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
+          : activeRuntime === 'doubao'
+            ? trimOrNull(getSessionDoubaoCwd(session)) || trimOrNull(getSessionWorkingDirectory(session))
       : null;
   const lastProgressMs = parseIsoMs(lastProgressAt || undefined);
   const previousStatus = session.health_status || 'idle';

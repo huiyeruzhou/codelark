@@ -34,6 +34,7 @@ import {
   getSessionCursorSessionId,
   getSessionKimiSessionId,
   getSessionZcodeSessionId,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import type { ChannelChat, InboundMessage, OutboundAttachment, OutboundRichCard } from '../../domain/index.js';
@@ -58,6 +59,7 @@ import {
   resolveCursorRuntimeConfig,
   resolveKimiRuntimeConfig,
   resolveZcodeRuntimeConfig,
+  resolveDoubaoRuntimeConfig,
 } from '../session/support.js';
 import type { RuntimeAgent } from '../../domain/session.js';
 import {
@@ -121,6 +123,7 @@ function runtimeLabel(runtime: RuntimeAgent): string {
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor Agent';
   if (runtime === 'zcode') return 'ZCode';
+  if (runtime === 'doubao') return 'Doubao';
   return 'Codex';
 }
 
@@ -129,11 +132,12 @@ function runtimeIdentityFieldName(runtime: RuntimeAgent): string {
   if (runtime === 'kimi') return 'kimi_session_id';
   if (runtime === 'cursor') return 'cursor_session_id';
   if (runtime === 'zcode') return 'zcode_session_id';
+  if (runtime === 'doubao') return 'doubao_session_id';
   return 'codex_thread_id';
 }
 
 function runtimeIdentityMissingLabel(runtime: RuntimeAgent): string {
-  if (runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode') return `${runtimeLabel(runtime)} session id 未绑定`;
+  if (runtime === 'claude' || runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' || runtime === 'doubao') return `${runtimeLabel(runtime)} session id 未绑定`;
   return 'Codex thread id 未绑定';
 }
 
@@ -169,6 +173,15 @@ function currentRuntimeFields(
       [currentRuntimeFieldLabel('zcode', 'zcodeDefaultModel'), zcodeConfig.model || 'default'],
       [currentRuntimeFieldLabel('zcode', 'zcodeProvider'), zcodeConfig.provider],
       [currentRuntimeFieldLabel('zcode', 'zcodeMode'), zcodeConfig.mode],
+    ];
+  }
+  if (runtime === 'doubao') {
+    const doubaoConfig = resolveDoubaoRuntimeConfig(session, binding);
+    return [
+      [currentRuntimeFieldLabel('doubao', 'doubaoDefaultModel'), doubaoConfig.model || session.runtime?.doubao?.model || 'default'],
+      [currentRuntimeFieldLabel('doubao', 'doubaoProvider'), doubaoConfig.provider],
+      [currentRuntimeFieldLabel('doubao', 'doubaoMode'), doubaoConfig.mode],
+      [currentRuntimeFieldLabel('doubao', 'doubaoReasoningEffort'), doubaoConfig.reasoningEffort || 'default'],
     ];
   }
   if (runtime === 'claude') {
@@ -275,7 +288,7 @@ function filterHistoryMessagesForRuntime(
   messages: Array<{ role: string; content: string }>,
   runtime: RuntimeAgent | undefined,
 ): Array<{ role: string; content: string }> {
-  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor' && runtime !== 'zcode') return messages;
+  if (runtime !== 'claude' && runtime !== 'kimi' && runtime !== 'cursor' && runtime !== 'zcode' && runtime !== 'doubao') return messages;
   return messages.filter((message) => message.role !== 'user');
 }
 
@@ -351,6 +364,7 @@ export function handleCurrentCommand(options: {
   const kimiSessionId = getSessionKimiSessionId(session) || '';
   const cursorSessionId = getSessionCursorSessionId(session) || '';
   const zcodeSessionId = getSessionZcodeSessionId(session) || '';
+  const doubaoSessionId = getSessionDoubaoSessionId(session) || '';
   const localRuntimeThreadId = activeRuntime === 'kimi'
     ? kimiSessionId
     : activeRuntime === 'claude'
@@ -359,6 +373,8 @@ export function handleCurrentCommand(options: {
         ? cursorSessionId
         : activeRuntime === 'zcode'
           ? zcodeSessionId
+          : activeRuntime === 'doubao'
+            ? doubaoSessionId
         : localCodexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
@@ -391,6 +407,10 @@ export function handleCurrentCommand(options: {
         : activeRuntime === 'zcode'
         ? [
           ['zcode_session_id', zcodeSessionId || '-'] as [string, string],
+        ]
+        : activeRuntime === 'doubao'
+        ? [
+          ['doubao_session_id', doubaoSessionId || '-'] as [string, string],
         ]
         : [
           ['codex_title', codexTitle || '-'] as [string, string],
@@ -442,6 +462,7 @@ export function buildCurrentCommandRichCard(options: {
   const kimiSessionId = getSessionKimiSessionId(session) || '';
   const cursorSessionId = getSessionCursorSessionId(session) || '';
   const zcodeSessionId = getSessionZcodeSessionId(session) || '';
+  const doubaoSessionId = getSessionDoubaoSessionId(session) || '';
   const runtimeThreadId = activeRuntime === 'kimi'
     ? kimiSessionId
     : activeRuntime === 'claude'
@@ -450,6 +471,8 @@ export function buildCurrentCommandRichCard(options: {
         ? cursorSessionId
         : activeRuntime === 'zcode'
           ? zcodeSessionId
+          : activeRuntime === 'doubao'
+            ? doubaoSessionId
           : codexThreadId;
   const threadInfo = options.threadDisplay.binding(displayBinding);
   const codexTitle = getSessionCodexTitle(session)
@@ -490,6 +513,7 @@ export function buildCurrentCommandRichCard(options: {
       { text: 'Kimi Code', callbackData: buildCommandCallbackData('/current-runtime kimi') },
       { text: 'Cursor Agent', callbackData: buildCommandCallbackData('/current-runtime cursor') },
       { text: 'ZCode', callbackData: buildCommandCallbackData('/current-runtime zcode') },
+      { text: 'Doubao', callbackData: buildCommandCallbackData('/current-runtime doubao') },
     ],
   };
   return {

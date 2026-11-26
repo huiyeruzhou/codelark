@@ -25,6 +25,13 @@ import {
   findZcodeSessionById,
   listZcodeSessionSummaries,
 } from '../../../runtime/zcode/session-index.js';
+import {
+  archiveDoubaoSession,
+  findCachedDoubaoSessionById,
+  getCachedDoubaoSessions,
+  listDoubaoSessions,
+  type DoubaoSessionSummary,
+} from '../../../runtime/doubao/session-index.js';
 import type { LocalRuntimeSessionSummary } from '../local-runtime-session.js';
 import { validateSessionId } from '../../../shared/security/validators.js';
 import { userInputTurnCountCache } from './user-input-turn-cache.js';
@@ -32,7 +39,7 @@ import { userInputTurnCountCache } from './user-input-turn-cache.js';
 export type { CodexSessionSummary };
 export type { LocalRuntimeSessionSummary };
 
-export type LocalRuntimeFilter = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+export type LocalRuntimeFilter = 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 
 function isSafeLocalRuntimeThreadId(id: string): boolean {
   const trimmed = id.trim();
@@ -210,6 +217,35 @@ function toZcodeRuntimeSession(session: ReturnType<typeof listZcodeSessionSummar
   };
 }
 
+function listCommandDoubaoThreads(limit?: number): LocalRuntimeSessionSummary[] {
+  return getCachedDoubaoSessions(limit).map(toDoubaoRuntimeSession);
+}
+
+function toDoubaoRuntimeSession(session: DoubaoSessionSummary): LocalRuntimeSessionSummary {
+  return {
+    runtime: 'doubao',
+    threadId: session.sessionId,
+    filePath: '',
+    cwd: session.cwd,
+    originator: 'Doubao',
+    source: 'doubao',
+    firstSeenAt: session.firstSeenAt || new Date(0).toISOString(),
+    lastEventAt: session.lastEventAt || session.firstSeenAt || new Date(0).toISOString(),
+    title: session.title || session.sessionId.slice(0, 8),
+    activeEstimate: false,
+  };
+}
+
+export async function refreshCommandDoubaoSessions(forceRefresh = false): Promise<LocalRuntimeSessionSummary[]> {
+  try {
+    const sessions = await listDoubaoSessions({ forceRefresh });
+    return sessions.map(toDoubaoRuntimeSession);
+  } catch (error) {
+    console.error('[command-session-source] Failed to refresh Doubao sessions:', error);
+    return listCommandDoubaoThreads();
+  }
+}
+
 function sortRuntimeSessionsByActivity(sessions: LocalRuntimeSessionSummary[]): LocalRuntimeSessionSummary[] {
   return sessions.sort((left, right) => right.lastEventAt.localeCompare(left.lastEventAt));
 }
@@ -230,7 +266,8 @@ export function listCommandLocalRuntimeSessions(limit?: number, runtime?: LocalR
     const kimi = runtime && runtime !== 'kimi' ? [] : listCommandKimiThreads(limit);
     const cursor = runtime && runtime !== 'cursor' ? [] : listCommandCursorThreads(limit);
     const zcode = runtime && runtime !== 'zcode' ? [] : listCommandZcodeThreads(limit);
-    return sortRuntimeSessionsByActivity([...codex, ...claude, ...kimi, ...cursor, ...zcode])
+    const doubao = runtime && runtime !== 'doubao' ? [] : listCommandDoubaoThreads(limit);
+    return sortRuntimeSessionsByActivity([...codex, ...claude, ...kimi, ...cursor, ...zcode, ...doubao])
       .slice(0, typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? Math.max(1, Math.floor(limit)) : undefined);
   } catch (error) {
     console.error('[command-session-source] Failed to list local runtime sessions:', error);
@@ -309,6 +346,30 @@ export function archiveCommandZcodeThread(threadId: string, cwd: string | undefi
   }
 }
 
+export function archiveCommandDoubaoThread(threadId: string, cwd: string | undefined): LocalRuntimeSessionSummary | null {
+  try {
+    const cached = findCachedDoubaoSessionById(threadId, cwd);
+    if (!archiveDoubaoSession(threadId)) return null;
+    if (cached) return toDoubaoRuntimeSession(cached);
+    const now = new Date().toISOString();
+    return {
+      runtime: 'doubao',
+      threadId,
+      filePath: '',
+      cwd: cwd || '',
+      originator: 'Doubao',
+      source: 'doubao',
+      firstSeenAt: now,
+      lastEventAt: now,
+      title: threadId.slice(0, 8),
+      activeEstimate: false,
+    };
+  } catch (error) {
+    console.error(`[command-session-source] Failed to archive Doubao thread ${threadId}:`, error);
+    return null;
+  }
+}
+
 export function getCommandCodexThreadByIdSafe(
   rawThreadId: string,
   context: string,
@@ -356,6 +417,8 @@ export function getCommandLocalRuntimeThreadByIdSafe(
       }
       const zcode = findZcodeSessionById(threadId, cwd);
       if (zcode) return { threadId, thread: toZcodeRuntimeSession(zcode) };
+      const doubao = findCachedDoubaoSessionById(threadId, cwd);
+      if (doubao) return { threadId, thread: toDoubaoRuntimeSession(doubao) };
     }
     const claudeMatches = listClaudeSessionJsonlSummaries()
       .filter((session) => session.sessionId === threadId);
@@ -372,6 +435,8 @@ export function getCommandLocalRuntimeThreadByIdSafe(
     }
     const zcode = findZcodeSessionById(threadId);
     if (zcode) return { threadId, thread: toZcodeRuntimeSession(zcode) };
+    const doubao = findCachedDoubaoSessionById(threadId);
+    if (doubao) return { threadId, thread: toDoubaoRuntimeSession(doubao) };
     return { threadId };
   } catch (error) {
     console.error(

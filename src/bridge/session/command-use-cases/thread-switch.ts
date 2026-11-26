@@ -26,7 +26,7 @@ import {
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
 import { parseForceFlag } from './args.js';
 import { sessionLooksRunning } from './status-guards.js';
-import { getCommandLocalRuntimeThreadByIdSafe, listCommandLocalRuntimeSessions } from './source.js';
+import { getCommandLocalRuntimeThreadByIdSafe, listCommandLocalRuntimeSessions, refreshCommandDoubaoSessions } from './source.js';
 import { validateSessionId } from '../../../shared/security/validators.js';
 import { prepareCurrentSessionForAttachment } from './attachment-lifecycle.js';
 import { buildTakeoverConfirmationCard } from './takeover-confirmation.js';
@@ -39,6 +39,7 @@ import {
   findBridgeSessionByCursorIdentity,
   findBridgeSessionByKimiIdentity,
   findBridgeSessionByZcodeIdentity,
+  findBridgeSessionByDoubaoIdentity,
   getRawCodexTitle,
   localRuntimeOf,
   selectDirectThreadTarget,
@@ -50,6 +51,7 @@ function localRuntimeDisplayName(runtime: ReturnType<typeof localRuntimeOf>): st
   if (runtime === 'kimi') return 'Kimi Code';
   if (runtime === 'cursor') return 'Cursor Agent';
   if (runtime === 'zcode') return 'ZCode';
+  if (runtime === 'doubao') return 'Doubao';
   return 'Codex';
 }
 
@@ -62,6 +64,7 @@ function bindingRuntimeIdentityFieldName(display: ReturnType<CommandThreadDispla
     || display.originator === 'Kimi Code'
     || display.originator === 'Cursor Agent'
     || display.originator === 'ZCode'
+    || display.originator === 'Doubao'
     ? 'session_id'
     : 'thread_id';
 }
@@ -210,6 +213,9 @@ export async function handleThreadSwitchCommand(options: {
   }
   if (threadArgs === 'all') {
     const runtime = options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
+    if (runtime === 'doubao') {
+      await refreshCommandDoubaoSessions();
+    }
     const localSessions = listCommandLocalRuntimeSessions(MAX_LOCAL_SESSION_LIST_LIMIT, runtime);
     if (!localSessions) {
       return { response: '读取本地会话列表失败，请稍后重试。' };
@@ -239,6 +245,9 @@ export async function handleThreadSwitchCommand(options: {
   }
 
   const runtime = options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
+  if (runtime === 'doubao') {
+    await refreshCommandDoubaoSessions();
+  }
   // Card actions carry an exact native ID, possibly from a different runtime
   // than the current binding. Resolve it before enumerating the old runtime.
   const directThread = validateSessionId(threadArgs)
@@ -354,7 +363,7 @@ export async function handleThreadSwitchCommand(options: {
       return {
         response: displayedThreads.length > 0
           ? `当前只找到 ${displayedThreads.length} 条全局会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看列表后再选择。`
-          : '没有找到本地 Codex、Claude Code、Kimi Code、Cursor Agent 或 ZCode 会话。先创建一个会话，再回来试一次。',
+          : '没有找到本地 Codex、Claude Code、Kimi Code、Cursor Agent、ZCode 或 Doubao 会话。先创建一个会话，再回来试一次。',
       };
     }
     const bridgeMatch = findVisibleBridgeSessionByToken(options.store, threadArgs);
@@ -409,7 +418,7 @@ export async function handleThreadSwitchCommand(options: {
         threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
       };
     }
-    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\`、\`/t zcode\` 切换 runtime 列表。` };
+    return { response: `没有找到对应会话：${threadArgs}。/t 列表按“序号 > thread/session id > bridge_id > 名称”解析；先发送 \`/t\` 刷新列表后优先用序号接管，或用 \`/t codex\`、\`/t claude\`、\`/t kimi\`、\`/t cursor\`、\`/t zcode\`、\`/t doubao\` 切换 runtime 列表。` };
   }
   if (!selected.thread) {
     const blocked = await prepareCurrentSessionForSwitch(
@@ -475,6 +484,8 @@ export async function handleThreadSwitchCommand(options: {
           ? findConflictBySessionId(findBridgeSessionByCursorIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
           : selectedRuntime === 'zcode'
             ? findConflictBySessionId(findBridgeSessionByZcodeIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
+            : selectedRuntime === 'doubao'
+              ? findConflictBySessionId(findBridgeSessionByDoubaoIdentity(options.store, selected.thread.threadId, selected.thread.cwd)?.id)
         : findConflictByThreadId(selected.thread.threadId);
     const takeover = await prepareTakeover(conflict);
     if (takeover) return takeover;

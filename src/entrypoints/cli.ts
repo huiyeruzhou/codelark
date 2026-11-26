@@ -195,7 +195,7 @@ function loadCliEffectiveConfig(cli: ConfigPatch | undefined): ConfigV2 {
 }
 
 export function formatInstallSkillsRestartGuidance(): string {
-  return 'Start a new Codex, Claude Code, Kimi Code, Cursor Agent, or ZCode session for newly installed skills to be discoverable.';
+  return 'Start a new Codex, Claude Code, Kimi Code, Cursor Agent, ZCode, or Doubao session for newly installed skills to be discoverable.';
 }
 
 async function runInstallSkillsCommand(args: string[]): Promise<void> {

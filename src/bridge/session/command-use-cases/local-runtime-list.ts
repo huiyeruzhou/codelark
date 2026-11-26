@@ -9,28 +9,34 @@ import {
   buildLocalRuntimeSessionLimitNotice,
 } from '../../command/presentation.js';
 import type { CommandThreadDisplay } from '../../command/thread-display.js';
-import { listCommandLocalRuntimeSessions } from './source.js';
+import { listCommandLocalRuntimeSessions, refreshCommandDoubaoSessions } from './source.js';
 import type { LocalRuntimeFilter } from './source.js';
 import type { SessionCommandResult } from './types.js';
 
-const LOCAL_RUNTIME_FALLBACK_ORDER: LocalRuntimeFilter[] = ['codex', 'claude', 'kimi', 'cursor', 'zcode'];
+const LOCAL_RUNTIME_FALLBACK_ORDER: LocalRuntimeFilter[] = ['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao'];
 
-export function handleLocalRuntimeSessionsCommand(options: {
+export async function handleLocalRuntimeSessionsCommand(options: {
   msg: InboundMessage;
   args: string;
   threadDisplay: CommandThreadDisplay;
   markdown: boolean;
-}): SessionCommandResult {
+}): Promise<SessionCommandResult> {
   const listArgs = parseLocalSessionListArgs(options.args);
   if (!listArgs) {
     return { response: `用法：/threads、/threads all、/threads n 100（最多 ${MAX_LOCAL_SESSION_LIST_LIMIT} 条）` };
   }
   const { showAll, limit } = listArgs;
   let runtime = listArgs.runtime || options.threadDisplay.activeRuntimeForChat(options.msg.address.channelType, options.msg.address.chatId);
+  if (runtime === 'doubao') {
+    await refreshCommandDoubaoSessions();
+  }
   let textLocalSessions = listCommandLocalRuntimeSessions(limit, runtime);
   if (!listArgs.runtime && textLocalSessions?.length === 0) {
     for (const fallbackRuntime of LOCAL_RUNTIME_FALLBACK_ORDER) {
       if (fallbackRuntime === runtime) continue;
+      if (fallbackRuntime === 'doubao') {
+        await refreshCommandDoubaoSessions();
+      }
       const fallbackSessions = listCommandLocalRuntimeSessions(limit, fallbackRuntime);
       if (fallbackSessions && fallbackSessions.length > 0) {
         runtime = fallbackRuntime;

@@ -53,7 +53,7 @@
       "type": "object",
       "properties": {
         "agent": {
-          "enum": ["codex", "claude", "kimi", "cursor", "zcode"]
+          "enum": ["codex", "claude", "kimi", "cursor", "zcode", "doubao"]
         },
         "codex": {
           "$ref": "#/$defs/codex"
@@ -69,6 +69,9 @@
         },
         "zcode": {
           "$ref": "#/$defs/zcode"
+        },
+        "doubao": {
+          "$ref": "#/$defs/doubao"
         }
       },
       "additionalProperties": false
@@ -169,6 +172,24 @@
         },
         "mode": {
           "enum": ["build", "edit", "plan", "yolo"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "doubao": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "const": "acp"
+        },
+        "mode": {
+          "enum": ["normal", "plan", "yolo"]
+        },
+        "reasoning_effort": {
+          "enum": ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
         }
       },
       "additionalProperties": false

@@ -77,7 +77,7 @@ describe('Cursor ACP configuration and provider switching', () => {
     assert.doesNotMatch(modelReply, /tmux/);
 
     const reasoningReply = handleReasoningCommand({ args: 'high', binding, store, markdown: true });
-    assert.match(reasoningReply, /Cursor acp/);
+    assert.match(reasoningReply, /Cursor ACP/);
     assert.doesNotMatch(reasoningReply, /tmux/);
 
     // Historical tmux overrides normalize to ACP everywhere.

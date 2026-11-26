@@ -19,4 +19,5 @@
 13. [Codex 工具调用适配](codex-tool-call-rendering.md)：Codex session JSONL 到公共工具事件的数据流、GPT-5.6 `exec` wrapper 静态归一化和安全边界。
 14. [tmux Runtime 生命周期](tmux-runtime-lifecycle.md)：Claude/Kimi/Codex 共享输入状态机、session/tmux 启动、选择提示和发送时机。
 15. [ZCode tmux runtime](zcode-runtime.md)：ZCode TUI、稳定 `sess_*`、SQLite/WAL mirror、原生 slash 与重启恢复合同。
-15. [Chat 与 Session 接管契约](chat-session-attachment.md)：`/t` 列表与接管边界、群聊/私聊隔离、运行中确认、跨 runtime mapping 和 callback ACK。
+16. [Doubao ACP runtime](doubao-runtime.md)：共享 ACP v1 客户端、热更新 mode/model/effort、权限审批、取消与会话列表合同。
+17. [Chat 与 Session 接管契约](chat-session-attachment.md)：`/t` 列表与接管边界、群聊/私聊隔离、运行中确认、跨 runtime mapping 和 callback ACK。

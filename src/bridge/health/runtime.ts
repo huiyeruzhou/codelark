@@ -17,7 +17,7 @@ import {
   shouldTrackSession,
   summarizeActiveTools,
 } from './reducer.js';
-import { getSessionActiveRuntime, getSessionCodexThreadId, getSessionClaudeSessionId, getSessionKimiSessionId, getSessionCursorSessionId, getSessionZcodeSessionId } from '../../domain/session-runtime.js';
+import { getSessionActiveRuntime, getSessionCodexThreadId, getSessionClaudeSessionId, getSessionKimiSessionId, getSessionCursorSessionId, getSessionZcodeSessionId, getSessionDoubaoSessionId } from '../../domain/session-runtime.js';
 import type {
   SessionEndOutcome,
   SessionHealthDiagnosis,
@@ -290,7 +290,8 @@ export function createSessionHealthRuntime(
     const currentThread = runtime === 'claude' ? getSessionClaudeSessionId(session)
       : runtime === 'kimi' ? getSessionKimiSessionId(session)
       : runtime === 'cursor' ? getSessionCursorSessionId(session)
-      : runtime === 'zcode' ? getSessionZcodeSessionId(session) : getSessionCodexThreadId(session);
+      : runtime === 'zcode' ? getSessionZcodeSessionId(session)
+      : runtime === 'doubao' ? getSessionDoubaoSessionId(session) : getSessionCodexThreadId(session);
     if (currentThread && currentThread !== threadId) return;
     if (mirrorTurns.get(sessionId)?.threadId !== threadId) mirrorTurns.delete(sessionId);
     for (const record of records) {

@@ -97,6 +97,12 @@ function baseConfigV2(overrides: Partial<ConfigV2> = {}): ConfigV2 {
         provider: 'tmux',
         mode: 'build',
       },
+      doubao: {
+        model: '',
+        provider: 'acp',
+        mode: 'normal',
+        reasoningEffort: '',
+      },
     },
     bridge: {
       defaultWorkspace: '~',

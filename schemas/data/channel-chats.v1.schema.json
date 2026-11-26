@@ -69,6 +69,10 @@
             "zcode": {
               "type": "string",
               "minLength": 1
+            },
+            "doubao": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "additionalProperties": false

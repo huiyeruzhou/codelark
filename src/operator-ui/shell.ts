@@ -141,6 +141,12 @@ ${logsPageHtml}      </main>
             <label>ZCode Provider<select id="sessionConfigZcodeProvider"><option value="">跟随全局</option><option value="tmux">tmux</option></select></label>
             <label>ZCode 模式<select id="sessionConfigZcodeMode"><option value="">跟随全局</option><option value="build">build</option><option value="edit">edit</option><option value="plan">plan</option><option value="yolo">yolo</option></select></label>
           </div>
+          <div class="field-row triple" id="sessionConfigDoubaoBlock" hidden>
+            <label>Doubao 模型<input id="sessionConfigDoubaoModel" placeholder="留空跟随全局 Doubao 默认模型" /></label>
+            <label>Doubao Provider<select id="sessionConfigDoubaoProvider"><option value="">跟随全局</option><option value="acp">acp</option></select></label>
+            <label>Doubao 模式<select id="sessionConfigDoubaoMode"><option value="">跟随全局</option><option value="normal">normal</option><option value="plan">plan</option><option value="yolo">yolo</option></select></label>
+            <label>Doubao 思考级别<select id="sessionConfigDoubaoReasoning"><option value="">跟随全局</option><option value="none">none</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option></select></label>
+          </div>
           <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
         </div>
         <div class="toolbar modal-actions">

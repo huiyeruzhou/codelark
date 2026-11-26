@@ -2132,7 +2132,7 @@ describe('command-dispatch', () => {
     assert.deepEqual(card?.tags, ['codex', '019e7d66...card01']);
     assert.match(card?.title || '', /Codex Card title/);
     assert.equal(card?.selects?.[0]?.id, 'cur_runtime');
-    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent', 'ZCode']);
+    assert.deepEqual(card?.selects?.[0]?.options.map((option) => option.text), ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent', 'ZCode', 'Doubao']);
     assert.equal(parseCommandCallbackData(card?.selects?.[0]?.selectedCallbackData || '')?.commandText, '/current-runtime codex');
     assert.equal(card?.form?.layout, 'two_column');
     assert.equal(card?.form?.inputElementId, undefined);
@@ -4568,7 +4568,7 @@ enabled = true
     assert.match(currentCard?.subtitle || '', /zcode_session_id: sess_current_zcode/);
     assert.deepEqual(
       currentCard?.selects?.[0]?.options.map((option) => option.text),
-      ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent', 'ZCode'],
+      ['通用配置', 'Codex', 'Claude Code', 'Kimi Code', 'Cursor Agent', 'ZCode', 'Doubao'],
     );
 
     await handleBridgeCommand(adapter, { address, text: '/runtime codex', messageId: 'zcode-2' } as any, '/runtime codex', deps);
@@ -6628,7 +6628,7 @@ enabled = true
     assert.match(sent.at(-1)?.richCard?.footer?.[1] || '', /Provider.*tmux.*sdk/);
     assert.deepEqual(
       sent.at(-1)?.richCard?.selects?.[0]?.options.map((option: any) => option.text),
-      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Cursor', 'ZCode', 'Bridge', '通道配置（feishu-default）'],
+      ['通用配置', 'Codex', 'Claude', 'Kimi', 'Cursor', 'ZCode', 'Doubao', 'Bridge', '通道配置（feishu-default）'],
     );
     assert.deepEqual(sent.at(-1)?.richCard?.sections, []);
     assert.deepEqual(
@@ -7762,7 +7762,7 @@ enabled = true
     assert.equal(message?.richCard?.tableBlocks?.[0]?.table.rows.length, 20);
     assert.equal(message?.richCard?.tableBlocks?.[0]?.selects?.[0]?.options.length, 20);
     assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[1]?.options.map((option) => option.text), ['显示 20', '显示 50', '显示 100']);
-    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi', 'Cursor', 'ZCode']);
+    assert.deepEqual(message?.richCard?.tableBlocks?.[0]?.selects?.[2]?.options.map((option) => option.text), ['Codex', 'Claude', 'Kimi', 'Cursor', 'ZCode', 'Doubao']);
     assert.deepEqual(
       message?.richCard?.tableBlocks?.[0]?.actions?.map((row) => row.map((action) => action.text)),
       [['接管', '归档', '新建'], ['解绑', '刷新']],

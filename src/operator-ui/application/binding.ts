@@ -20,6 +20,8 @@ export class UiBindingApplication {
     cursorCwd?: string;
     zcodeSessionId?: string;
     zcodeCwd?: string;
+    doubaoSessionId?: string;
+    doubaoCwd?: string;
   }) {
     if (options.bridgeSessionId) {
       return this.registry.switchBindingToBridgeSession(options.bindingId, options.bridgeSessionId);
@@ -33,6 +35,8 @@ export class UiBindingApplication {
         ? this.registry.materializeKimiThread(options.kimiSessionId, options.kimiCwd)
         : options.cursorSessionId && options.cursorCwd
           ? this.registry.materializeCursorThread(options.cursorSessionId, options.cursorCwd)
+          : options.doubaoSessionId && options.doubaoCwd
+            ? this.registry.materializeDoubaoThread(options.doubaoSessionId, options.doubaoCwd)
           : this.registry.materializeZcodeThread(options.zcodeSessionId!, options.zcodeCwd!);
     return this.registry.switchBindingToBridgeSession(options.bindingId, session.id);
   }

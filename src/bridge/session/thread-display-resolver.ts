@@ -32,6 +32,8 @@ import {
   getSessionKimiSessionId,
   getSessionZcodeCwd,
   getSessionZcodeSessionId,
+  getSessionDoubaoCwd,
+  getSessionDoubaoSessionId,
   getSessionWorkingDirectory,
 } from '../../domain/session-runtime.js';
 import { getCodexThreadId } from '../turn/turn-classifier.js';
@@ -72,7 +74,7 @@ export class ThreadDisplayService {
 
   private runtimeMetadata(
     session: ReturnType<BridgeStore['getSession']>,
-    runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' = getSessionActiveRuntime(session) === 'claude'
+    runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao' = getSessionActiveRuntime(session) === 'claude'
       ? 'claude'
       : getSessionActiveRuntime(session) === 'kimi'
         ? 'kimi'
@@ -80,6 +82,8 @@ export class ThreadDisplayService {
           ? 'cursor'
           : getSessionActiveRuntime(session) === 'zcode'
             ? 'zcode'
+            : getSessionActiveRuntime(session) === 'doubao'
+              ? 'doubao'
         : 'codex',
     binding?: ChannelChat | null,
   ): Pick<ThreadDisplayInfo, 'reasoningEffort' | 'model'> {
@@ -93,6 +97,7 @@ export class ThreadDisplayService {
     if (activeRuntime === 'kimi') return getSessionKimiSessionId(session) || '';
     if (activeRuntime === 'cursor') return getSessionCursorSessionId(session) || '';
     if (activeRuntime === 'zcode') return getSessionZcodeSessionId(session) || '';
+    if (activeRuntime === 'doubao') return getSessionDoubaoSessionId(session) || '';
     return getCodexThreadId(session, binding) || '';
   }
 
@@ -108,7 +113,8 @@ export class ThreadDisplayService {
     const isKimi = activeRuntime === 'kimi';
     const isCursor = activeRuntime === 'cursor';
     const isZcode = activeRuntime === 'zcode';
-    const codexSession = !isClaude && !isKimi && !isCursor && !isZcode && threadId ? getCodexSessionByThreadIdSafe(threadId, 'thread display binding') : null;
+    const isDoubao = activeRuntime === 'doubao';
+    const codexSession = !isClaude && !isKimi && !isCursor && !isZcode && !isDoubao && threadId ? getCodexSessionByThreadIdSafe(threadId, 'thread display binding') : null;
     const sessionCodexTitle = getSessionCodexTitle(session);
     const sessionWorkingDirectory = getSessionWorkingDirectory(session);
     const title = this.resolveTitle({
@@ -119,15 +125,15 @@ export class ThreadDisplayService {
       fallback: getSessionDisplayName(session, sessionWorkingDirectory) || binding.bridgeSessionId.slice(0, 8),
     });
     const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
-    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : isKimi ? 'kimi' : isCursor ? 'cursor' : isZcode ? 'zcode' : 'codex', binding);
+    const runtimeMetadata = this.runtimeMetadata(session, isClaude ? 'claude' : isKimi ? 'kimi' : isCursor ? 'cursor' : isZcode ? 'zcode' : isDoubao ? 'doubao' : 'codex', binding);
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,
-      cwd: sessionWorkingDirectory || (isKimi ? getSessionKimiCwd(session) : isCursor ? getSessionCursorCwd(session) : isZcode ? getSessionZcodeCwd(session) : undefined) || codexSession?.cwd || '',
+      cwd: sessionWorkingDirectory || (isKimi ? getSessionKimiCwd(session) : isCursor ? getSessionCursorCwd(session) : isZcode ? getSessionZcodeCwd(session) : isDoubao ? getSessionDoubaoCwd(session) : undefined) || codexSession?.cwd || '',
       lastActiveAt: codexSession?.lastEventAt || session?.last_progress_at || session?.updated_at || binding.updatedAt,
-      originator: isClaude ? 'Claude Code' : isKimi ? 'Kimi Code' : isCursor ? 'Cursor Agent' : isZcode ? 'ZCode' : codexSession?.originator || '当前聊天',
+      originator: isClaude ? 'Claude Code' : isKimi ? 'Kimi Code' : isCursor ? 'Cursor Agent' : isZcode ? 'ZCode' : isDoubao ? 'Doubao' : codexSession?.originator || '当前聊天',
       bridgeSessionId: session?.id || binding.bridgeSessionId,
-      creatorKind: isClaude || isKimi || isCursor || isZcode ? 'tui_cli' : codexSession ? resolveCreatorKind(codexSource || {}) : 'bridge',
+      creatorKind: isClaude || isKimi || isCursor || isZcode || isDoubao ? 'tui_cli' : codexSession ? resolveCreatorKind(codexSource || {}) : 'bridge',
       codexSource,
       executionProvider: bridgeSessionExecutionProvider(session),
       ...runtimeMetadata,
@@ -239,6 +245,32 @@ export class ThreadDisplayService {
         ...this.runtimeMetadata(linkedBridgeSession || null, 'zcode'),
       };
     }
+    if (session.runtime === 'doubao') {
+      const bindingDisplay = binding ? this.binding(binding, options) : null;
+      const linkedBridgeSession = this.store.listSessions().find((candidate) => (
+        getSessionActiveRuntime(candidate) === 'doubao'
+        && getSessionDoubaoSessionId(candidate) === session.threadId
+        && (!session.cwd || getSessionDoubaoCwd(candidate) === session.cwd)
+      ));
+      const title = this.resolveTitle({
+        sessionName: linkedBridgeSession ? getBridgeSessionDisplayTitle(linkedBridgeSession) : undefined,
+        sessionId: linkedBridgeSession?.id || binding?.bridgeSessionId,
+        threadId: session.threadId,
+        codexTitle: session.title,
+        fallback: session.cwd || session.threadId.slice(0, 8),
+      });
+      return {
+        title: formatResolvedThreadTitle(title, options),
+        threadId: session.threadId,
+        cwd: session.cwd || bindingDisplay?.cwd || '',
+        lastActiveAt: session.lastEventAt || bindingDisplay?.lastActiveAt,
+        originator: session.originator || bindingDisplay?.originator || 'Doubao',
+        bridgeSessionId: bindingDisplay?.bridgeSessionId || linkedBridgeSession?.id,
+        creatorKind: 'tui_cli',
+        executionProvider: bindingDisplay?.executionProvider || bridgeSessionExecutionProvider(linkedBridgeSession),
+        ...this.runtimeMetadata(linkedBridgeSession || null, 'doubao'),
+      };
+    }
     const bindingDisplay = binding ? this.binding(binding, options) : null;
     const linkedBridgeSession = binding
       ? this.store.getSession(binding.bridgeSessionId) || undefined
@@ -272,7 +304,7 @@ export class ThreadDisplayService {
       : findVisibleBridgeSessionByCodexThread(this.store, threadId) || null;
     const activeRuntime = getSessionActiveRuntime(session);
     const isLocalRuntime = activeRuntime === 'claude' || activeRuntime === 'kimi'
-      || activeRuntime === 'cursor' || activeRuntime === 'zcode';
+      || activeRuntime === 'cursor' || activeRuntime === 'zcode' || activeRuntime === 'doubao';
     const codexSession = isLocalRuntime
       ? null
       : getCodexSessionByThreadIdSafe(threadId, 'thread display thread') || null;
@@ -296,6 +328,7 @@ export class ThreadDisplayService {
         : activeRuntime === 'kimi' ? 'Kimi Code'
           : activeRuntime === 'cursor' ? 'Cursor Agent'
             : activeRuntime === 'zcode' ? 'ZCode'
+              : activeRuntime === 'doubao' ? 'Doubao'
               : codexSession?.originator || 'Codex Native',
       bridgeSessionId: session?.id,
       creatorKind: isLocalRuntime ? 'tui_cli'

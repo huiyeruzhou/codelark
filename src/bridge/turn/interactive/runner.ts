@@ -50,6 +50,7 @@ import {
   getSessionClaudeSessionId,
   getSessionCursorSessionId,
   getSessionZcodeSessionId,
+  getSessionDoubaoSessionId,
   getSessionRuntimeTmuxSessionName,
   getSessionWorkingDirectory,
 } from '../../../domain/session-runtime.js';
@@ -60,6 +61,7 @@ import {
   resolveKimiRuntimeConfig,
   resolveCursorRuntimeConfig,
   resolveZcodeRuntimeConfig,
+  resolveDoubaoRuntimeConfig,
   resolveRuntimeMetadataConfig,
 } from '../../session/support.js';
 import { maskSecrets } from '../../../shared/logger.js';
@@ -264,7 +266,9 @@ export async function runInteractiveMessage(
     if (targetBinding.id === binding.id && initialSession) {
       const displayRuntime = getSessionActiveRuntime(initialSession) || 'codex';
       const metadata = resolveRuntimeMetadataConfig(initialSession, displayRuntime, binding);
-      const threadId = displayRuntime === 'zcode'
+      const threadId = displayRuntime === 'doubao'
+        ? getSessionDoubaoSessionId(initialSession) || ''
+        : displayRuntime === 'zcode'
         ? getSessionZcodeSessionId(initialSession) || ''
         : displayRuntime === 'cursor'
         ? getSessionCursorSessionId(initialSession) || ''
@@ -273,7 +277,9 @@ export async function runInteractiveMessage(
         : displayRuntime === 'claude'
           ? getSessionClaudeSessionId(initialSession) || ''
           : getSessionCodexThreadId(initialSession) || '';
-      const executionProvider = displayRuntime === 'zcode'
+      const executionProvider = displayRuntime === 'doubao'
+        ? resolveDoubaoRuntimeConfig(initialSession, binding).provider
+        : displayRuntime === 'zcode'
         ? resolveZcodeRuntimeConfig(initialSession, binding).provider
         : displayRuntime === 'cursor'
         ? resolveCursorRuntimeConfig(initialSession, binding).provider
@@ -305,6 +311,7 @@ export async function runInteractiveMessage(
       || Boolean(getSessionRuntimeTmuxSessionName(initialSession)));
   const isKimiMirrorTurn = activeRuntime === 'kimi';
   const isCursorAcpTurn = activeRuntime === 'cursor' && resolveCursorRuntimeConfig(initialSession, binding).provider === 'acp';
+  const isDoubaoAcpTurn = activeRuntime === 'doubao';
   const isCursorTranscriptTurn = activeRuntime === 'cursor' && !isCursorAcpTurn;
   const isZcodeTranscriptTurn = activeRuntime === 'zcode';
   const isRuntimeMirrorTurn = isClaudeMirrorTurn || isCodexMirrorTurn || isKimiMirrorTurn;
@@ -393,6 +400,8 @@ export async function runInteractiveMessage(
         ? getSessionKimiSessionId(initialSession)
         : activeRuntime === 'zcode'
           ? getSessionZcodeSessionId(initialSession)
+          : activeRuntime === 'doubao'
+            ? getSessionDoubaoSessionId(initialSession)
         : turnClassification.codexThreadId,
     requestMessageId,
     streamKey,
@@ -691,7 +700,7 @@ export async function runInteractiveMessage(
             const tags = (metadata.tags || []).filter((tag) => !tag.toLowerCase().startsWith('model:'));
             streamUi.pushMetadata({ ...metadata, tags: [...tags, `model:${identity.model}`] });
           }
-          if (isCursorAcpTurn) return;
+          if (isCursorAcpTurn || isDoubaoAcpTurn) return;
           if (identity.runtime === 'claude' || identity.runtime === 'kimi' || identity.runtime === 'cursor' || identity.runtime === 'zcode') {
             ensureMirrorSuppression(preparedPromptText);
             runtimeMirrorActivated = true;
@@ -856,6 +865,47 @@ export async function runInteractiveMessage(
     finalOutcomeDetail = terminalAfterProcess?.detail || (result.hasError
       ? (result.errorMessage?.trim() || undefined)
       : undefined);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? (error.message || String(error)) : String(error);
+    finalOutcome = taskAbort.signal.aborted ? 'aborted' : 'failed';
+    finalOutcomeDetail = errorMessage;
+    if (!taskAbort.signal.aborted) {
+      logInteractiveTaskError({
+        kind: 'sdk',
+        message: errorMessage,
+        bridgeSessionId: binding.bridgeSessionId,
+        channelType: msg.address.channelType,
+        chatId: msg.address.chatId,
+        codexThreadId: getSessionCodexThreadId(initialSession) || null,
+        workingDirectory: getSessionWorkingDirectory(initialSession) || null,
+      });
+      const errorCardText = formatStreamingErrorForCard(errorMessage, {
+        bridgeSessionId: binding.bridgeSessionId,
+        codexThreadId: getSessionCodexThreadId(initialSession) || null,
+        workingDirectory: getSessionWorkingDirectory(initialSession) || null,
+      });
+      if (useInteractiveStreamUi && streamUi.hasStreamingCards) {
+        sdkStreamEvents.pushFinalCardText(errorCardText);
+        void enqueueFinalUiWork('error', errorCardText);
+      } else {
+        void enqueueFinalUiWork(
+          'error',
+          errorCardText,
+          {
+            text: errorCardText,
+            attachments: [],
+            questions: [],
+            platformMessages: [],
+            manualInputs: [],
+            hasError: true,
+            errorMessage,
+            source: 'sdk_result',
+          },
+          { skipTextWhenCardFinalized: true },
+        );
+      }
+    }
+    throw error;
   } finally {
     await streamingArtifacts?.close();
     if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {

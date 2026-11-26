@@ -12,8 +12,8 @@ import type { OutboundRichCard } from '../../domain/index.js';
 import type { ChannelAddress } from '../../domain/index.js';
 import { configFields, type ConfigPath } from '../../configuration/fields.js';
 
-export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'runtime.cursor' | 'runtime.zcode' | 'bridge' | 'channels.feishu';
-export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+export type SettingGroupKey = 'runtime' | 'runtime.codex' | 'runtime.claude' | 'runtime.kimi' | 'runtime.cursor' | 'runtime.zcode' | 'runtime.doubao' | 'bridge' | 'channels.feishu';
+export type CurrentSessionConfigSection = 'common' | 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 export const SESSION_CONFIG_INHERIT_VALUE = 'clk:config:inherit';
 type SettingControl = 'select' | 'input';
 
@@ -71,6 +71,10 @@ const SETTING_DISPLAY_LABELS: Record<string, string> = {
   zcodeDefaultModel: '模型',
   zcodeProvider: 'Provider（运行方式）',
   zcodeMode: '模式',
+  doubaoDefaultModel: '模型',
+  doubaoProvider: 'Provider（运行方式）',
+  doubaoMode: '模式',
+  doubaoReasoningEffort: '思考级别',
   defaultWorkspaceRoot: '默认工作目录',
   tmuxCaptureLines: 'tmux 输出行数',
   tmuxEchoInput: '回显 tmux 输入',
@@ -113,6 +117,10 @@ const SETTING_FORM_NAMES: Record<string, string> = {
   zcodeDefaultModel: 'zcode_model',
   zcodeProvider: 'zcode_provider',
   zcodeMode: 'zcode_mode',
+  doubaoDefaultModel: 'doubao_model',
+  doubaoProvider: 'doubao_provider',
+  doubaoMode: 'doubao_mode',
+  doubaoReasoningEffort: 'doubao_reasoning',
   uiAllowLan: 'ui_lan',
   uiAccessToken: 'ui_token',
   historyMessageLimit: 'hist_limit',
@@ -160,6 +168,12 @@ const SETTING_GROUPS: SettingGroupDefinition[] = [
     title: 'ZCode',
     subtitle: 'ZCode TUI runtime 的 TOML 默认值。',
     aliases: ['zcode', '[runtime.zcode]'],
+  },
+  {
+    key: 'runtime.doubao',
+    title: 'Doubao',
+    subtitle: 'Doubao CLI (ACP) runtime 的 TOML 默认值。',
+    aliases: ['doubao', '[runtime.doubao]'],
   },
   {
     key: 'bridge',
@@ -286,14 +300,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime',
     aliases: ['defaultRuntime', 'agent'],
     label: 'agent',
-    usage: '/set runtime codex|claude|kimi|cursor|zcode',
+    usage: '/set runtime codex|claude|kimi|cursor|zcode|doubao',
     control: 'select',
-    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi'), selectOption('cursor'), selectOption('zcode')],
+    options: [selectOption('codex'), selectOption('claude'), selectOption('kimi'), selectOption('cursor'), selectOption('zcode'), selectOption('doubao')],
     read: (config) => config.runtime.agent,
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'codex' || token === 'claude' || token === 'kimi' || token === 'cursor' || token === 'zcode') return patch({ runtime: { agent: token } });
-      return { ok: false, message: 'Runtime 必须是 codex、claude、kimi、cursor 或 zcode。' };
+      if (token === 'codex' || token === 'claude' || token === 'kimi' || token === 'cursor' || token === 'zcode' || token === 'doubao') return patch({ runtime: { agent: token } });
+      return { ok: false, message: 'Runtime 必须是 codex、claude、kimi、cursor、zcode 或 doubao。' };
     },
   },
   {
@@ -681,6 +695,70 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'doubaoDefaultModel',
+    tomlPath: 'runtime.doubao.model',
+    group: 'runtime.doubao',
+    aliases: ['doubaoModel'],
+    label: 'model',
+    usage: '/set doubaoDefaultModel <model> 或 /set doubaoDefaultModel default',
+    control: 'input',
+    placeholder: '留空则跟随 Doubao CLI 默认模型',
+    read: (config) => config.runtime.doubao.model || '-',
+    write: writeStringPatch((value) => ({ runtime: { doubao: { model: value } } })),
+  },
+  {
+    key: 'doubaoProvider',
+    tomlPath: 'runtime.doubao.provider',
+    group: 'runtime.doubao',
+    aliases: ['doubaoDefaultProvider'],
+    label: 'provider',
+    usage: '/set doubaoProvider acp',
+    control: 'select',
+    options: [selectOption('acp')],
+    read: (config) => config.runtime.doubao.provider || 'acp',
+    write(rawValue) {
+      if (rawValue.trim().toLowerCase() === 'acp') return patch({ runtime: { doubao: { provider: 'acp' } } });
+      return { ok: false, message: 'Doubao Provider 当前只支持 acp。' };
+    },
+  },
+  {
+    key: 'doubaoMode',
+    tomlPath: 'runtime.doubao.mode',
+    group: 'runtime.doubao',
+    aliases: ['doubaoDefaultMode'],
+    label: 'mode',
+    usage: '/set doubaoMode normal|plan|yolo',
+    control: 'select',
+    options: [selectOption('normal'), selectOption('plan'), selectOption('yolo')],
+    read: (config) => config.runtime.doubao.mode,
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'normal' || token === 'plan' || token === 'yolo') {
+        return patch({ runtime: { doubao: { mode: token } } });
+      }
+      return { ok: false, message: 'Doubao 模式必须是 normal、plan 或 yolo。' };
+    },
+  },
+  {
+    key: 'doubaoReasoningEffort',
+    tomlPath: 'runtime.doubao.reasoning_effort',
+    group: 'runtime.doubao',
+    aliases: ['doubaoReasoning', 'doubaoEffort'],
+    label: 'reasoning_effort',
+    usage: '/set doubaoReasoningEffort default|none|minimal|low|medium|high|xhigh|max',
+    control: 'select',
+    options: [selectOption('default'), selectOption('none'), selectOption('minimal'), selectOption('low'), selectOption('medium'), selectOption('high'), selectOption('xhigh'), selectOption('max')],
+    read: (config) => config.runtime.doubao.reasoningEffort || 'default',
+    write(rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (token === 'default') return patch({ runtime: { doubao: { reasoningEffort: '' } } });
+      if (['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(token)) {
+        return patch({ runtime: { doubao: { reasoningEffort: token as 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' } } });
+      }
+      return { ok: false, message: 'Doubao reasoning 必须是 default、none、minimal、low、medium、high、xhigh 或 max。' };
+    },
+  },
+  {
     key: 'uiAllowLan',
     tomlPath: 'bridge.ui_allow_lan',
     group: 'bridge',
@@ -836,7 +914,7 @@ function findGroup(raw: string): SettingGroupDefinition | undefined {
   ));
 }
 
-const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode', string[]> = {
+const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao', string[]> = {
   codex: [
     'defaultModel',
     'defaultMode',
@@ -864,6 +942,7 @@ const CURRENT_RUNTIME_SETTING_KEYS: Record<'codex' | 'claude' | 'kimi' | 'cursor
     'cursorReasoningEffort',
   ],
   zcode: ['zcodeDefaultModel', 'zcodeProvider', 'zcodeMode'],
+  doubao: ['doubaoDefaultModel', 'doubaoProvider', 'doubaoMode', 'doubaoReasoningEffort'],
 };
 
 const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
@@ -902,6 +981,7 @@ const SETTING_GROUP_ORDERS: Partial<Record<SettingGroupKey, string[]>> = {
     'cursorReasoningEffort',
   ],
   'runtime.zcode': ['zcodeDefaultModel', 'zcodeProvider', 'zcodeMode'],
+  'runtime.doubao': ['doubaoDefaultModel', 'doubaoProvider', 'doubaoMode', 'doubaoReasoningEffort'],
 };
 
 function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
@@ -913,10 +993,12 @@ function groupDefinitions(groupKey: SettingGroupKey): SettingDefinition[] {
 }
 
 export function runtimeSettingDefinitions(
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode',
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao',
   options: { sessionWritableOnly?: boolean } = {},
 ): SettingDefinition[] {
-  const definitions = groupDefinitions(runtime === 'zcode'
+  const definitions = groupDefinitions(runtime === 'doubao'
+    ? 'runtime.doubao'
+    : runtime === 'zcode'
     ? 'runtime.zcode'
     : runtime === 'cursor'
     ? 'runtime.cursor'
@@ -935,7 +1017,7 @@ export function settingConfigPath(definition: Pick<SettingDefinition, 'tomlPath'
 }
 
 export function currentSessionSettingDefinitions(
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode',
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao',
 ): SettingDefinition[] {
   return runtimeSettingDefinitions(runtime, { sessionWritableOnly: true });
 }

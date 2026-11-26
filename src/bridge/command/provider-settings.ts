@@ -139,6 +139,20 @@ function clearSessionZcodeProviderToml(sessionId: string): void {
     'runtime.zcode.provider',
   );
 }
+
+function setSessionDoubaoProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).set(
+    { kind: 'session', sessionId },
+    { runtime: { doubao: { provider: 'acp' } } },
+  );
+}
+
+function clearSessionDoubaoProviderToml(sessionId: string): void {
+  createConfigService({ migrate: false }).unset(
+    { kind: 'session', sessionId },
+    'runtime.doubao.provider',
+  );
+}
 function claudeProviderSwitchNote(provider: RuntimeProviderChoice): string {
   switch (provider) {
     case 'sdk':
@@ -314,7 +328,7 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
     return handleProviderCommand({ ...options, args: `acp --restart=${id}` });
   }
   const isCursorAcp = runtime === 'cursor' && requested === 'acp';
-  if (requested !== 'tmux' && !isCursorAcp) {
+  if (runtime === 'doubao' || (requested !== 'tmux' && !isCursorAcp)) {
     let richCard: OutboundRichCard | undefined;
     const response = await applyProviderCommand({ ...options, richCard: card => { richCard = card; } });
     return { response, richCard };
@@ -667,6 +681,46 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
         '之后的消息使用 ACP 实时事件；运行中的新消息会中断当前生成，再继续处理新消息。',
         ...(changingProvider && getSessionCursorSessionId(session)
           ? ['旧会话记录和身份已保留，下一条消息会创建新的 ACP 会话。'] : []),
+      ],
+      options.markdown,
+    );
+  }
+  if (getSessionActiveRuntime(session) === 'doubao') {
+    const rawRequested = options.args.trim().toLowerCase();
+    const aliasedFromTmux = rawRequested === 'tmux';
+    const requested = aliasedFromTmux ? 'acp' : rawRequested;
+    if (!requested) {
+      return buildCommandFields(
+        '当前 Doubao Provider',
+        [['Runtime', 'doubao'], ['Provider', 'acp']],
+        ['Doubao 当前使用原生 ACP 实时事件路径（不支持 tmux，`/p tmux` 会自动按 `/p acp` 处理）；支持运行期热切换模型、思考级别与权限模式，运行中的新消息会自动中断当前生成后继续。'],
+        options.markdown,
+      );
+    }
+    if (requested === 'default') {
+      clearSessionDoubaoProviderToml(session.id);
+      return buildCommandFields(
+        '已恢复默认 Doubao Provider',
+        [['Runtime', 'doubao'], ['Provider', 'acp']],
+        ['Doubao 当前固定使用 `acp` Provider。'],
+        options.markdown,
+      );
+    }
+    if (requested !== 'acp') {
+      return buildCommandFields(
+        'Doubao Provider 用法',
+        [['命令', '`/provider acp|default` 或 `/p acp|default`']],
+        ['Doubao 当前只支持 `acp` Provider（`/p tmux` 会自动解释为 `/p acp`）。'],
+        options.markdown,
+      );
+    }
+    setSessionDoubaoProviderToml(session.id);
+    return buildCommandFields(
+      '已确认 Doubao Provider',
+      [['Runtime', 'doubao'], ['Provider', 'acp']],
+      [
+        ...(aliasedFromTmux ? ['Doubao 不支持 tmux，已将 `/p tmux` 解释为 `/p acp`。'] : []),
+        '之后的消息继续使用 Doubao ACP 实时事件；支持运行期热更新配置。',
       ],
       options.markdown,
     );

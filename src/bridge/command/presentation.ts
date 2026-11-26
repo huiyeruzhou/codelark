@@ -102,6 +102,7 @@ function buildRuntimeSelect(
       { text: 'Kimi', callbackData: buildCommandCallbackData(`/t kimi${suffix}`) },
       { text: 'Cursor', callbackData: buildCommandCallbackData(`/t cursor${suffix}`) },
       { text: 'ZCode', callbackData: buildCommandCallbackData(`/t zcode${suffix}`) },
+      { text: 'Doubao', callbackData: buildCommandCallbackData(`/t doubao${suffix}`) },
     ],
   };
 }
@@ -111,6 +112,7 @@ function localRuntimeOf(session: LocalRuntimeSessionSummary): LocalSessionListRu
   if (session.runtime === 'kimi') return 'kimi';
   if (session.runtime === 'cursor') return 'cursor';
   if (session.runtime === 'zcode') return 'zcode';
+  if (session.runtime === 'doubao') return 'doubao';
   return 'codex';
 }
 
@@ -119,18 +121,20 @@ function formatLocalRuntimeCreator(session: LocalRuntimeSessionSummary): string 
   if (localRuntimeOf(session) === 'kimi') return 'Kimi Code';
   if (localRuntimeOf(session) === 'cursor') return 'Cursor Agent';
   if (localRuntimeOf(session) === 'zcode') return 'ZCode';
+  if (localRuntimeOf(session) === 'doubao') return 'Doubao';
   return formatCreatorBadge(resolveCreatorKind({
     source: session.source,
     originator: session.originator,
   })).label;
 }
 
-function formatLocalThreadListTitle(codexCount: number, claudeCount: number, kimiCount: number, cursorCount: number, zcodeCount: number, bridgeCount: number): string {
+function formatLocalThreadListTitle(codexCount: number, claudeCount: number, kimiCount: number, cursorCount: number, zcodeCount: number, doubaoCount: number, bridgeCount: number): string {
   const parts = [`Codex${codexCount}`];
   if (claudeCount > 0) parts.push(`Claude${claudeCount}`);
   if (kimiCount > 0) parts.push(`Kimi${kimiCount}`);
   if (cursorCount > 0) parts.push(`Cursor${cursorCount}`);
   if (zcodeCount > 0) parts.push(`ZCode${zcodeCount}`);
+  if (doubaoCount > 0) parts.push(`Doubao${doubaoCount}`);
   if (bridgeCount > 0) parts.push(`Bridge${bridgeCount}`);
   return `本地会话（${parts.join(' + ')}）`;
 }
@@ -550,7 +554,7 @@ function buildRuntimeThreadSelect(
       };
     });
   if (options.length === 0) return null;
-  const runtimeLabel = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : runtime === 'zcode' ? 'ZCode' : 'Codex';
+  const runtimeLabel = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : runtime === 'zcode' ? 'ZCode' : runtime === 'doubao' ? 'Doubao' : 'Codex';
   return {
     id: `${runtime}_select`,
     placeholder: `选择 ${runtimeLabel} 会话`,
@@ -572,7 +576,7 @@ function buildRuntimeThreadTableBlock(
     .filter(({ item }) => item.kind === 'local' && localRuntimeOf(item.local) === runtime)
     .map(({ row }) => row);
   const select = buildRuntimeThreadSelect(runtime, items, selectedCallbackData);
-  const label = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : runtime === 'zcode' ? 'ZCode' : 'Codex';
+  const label = runtime === 'claude' ? 'Claude Code' : runtime === 'kimi' ? 'Kimi Code' : runtime === 'cursor' ? 'Cursor Agent' : runtime === 'zcode' ? 'ZCode' : runtime === 'doubao' ? 'Doubao' : 'Codex';
   const refreshCommand = showAll
     ? `/t ${runtime} n ${limit || MAX_LOCAL_SESSION_LIST_LIMIT}`
     : limit && limit !== DEFAULT_LOCAL_SESSION_LIST_LIMIT
@@ -662,7 +666,8 @@ export function buildLocalRuntimeSessionsCommandResponse(
   const kimiCount = localSessions.filter((session) => localRuntimeOf(session) === 'kimi').length;
   const cursorCount = localSessions.filter((session) => localRuntimeOf(session) === 'cursor').length;
   const zcodeCount = localSessions.filter((session) => localRuntimeOf(session) === 'zcode').length;
-  const title = formatLocalThreadListTitle(codexCount, claudeCount, kimiCount, cursorCount, zcodeCount, 0);
+  const doubaoCount = localSessions.filter((session) => localRuntimeOf(session) === 'doubao').length;
+  const title = formatLocalThreadListTitle(codexCount, claudeCount, kimiCount, cursorCount, zcodeCount, doubaoCount, 0);
   const limitNotice = buildLocalRuntimeSessionLimitNotice(actualCount, limit);
   const globalItems = buildGlobalThreadList(localSessions, []);
   return buildThreadCommandTableResponse(
@@ -675,11 +680,11 @@ export function buildLocalRuntimeSessionsCommandResponse(
       ? [
           '发送 `/t 1` 可接管第 1 条本地会话。',
           `默认显示最近 ${DEFAULT_LOCAL_SESSION_LIST_LIMIT} 条；卡片下拉可切换 50/100。`,
-          `发送 \`/t codex n 100\`、\`/t claude n 100\`、\`/t kimi n 100\`、\`/t cursor n 100\` 或 \`/t zcode n 100\` 可只看最近 100 条本地会话。`,
+          `发送 \`/t codex n 100\`、\`/t claude n 100\`、\`/t kimi n 100\`、\`/t cursor n 100\`、\`/t zcode n 100\` 或 \`/t doubao n 100\` 可只看最近 100 条本地会话。`,
         ]
       : [
           '发送 `/t 1` 可接管第 1 条本地会话。',
-          '发送 `/t codex n 50`、`/t claude n 50`、`/t kimi n 50`、`/t cursor n 50` 或 `/t zcode n 50` 可调整本地会话数量。',
+          '发送 `/t codex n 50`、`/t claude n 50`、`/t kimi n 50`、`/t cursor n 50`、`/t zcode n 50` 或 `/t doubao n 50` 可调整本地会话数量。',
         ]),
     ],
     markdown,
@@ -714,6 +719,8 @@ export function buildLocalRuntimeSessionsCommandCard(
         ? 'cursor'
         : options.activeRuntime === 'zcode'
           ? 'zcode'
+          : options.activeRuntime === 'doubao'
+            ? 'doubao'
       : 'codex';
   const card: OutboundRichCard = {
     title: '',
@@ -733,7 +740,7 @@ export function buildLocalRuntimeSessionsCommandCard(
           ...(limitNotice ? [limitNotice] : []),
           '纯文本命令：`/t 1` 接管第 1 条。',
           '`/t` 和 `/t archive` 的序号来自这张全局本地会话表。',
-          '更多：使用卡片下拉或 `/t codex n 50`、`/t claude n 100`、`/t kimi n 100`、`/t cursor n 100`、`/t zcode n 100` 调整显示数量。',
+          '更多：使用卡片下拉或 `/t codex n 50`、`/t claude n 100`、`/t kimi n 100`、`/t cursor n 100`、`/t zcode n 100`、`/t doubao n 100` 调整显示数量。',
         ],
   };
   if (options.channelType && options.chatId) {

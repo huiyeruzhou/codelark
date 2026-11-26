@@ -1608,7 +1608,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       const appServerView = backendStatus.terminal === 'view'
         && backendStatus.terminalName === captureTarget;
       const inspected = await inspectRuntimeTmuxSession({
-        runtime: runtimeProvider.provider === 'tmux'
+        runtime: runtimeProvider.provider === 'tmux' && runtimeProvider.runtime !== 'doubao'
           ? runtimeProvider.runtime
           : undefined,
         sessionName: captureTarget,
@@ -1642,7 +1642,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           key: params.screenMonitor.key,
           target: captureTarget,
           lines,
-          runtime: runtimeProvider.provider === 'tmux'
+          runtime: runtimeProvider.provider === 'tmux' && runtimeProvider.runtime !== 'doubao'
             ? runtimeProvider.runtime
             : undefined,
           appServerView,
@@ -1827,22 +1827,23 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         : actions;
       if (params.suppressSuccessfulResponse === true) {
         const runtimeProvider = resolveEffectiveRuntimeProvider(effectiveSession, binding);
-        if (runtimeProvider.provider === 'tmux') {
+        if (runtimeProvider.provider === 'tmux' && runtimeProvider.runtime !== 'doubao') {
+          const tmuxRuntime = runtimeProvider.runtime;
           const submitProviderInput = () => sendRuntimeTmuxInput({
-            runtime: runtimeProvider.runtime,
+            runtime: tmuxRuntime,
             sessionName: target,
             send: () => sendTmuxActions(target, actionsToSend, {
               delayMs: SEND_ACTION_DELAY_MS,
-              ...(runtimeProvider.runtime === 'cursor' && !keySequenceActions ? { bracketedPaste: true } : {}),
+              ...(tmuxRuntime === 'cursor' && !keySequenceActions ? { bracketedPaste: true } : {}),
               forcePasteLiterals: (
-                runtimeProvider.runtime === 'codex'
-                || runtimeProvider.runtime === 'kimi'
+                tmuxRuntime === 'codex'
+                || tmuxRuntime === 'kimi'
               ) && !keySequenceActions,
-              ...(runtimeProvider.runtime === 'codex' && !keySequenceActions
+              ...(tmuxRuntime === 'codex' && !keySequenceActions
                 ? { pasteNewlineKey: 'C-j' }
                 : {}),
             }),
-            ...(runtimeProvider.runtime === 'kimi'
+            ...(tmuxRuntime === 'kimi'
               ? { steer: () => sendKimiTmuxExplicitSteer(`${target}:0.0`) }
               : {}),
           });
@@ -1942,7 +1943,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       }
       const lines = getCaptureLines(session);
       const manualRuntime = getSessionActiveRuntime(effectiveSession);
-      const manualActions = manualRuntime
+      const manualActions = manualRuntime && manualRuntime !== 'doubao'
         && resolveRuntimeTmuxSteerOperation(manualRuntime, target) === 'explicit'
         ? [...actionsToSend, { type: 'key' as const, key: 'C-s' }]
         : actionsToSend;

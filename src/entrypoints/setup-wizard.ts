@@ -47,13 +47,13 @@ export interface FeishuCredentials {
 }
 
 export interface RuntimeRecommendation {
-  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+  runtime: 'codex' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
   claudeExecutable?: ClaudeExecutable;
   reason: string;
 }
 
 type SetupMode = 'existing' | 'qr' | 'manual';
-type RuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor' | 'zcode';
+type RuntimeChoice = 'codex' | 'ccr' | 'claude' | 'kimi' | 'cursor' | 'zcode' | 'doubao';
 type LarkCliRunOptions = {
   homeDir?: string;
   input?: string;
@@ -116,10 +116,19 @@ export function recommendRuntime(homeDir = os.homedir()): RuntimeRecommendation 
       reason: '检测到 ~/.zcode，默认使用 ZCode。',
     };
   }
+  if (
+    fs.existsSync(path.join(homeDir, '.doubao'))
+    || fs.existsSync(path.join(homeDir, '.local', 'share', 'doubao_cli'))
+  ) {
+    return {
+      runtime: 'doubao',
+      reason: '检测到 Doubao CLI 配置，默认使用 Doubao CLI。',
+    };
+  }
   return {
     runtime: 'claude',
     claudeExecutable: 'claude',
-    reason: '未检测到 Codex、Claude Code Router、Kimi Code、Cursor Agent 或 ZCode 配置，默认使用 Claude Code。',
+    reason: '未检测到 Codex、Claude Code Router、Kimi Code、Cursor Agent、ZCode 或 Doubao 配置，默认使用 Claude Code。',
   };
 }
 
@@ -128,6 +137,7 @@ export function runtimeChoiceToConfig(choice: RuntimeChoice): NonNullable<Config
   if (choice === 'kimi') return { agent: 'kimi', kimi: { provider: 'tmux' } };
   if (choice === 'cursor') return { agent: 'cursor', cursor: { provider: 'acp' } };
   if (choice === 'zcode') return { agent: 'zcode', zcode: { provider: 'tmux' } };
+  if (choice === 'doubao') return { agent: 'doubao', doubao: { provider: 'acp' } };
   return {
     agent: 'claude',
     claude: {
@@ -142,6 +152,7 @@ export function recommendedRuntimeChoice(recommendation: RuntimeRecommendation):
   if (recommendation.runtime === 'kimi') return 'kimi';
   if (recommendation.runtime === 'cursor') return 'cursor';
   if (recommendation.runtime === 'zcode') return 'zcode';
+  if (recommendation.runtime === 'doubao') return 'doubao';
   return recommendation.claudeExecutable === 'ccr' ? 'ccr' : 'claude';
 }
 
@@ -226,6 +237,14 @@ export function buildSetupConfig(
         model: runtimeConfig.zcode?.model ?? current.runtime.zcode.model,
         mode: runtimeConfig.zcode?.mode ?? current.runtime.zcode.mode,
         provider: 'tmux',
+      },
+      doubao: {
+        ...current.runtime.doubao,
+        ...(runtimeConfig.doubao || {}),
+        model: runtimeConfig.doubao?.model ?? current.runtime.doubao.model,
+        mode: runtimeConfig.doubao?.mode ?? current.runtime.doubao.mode,
+        reasoningEffort: runtimeConfig.doubao?.reasoningEffort ?? current.runtime.doubao.reasoningEffort,
+        provider: 'acp',
       },
     },
     bridge: {
@@ -881,6 +900,7 @@ async function promptRuntime(homeDir: string): Promise<RuntimeChoice> {
       { value: 'kimi', label: 'Kimi Code', hint: '写入 runtime=kimi，provider=tmux' },
       { value: 'cursor', label: 'Cursor Agent', hint: '写入 runtime=cursor，provider=acp' },
       { value: 'zcode', label: 'ZCode', hint: '写入 runtime=zcode，provider=tmux' },
+      { value: 'doubao', label: 'Doubao CLI', hint: '写入 runtime=doubao，provider=acp' },
     ],
   }));
 }
@@ -1072,6 +1092,8 @@ export async function runSetupWizard(options: SetupOptions = {}): Promise<void> 
           ? 'Cursor Agent'
           : runtimeChoice === 'zcode'
             ? 'ZCode'
+            : runtimeChoice === 'doubao'
+              ? 'Doubao CLI'
         : 'Claude Code';
   let botChatUrl: string | undefined;
   const botLinkSpinner = p.spinner();
