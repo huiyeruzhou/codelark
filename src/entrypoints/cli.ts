@@ -170,8 +170,9 @@ export async function resolveRunningBridgeStartAction(options: {
   prompt?: (question: string) => Promise<boolean>;
 }): Promise<RunningBridgeStartAction> {
   if (!options.status.running) return 'start';
-  if (options.interactive === false) return 'reuse';
-  const prompt = options.prompt || ((question: string) => promptYesNo(question, false));
+  if (options.interactive === false) return options.command === 'start' ? 'restart' : 'reuse';
+  const defaultAnswer = options.command === 'start';
+  const prompt = options.prompt || ((question: string) => promptYesNo(question, defaultAnswer));
   return await prompt(formatRunningBridgePrompt(options.command, options.status)) ? 'restart' : 'reuse';
 }
 

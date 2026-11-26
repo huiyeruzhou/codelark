@@ -255,4 +255,31 @@ describe('Cursor model picker', () => {
     ]);
     assert.equal(callbacks?.every((callback) => callback?.scopeSessionId === null), true);
   });
+
+  it('qualifies /current Cursor picker callbacks with --runtime cursor so they cannot write into Codex', () => {
+    const models = [
+      model(0, { slug: 'auto', name: 'Auto', default: true }),
+      model(1, { slug: 'gemini-4-neon-high', name: 'Gemini 4 Neon High' }),
+    ];
+    const result = attachCursorModelPickerControls({
+      card: { title: '当前配置', sections: [] },
+      models,
+      target: 'session',
+      selectedSlug: 'gemini-4-neon-high',
+      pageCommand: (page) => `/current-runtime cursor --cursor-model-page=${page}`,
+      scopeSessionId: 'codex-session-id',
+      configuredLabel: '当前会话配置',
+      controlIdPrefix: 'current_cursor',
+      targetRuntime: 'cursor',
+    });
+    const callbacks = result.card.selects?.[0]?.options.map((option) => parseCommandCallbackData(option.callbackData));
+    assert.deepEqual(callbacks?.map((callback) => callback?.commandText), [
+      '/model --runtime cursor default',
+      '/model --runtime cursor gemini-4-neon-high',
+    ]);
+    assert.equal(
+      parseCommandCallbackData(result.card.selects?.[0]?.selectedCallbackData || '')?.commandText,
+      '/model --runtime cursor gemini-4-neon-high',
+    );
+  });
 });

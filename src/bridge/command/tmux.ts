@@ -8,7 +8,8 @@ import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../../shared/markdown/fence.js';
 import { formatLocalClockTime } from '../../shared/date-time.js';
 import { sanitizeInput } from '../../shared/security/validators.js';
-import { prepareCodexAppServerSession, type CodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { prepareCodexAppServerSession, releaseCodexAppServerSession, type CodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { isCodexThreadNotFoundError } from '../../runtime/codex/app-server-client.js';
 import { appServerTurnOptions } from '../../runtime/codex/app-server-provider.js';
 import {
   claudeTmuxSessionName,
@@ -161,35 +162,61 @@ export async function prepareCodexAppServerForBinding(
   store: BridgeStore,
   binding: ChannelChat,
   session: BridgeSession,
-  options: { createIfMissing?: boolean } = {},
+  options: {
+    createIfMissing?: boolean;
+    onRecoveredMissingThread?: (oldThreadId: string, newThreadId: string) => void | Promise<void>;
+  } = {},
 ) {
   if ((getSessionActiveRuntime(session) || 'codex') !== 'codex') return undefined;
   const threadId = getCodexThreadId(session, binding);
   const config = resolveSessionRuntimeConfig(binding, session);
-  const prepared = await prepareCodexAppServerSession({
+  const baseParams = {
     sessionId: session.id,
     createIfMissing: options.createIfMissing,
-    threadId,
     endpoint: session.runtime?.codex?.appServerEndpoint,
     cwd: getSessionWorkingDirectory(session) || undefined,
-    model: resolveCodexInvocationModel(binding, session, { resuming: Boolean(threadId) }),
-    sandbox: config.mode === 'yolo' ? 'danger-full-access' : config.sandboxMode,
-    approvalPolicy: config.mode === 'yolo' ? 'never' : 'on-request',
+    sandbox: config.mode === 'yolo' ? 'danger-full-access' as const : config.sandboxMode,
+    approvalPolicy: config.mode === 'yolo' ? 'never' as const : 'on-request' as const,
     developerInstructions: getSessionSystemPrompt(session),
-    beforeResumeLegacyThread: threadId && !session.runtime?.codex?.appServerEndpoint
-      ? () => releaseLegacyCodexTmuxWriter(store, session, threadId)
-      : undefined,
     config: {
       ...(config.reasoningEffort ? { model_reasoning_effort: config.reasoningEffort } : {}),
       ...(typeof config.networkAccessEnabled === 'boolean'
         ? { 'sandbox_workspace_write.network_access': config.networkAccessEnabled } : {}),
     },
-  });
+  };
+  let prepared: CodexAppServerSession | undefined;
+  let recoveredFromThreadId: string | undefined;
+  try {
+    prepared = await prepareCodexAppServerSession({
+      ...baseParams,
+      threadId,
+      model: resolveCodexInvocationModel(binding, session, { resuming: Boolean(threadId) }),
+      beforeResumeLegacyThread: threadId && !session.runtime?.codex?.appServerEndpoint
+        ? () => releaseLegacyCodexTmuxWriter(store, session, threadId)
+        : undefined,
+    });
+  } catch (error) {
+    if (options.createIfMissing === false || !threadId || !isCodexThreadNotFoundError(error)) {
+      throw error;
+    }
+    await releaseCodexAppServerSession(session.id).catch(() => {});
+    store.updateSessionCodexThreadId(session.id, '');
+    recoveredFromThreadId = threadId;
+    prepared = await prepareCodexAppServerSession({
+      ...baseParams,
+      threadId: undefined,
+      model: resolveCodexInvocationModel(binding, session, { resuming: false }),
+      beforeResumeLegacyThread: undefined,
+    });
+  }
   if (prepared) {
     store.updateSession(session.id, { runtime: { codex: {
       threadId: prepared.threadId,
       appServerEndpoint: prepared.endpoint,
     } } });
+    if (recoveredFromThreadId) {
+      await options.onRecoveredMissingThread?.(recoveredFromThreadId, prepared.threadId);
+    }
   }
   return prepared;
 }

@@ -8,12 +8,26 @@ import { prepareTextAttachmentPrompt } from '../local-attachments.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import { sseEvent } from '../sse.js';
 import { AcpClient, type AcpClientOptions, type AcpConnection, type AcpMessage } from '../acp/client.js';
+import {
+  getSharedAcpHostClient,
+  peekSharedAcpHostClient,
+  tryConnectExistingAcpHost,
+  type AcpHostClient,
+} from '../acp/host-client.js';
+import {
+  makeAcpSessionKey,
+  type AcpPendingServerRequest,
+  type AcpTurnSnapshot,
+} from '../acp/host-protocol.js';
+import { consumeHostedAcpTurn } from '../acp/hosted-session.js';
 import { resolveDoubaoExecutable } from './models.js';
 
 export type DoubaoAcpModeId = 'default' | 'plan' | 'bypass_permissions';
 
 export interface DoubaoAcpProviderOptions {
   clientFactory?: (options: AcpClientOptions) => Promise<AcpConnection>;
+  hostClient?: AcpHostClient;
+  useHost?: boolean;
   executable?: string;
   /** Extra CLI arguments inserted after `acp serve`. */
   args?: string[];
@@ -22,6 +36,16 @@ export interface DoubaoAcpProviderOptions {
   cancelTimeoutMs?: number;
   retryDelayMs?: number;
 }
+
+function shouldUseDoubaoAcpHost(options: DoubaoAcpProviderOptions): boolean {
+  if (options.hostClient) return true;
+  if (options.useHost === false || options.clientFactory) return false;
+  if (options.useHost === true) return true;
+  return process.env.CODELARK_ACP_HOST_DISABLE !== '1';
+}
+
+const hostedDoubaoAppliedModel = new Map<string, string>();
+const hostedDoubaoAppliedEffort = new Map<string, string>();
 
 export function doubaoModeToAcpModeId(mode?: DoubaoMode): DoubaoAcpModeId {
   if (mode === 'yolo') return 'bypass_permissions';
@@ -104,24 +128,43 @@ function forget(session: Session): void {
 
 export async function interruptDoubaoAcpSession(sessionId: string): Promise<boolean> {
   const turn = turns.get(sessionFor(sessionId)?.bridgeId || sessionId);
-  if (!turn) return false;
-  try { await turn.cancel(); }
-  finally { await turn.done; }
-  return true;
+  if (turn) {
+    try { await turn.cancel(); }
+    finally { await turn.done; }
+    return true;
+  }
+  const host = peekSharedAcpHostClient() || (process.env.CODELARK_ACP_HOST_DISABLE !== '1' ? await tryConnectExistingAcpHost() : null);
+  if (!host) return false;
+  const res = await host.cancelTurn({ sessionKey: makeAcpSessionKey('doubao', sessionId) }).catch(() => ({ cancelled: false }));
+  return res.cancelled;
 }
 
 export async function closeDoubaoAcpSession(sessionId: string): Promise<void> {
+  hostedDoubaoAppliedModel.delete(sessionId);
+  hostedDoubaoAppliedEffort.delete(sessionId);
   const session = sessionFor(sessionId);
-  if (!session) return;
-  try { await interruptDoubaoAcpSession(session.bridgeId); }
-  finally {
-    await session.ready.catch(() => {});
-    await disposeSession(session);
-    forget(session);
+  if (session) {
+    try { await interruptDoubaoAcpSession(session.bridgeId); }
+    finally {
+      await session.ready.catch(() => {});
+      await disposeSession(session);
+      forget(session);
+    }
+  }
+  const host = peekSharedAcpHostClient() || (process.env.CODELARK_ACP_HOST_DISABLE !== '1' ? await tryConnectExistingAcpHost() : null);
+  if (host) {
+    await host.closeSession(makeAcpSessionKey('doubao', sessionId)).catch(() => {});
   }
 }
 
 export function getDoubaoAcpSessionActivity(sessionId: string): 'idle' | 'active' | 'unknown' {
+  const host = peekSharedAcpHostClient();
+  const hosted = host?.getCachedSession(makeAcpSessionKey('doubao', sessionId));
+  if (hosted) {
+    if (hosted.disposalError || hosted.state === 'failed') return 'unknown';
+    if (hosted.state === 'running' || hosted.state === 'waiting_permission' || hosted.state === 'cancelling') return 'active';
+    return 'idle';
+  }
   const session = sessionFor(sessionId);
   if (session?.disposalError) return 'unknown';
   if (!turns.has(session?.bridgeId || sessionId)) return 'idle';
@@ -130,6 +173,18 @@ export function getDoubaoAcpSessionActivity(sessionId: string): 'idle' | 'active
 
 export async function closeAllDoubaoAcpSessions(): Promise<void> {
   await Promise.all([...sessions.keys()].map(closeDoubaoAcpSession));
+}
+
+/** Detach bridge-local state during bridge shutdown without killing persistent hosted ACP sessions. */
+export async function detachDoubaoAcpHostSessions(): Promise<void> {
+  hostedDoubaoAppliedModel.clear();
+  hostedDoubaoAppliedEffort.clear();
+  await Promise.all([...sessions.keys()].map(async (sessionId) => {
+    const session = sessionFor(sessionId);
+    if (!session) return;
+    await disposeSession(session).catch(() => {});
+    forget(session);
+  }));
 }
 
 export const closeDoubaoAcpSessions = closeAllDoubaoAcpSessions;
@@ -420,6 +475,9 @@ export class DoubaoAcpProvider implements LLMProvider {
   constructor(private pendingPerms?: PendingPermissions, private options: DoubaoAcpProviderOptions = {}) {}
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
+    if (shouldUseDoubaoAcpHost(this.options)) {
+      return this.streamHostedChat(params);
+    }
     let readerCanceled = false;
     let cancel = async () => {};
     const pendingPerms = this.pendingPerms;
@@ -694,6 +752,431 @@ export class DoubaoAcpProvider implements LLMProvider {
       async cancel() {
         readerCanceled = true;
         await cancel().catch(() => {});
+      },
+    });
+  }
+
+  private streamHostedChat(params: StreamChatParams): ReadableStream<string> {
+    let readerCanceled = false;
+    const pendingPerms = this.pendingPerms;
+    const options = this.options;
+    let activeHost: AcpHostClient | undefined;
+    let activeTurnId: string | undefined;
+
+    return new ReadableStream<string>({
+      async start(controller) {
+        const emit = (type: string, data: unknown) => {
+          if (!readerCanceled) controller.enqueue(sseEvent(type, data));
+        };
+        const waitingPermissions = new Map<string, string>();
+        const cancelLocalPermissions = () => {
+          for (const permId of waitingPermissions.values()) {
+            pendingPerms?.resolve(permId, { behavior: 'deny', message: '豆包请求已中断。' });
+          }
+          waitingPermissions.clear();
+        };
+
+        let accepted = false;
+        const markAccepted = () => {
+          if (accepted) return;
+          accepted = true;
+          params.onInputAccepted?.();
+          params.onRuntimeStatusChange?.('running');
+          emit('status', { reasoning: '豆包 ACP 已接收消息，正在执行。' });
+        };
+
+        try {
+          if (params.abortController?.signal.aborted) {
+            if (params.abortController.signal.reason === BRIDGE_SHUTDOWN_REASON) {
+              emit('result', { detached: true });
+            } else {
+              emit('result', { outcome: 'aborted', stop_reason: 'cancelled' });
+            }
+            return;
+          }
+
+          const host = options.hostClient || await getSharedAcpHostClient();
+          activeHost = host;
+          const sessionKey = makeAcpSessionKey('doubao', params.sessionId);
+          const cwd = path.resolve(params.workingDirectory || process.cwd());
+          const requestedModel = params.model?.trim() || undefined;
+          const requestedEffort = params.doubaoReasoningEffort?.trim() || undefined;
+          const desiredModeId = doubaoModeToAcpModeId(params.doubaoMode);
+
+          let currentTurn: AcpTurnSnapshot;
+          let nativeSessionId: string | undefined = params.doubaoSessionId;
+          let effectiveCwd = cwd;
+          let currentModeId: DoubaoAcpModeId = desiredModeId;
+          let configOptions: Array<Record<string, any>> = [];
+
+          if (params.reattachAcpTurnId) {
+            const fetched = await host.getTurn(params.reattachAcpTurnId);
+            if (!fetched) {
+              throw new Error(`找不到待续接的豆包 ACP 轮次：${params.reattachAcpTurnId}`);
+            }
+            currentTurn = fetched;
+            nativeSessionId = fetched.nativeSessionId || params.doubaoSessionId;
+            effectiveCwd = fetched.meta.cwd || cwd;
+            const sessionStatus = await host.getSessionStatus(sessionKey).catch(() => null);
+            if (sessionStatus) {
+              configOptions = sessionStatus.configOptions as Array<Record<string, any>>;
+              const mode = record(sessionStatus.modes).currentModeId;
+              if (mode === 'default' || mode === 'plan' || mode === 'bypass_permissions') currentModeId = mode;
+            }
+            const displayedModel = displayedModelFromConfigOptions(configOptions);
+            emit('status', {
+              ...(nativeSessionId ? { session_id: nativeSessionId } : {}),
+              cwd: effectiveCwd,
+              ...(displayedModel ? { model: displayedModel } : {}),
+            });
+          } else {
+            const clearedModelOverride = Boolean(hostedDoubaoAppliedModel.get(params.sessionId) && !requestedModel);
+            const clearedEffortOverride = Boolean(hostedDoubaoAppliedEffort.get(params.sessionId) && !requestedEffort);
+            const fingerprint = JSON.stringify({
+              cwd,
+              nativeId: params.doubaoSessionId || '',
+              ...(clearedModelOverride || clearedEffortOverride ? { resetAt: Date.now() } : {}),
+            });
+            const launchArgs = [
+              'acp', 'serve',
+              '-C', cwd,
+              ...(requestedModel ? ['--model', requestedModel] : []),
+              ...(requestedEffort ? ['--effort', requestedEffort] : []),
+              ...(options.args || []),
+            ];
+            const ensured = await host.ensureSession({
+              sessionKey,
+              runtime: 'doubao',
+              bridgeSessionId: params.sessionId,
+              executable: options.executable || resolveDoubaoExecutable(options.env),
+              args: launchArgs,
+              cwd,
+              env: options.env as Record<string, string | undefined> | undefined,
+              stdinPipe: true,
+              requestTimeoutMs: options.requestTimeoutMs ?? 30_000,
+              label: 'Doubao ACP',
+              fingerprint,
+              initializeParams: {
+                protocolVersion: 1,
+                clientInfo: { name: 'codelark', version: '0.6.0' },
+                clientCapabilities: {},
+              },
+              nativeSessionId: params.doubaoSessionId,
+              requireLoadCapability: true,
+              loadUnsupportedMessage: '当前豆包 CLI ACP 版本不支持恢复会话，未创建替代会话或重发输入。',
+              duplicateNativeMessage: '这个豆包 ACP 会话已有执行者，未启动第二个进程。',
+              missingNativeIdMessage: '豆包 ACP 未返回原生会话 ID。',
+            });
+            if (clearedModelOverride) hostedDoubaoAppliedModel.delete(params.sessionId);
+            if (clearedEffortOverride) hostedDoubaoAppliedEffort.delete(params.sessionId);
+
+            nativeSessionId = ensured.session.nativeSessionId;
+            configOptions = ensured.session.configOptions as Array<Record<string, any>>;
+            const initialMode = record(ensured.session.modes).currentModeId;
+            if (initialMode === 'default' || initialMode === 'plan' || initialMode === 'bypass_permissions') {
+              currentModeId = initialMode;
+            }
+            if (currentModeId !== desiredModeId) {
+              const modeRes = await host.sessionRpc({
+                sessionKey,
+                method: 'session/set_mode',
+                params: { sessionId: nativeSessionId, modeId: desiredModeId },
+              });
+              currentModeId = desiredModeId;
+              configOptions = modeRes.session.configOptions as Array<Record<string, any>>;
+            }
+            if (requestedModel) {
+              const modelOpt = configOptions.find(opt => opt.category === 'model' || opt.id === 'model');
+              if (modelOpt) {
+                const targetValue = resolveConfigOptionValue(modelOpt, requestedModel);
+                if (!targetValue) {
+                  const available = Array.isArray(modelOpt.options)
+                    ? modelOpt.options.map((item: any) => `${item.value}(${item.name})`).join(' / ')
+                    : '';
+                  throw new Error(`当前豆包账号不支持模型 ${requestedModel}${available ? `（可选：${available}）` : ''}，未提交输入。`);
+                }
+                if (modelOpt.currentValue !== targetValue) {
+                  const updated = await host.sessionRpc({
+                    sessionKey,
+                    method: 'session/set_config_option',
+                    params: { sessionId: nativeSessionId, configId: modelOpt.id, value: targetValue },
+                  });
+                  configOptions = updated.session.configOptions as Array<Record<string, any>>;
+                  const freshOpt = configOptions.find(opt => opt.id === modelOpt.id);
+                  if (freshOpt && freshOpt.currentValue !== targetValue) freshOpt.currentValue = targetValue;
+                }
+                hostedDoubaoAppliedModel.set(params.sessionId, targetValue);
+              }
+            }
+            if (requestedEffort) {
+              const effortOpt = configOptions.find(opt => opt.category === 'thought_level' || opt.id === 'effort');
+              if (!effortOpt) {
+                throw new Error(`当前豆包模型不支持思考强度 ${requestedEffort}，未提交输入。`);
+              }
+              const targetValue = resolveConfigOptionValue(effortOpt, requestedEffort);
+              if (!targetValue) {
+                const available = Array.isArray(effortOpt.options)
+                  ? effortOpt.options.map((item: any) => item.value).filter(Boolean).join(' / ')
+                  : '';
+                throw new Error(`当前豆包模型不支持思考强度 ${requestedEffort}${available ? `（可选：${available}）` : ''}，未提交输入。`);
+              }
+              if (effortOpt.currentValue !== targetValue) {
+                const updated = await host.sessionRpc({
+                  sessionKey,
+                  method: 'session/set_config_option',
+                  params: { sessionId: nativeSessionId, configId: effortOpt.id, value: targetValue },
+                });
+                configOptions = updated.session.configOptions as Array<Record<string, any>>;
+                const freshOpt = configOptions.find(opt => opt.id === effortOpt.id);
+                if (freshOpt && freshOpt.currentValue !== targetValue) freshOpt.currentValue = targetValue;
+              }
+              hostedDoubaoAppliedEffort.set(params.sessionId, targetValue);
+            }
+
+            const displayedModel = displayedModelFromConfigOptions(configOptions);
+            emit('status', {
+              session_id: nativeSessionId,
+              cwd,
+              ...(displayedModel ? { model: displayedModel } : {}),
+            });
+
+            let prompt = prepareTextAttachmentPrompt(params);
+            if (!params.doubaoSessionId && params.systemPrompt) prompt = `${params.systemPrompt}\n\n${prompt}`;
+            const started = await host.startTurn({
+              sessionKey,
+              prompt: [{ type: 'text', text: prompt }],
+              meta: {
+                runtime: 'doubao',
+                bridgeSessionId: params.sessionId,
+                channelType: params.acpTurnContext?.channelType,
+                chatId: params.acpTurnContext?.chatId,
+                requestMessageId: params.acpTurnContext?.requestMessageId,
+                userText: params.acpTurnContext?.userText,
+                model: requestedModel,
+                cwd,
+                doubaoMode: currentModeId,
+              },
+            });
+            currentTurn = started.turn;
+          }
+
+          let retries = 0;
+
+          for (;;) {
+            activeTurnId = currentTurn.turnId;
+            params.onHostedAcpTurn?.(currentTurn.turnId);
+            const tools = new Map<string, { name: string; kind?: string; complete: boolean }>();
+
+            const waitPermission = async (req: AcpPendingServerRequest) => {
+              const payload = record(req.params);
+              const reqKey = `${typeof req.requestId}:${String(req.requestId)}`;
+              const id = `doubao-acp:${params.sessionId}:${randomUUID()}`;
+              if (!pendingPerms) throw new Error('豆包 ACP 需要工具审批，但当前没有权限通道。');
+              waitingPermissions.set(reqKey, id);
+              const pending = pendingPerms.waitFor(id);
+              emit('permission_request', {
+                permissionRequestId: id,
+                toolName: record(payload.toolCall).title || 'Doubao Tool Permission',
+                toolInput: { ...record(payload.toolCall), options: payload.options },
+                suggestions: [],
+              });
+              params.onRuntimeStatusChange?.('waiting');
+              try {
+                return await pending;
+              } finally {
+                waitingPermissions.delete(reqKey);
+                if (params.abortController?.signal.reason !== BRIDGE_SHUTDOWN_REASON) {
+                  params.onRuntimeStatusChange?.(params.abortController?.signal.aborted ? 'interrupted' : 'running');
+                }
+              }
+            };
+
+            const outcome = await consumeHostedAcpTurn(host, currentTurn, {
+              abortSignal: params.abortController?.signal,
+              cancelTimeoutMs: options.cancelTimeoutMs,
+              onSessionUpdate: (payload) => {
+                const update = record(payload.update);
+                if (update.sessionUpdate === 'current_mode_update') {
+                  const modeId = update.currentModeId;
+                  if (modeId === 'default' || modeId === 'plan' || modeId === 'bypass_permissions') {
+                    currentModeId = modeId;
+                  }
+                  return;
+                }
+                if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions)) {
+                  configOptions = update.configOptions;
+                  return;
+                }
+                if (update.sessionUpdate === 'plan') {
+                  const tasks = planTasks(update.entries);
+                  emit('task_update', { tasks, todos: tasks });
+                  return;
+                }
+                if (!['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(update.sessionUpdate)) return;
+                markAccepted();
+                if (update.sessionUpdate === 'agent_message_chunk') {
+                  const content = record(update.content);
+                  if (content.type === 'text' && typeof content.text === 'string') {
+                    emit('text', content.text);
+                  }
+                } else if (update.sessionUpdate === 'agent_thought_chunk') {
+                  emit('status', { reasoning: '豆包正在思考。' });
+                } else if (typeof update.toolCallId === 'string') {
+                  let tool = tools.get(update.toolCallId);
+                  if (!tool) {
+                    tool = { name: toolName(update), kind: update.kind, complete: false };
+                    tools.set(update.toolCallId, tool);
+                    emit('tool_use', { id: update.toolCallId, name: tool.name, input: initialToolInput(update, effectiveCwd) });
+                  }
+                  if (!tool.complete && ['completed', 'failed', 'cancelled'].includes(update.status)) {
+                    tool.complete = true;
+                    const exitCode = record(update.rawOutput).exitCode;
+                    const patch = completedPatchInput(update, tool.kind || update.kind, effectiveCwd);
+                    const output = toolOutput(
+                      patch ? { ...update, content: update.content.filter((block: any) => block?.type !== 'diff') } : update,
+                      tool.name,
+                    );
+                    emit('tool_result', {
+                      tool_use_id: update.toolCallId,
+                      content: output,
+                      ...(patch ? { name: 'apply_patch', input: patch } : {}),
+                      is_error: update.status !== 'completed' || (tool.name === 'Shell' && Number.isInteger(exitCode) && exitCode !== 0),
+                      show_output: !patch || Boolean(output),
+                    });
+                  }
+                }
+              },
+              onServerRequest: async (req) => {
+                const payload = record(req.params);
+                if (req.method === 'session/request_permission') {
+                  markAccepted();
+                  const choices = Array.isArray(payload.options) ? payload.options : [];
+                  if (currentModeId === 'bypass_permissions') {
+                    const autoAllow = choices.find((choice: any) => choice.kind === 'allow_always')
+                      || choices.find((choice: any) => choice.kind === 'allow_once')
+                      || choices.find((choice: any) => String(choice.kind || '').startsWith('allow'));
+                    await host.respondTurnRequest({
+                      turnId: currentTurn.turnId,
+                      requestId: req.requestId,
+                      result: autoAllow
+                        ? { outcome: { outcome: 'selected', optionId: autoAllow.optionId } }
+                        : { outcome: { outcome: 'cancelled' } },
+                    });
+                    return;
+                  }
+                  const resolution = await waitPermission(req);
+                  if (params.abortController?.signal.reason === BRIDGE_SHUTDOWN_REASON) return;
+                  const preferredKind = resolution.behavior === 'allow' ? 'allow_once' : 'reject_once';
+                  const option = choices.find((choice: any) => choice.kind === preferredKind)
+                    || choices.find((choice: any) => String(choice.kind || '').startsWith(resolution.behavior === 'allow' ? 'allow' : 'reject'));
+                  await host.respondTurnRequest({
+                    turnId: currentTurn.turnId,
+                    requestId: req.requestId,
+                    result: params.abortController?.signal.aborted || !option
+                      ? { outcome: { outcome: 'cancelled' } }
+                      : { outcome: { outcome: 'selected', optionId: option.optionId } },
+                  });
+                } else {
+                  await host.respondTurnRequest({
+                    turnId: currentTurn.turnId,
+                    requestId: req.requestId,
+                    error: { code: -32601, message: `Unsupported client method: ${req.method}` },
+                  });
+                }
+              },
+              onServerRequestResolved: (requestId) => {
+                const reqKey = `${typeof requestId}:${String(requestId)}`;
+                const permId = waitingPermissions.get(reqKey);
+                if (permId) {
+                  waitingPermissions.delete(reqKey);
+                  pendingPerms?.resolve(permId, { behavior: 'deny', message: '豆包请求已结束。' });
+                }
+              },
+            });
+
+            if (outcome.status === 'detached') {
+              cancelLocalPermissions();
+              emit('result', {
+                ...(nativeSessionId ? { session_id: nativeSessionId } : {}),
+                detached: true,
+                hosted_turn_id: currentTurn.turnId,
+              });
+              return;
+            }
+
+            if (outcome.error && outcome.status !== 'aborted') {
+              const retryKind = retryableError(outcome.error);
+              const sessionStatus = await host.getSessionStatus(sessionKey).catch(() => null);
+              if (
+                retryKind
+                && retries < RETRY_LIMIT
+                && sessionStatus?.connected
+                && ![...tools.values()].some(tool => !tool.complete)
+                && waitingPermissions.size === 0
+                && !params.abortController?.signal.aborted
+              ) {
+                retries += 1;
+                await host.ackTurn(currentTurn.turnId).catch(() => {});
+                const resourceExhausted = retryKind === 'resource_exhausted';
+                const delayMs = Math.max(0, options.retryDelayMs ?? (resourceExhausted ? 30_000 : 1000)) * retries;
+                const reason = resourceExhausted ? '豆包上游资源或额度受限' : '豆包连接临时中断';
+                emit('status', { reasoning: `${reason}，${Math.ceil(delayMs / 1000)} 秒后自动续接（${retries}/${RETRY_LIMIT}）。` });
+                await new Promise<void>((resolve) => {
+                  const timer = setTimeout(resolve, delayMs);
+                  const wake = () => { clearTimeout(timer); resolve(); };
+                  params.abortController?.signal.addEventListener('abort', wake, { once: true });
+                });
+                if (params.abortController?.signal.aborted) {
+                  emit('result', { ...(nativeSessionId ? { session_id: nativeSessionId } : {}), outcome: 'aborted', stop_reason: 'cancelled' });
+                  return;
+                }
+                const started = await host.startTurn({
+                  sessionKey,
+                  prompt: [{ type: 'text', text: RETRY_PROMPT }],
+                  meta: currentTurn.meta,
+                });
+                currentTurn = started.turn;
+                continue;
+              }
+              emit('error', outcome.error);
+              emit('result', {
+                ...(outcome.nativeSessionId || nativeSessionId ? { session_id: outcome.nativeSessionId || nativeSessionId } : {}),
+                outcome: 'failed',
+                ...(outcome.stopReason ? { stop_reason: outcome.stopReason } : {}),
+                hosted_turn_id: currentTurn.turnId,
+              });
+              return;
+            }
+
+            if (outcome.status !== 'aborted') markAccepted();
+            const finalModel = displayedModelFromConfigOptions(configOptions);
+            emit('result', {
+              ...(outcome.nativeSessionId || nativeSessionId ? { session_id: outcome.nativeSessionId || nativeSessionId } : {}),
+              ...(finalModel ? { model: finalModel } : {}),
+              outcome: outcome.status,
+              stop_reason: outcome.stopReason || (outcome.status === 'aborted' ? 'cancelled' : 'end_turn'),
+              hosted_turn_id: currentTurn.turnId,
+            });
+            return;
+          }
+        } catch (error) {
+          emit('error', errorMessage(error));
+          emit('result', {
+            ...(params.doubaoSessionId ? { session_id: params.doubaoSessionId } : {}),
+            outcome: 'failed',
+            ...(activeTurnId ? { hosted_turn_id: activeTurnId } : {}),
+          });
+        } finally {
+          cancelLocalPermissions();
+          emit('done', '');
+          if (!readerCanceled) controller.close();
+        }
+      },
+      async cancel() {
+        readerCanceled = true;
+        if (activeHost && activeTurnId && params.abortController?.signal.reason !== BRIDGE_SHUTDOWN_REASON) {
+          await activeHost.cancelTurn({ turnId: activeTurnId, cancelTimeoutMs: options.cancelTimeoutMs }).catch(() => {});
+        }
       },
     });
   }

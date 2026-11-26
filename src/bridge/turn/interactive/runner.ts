@@ -4,8 +4,9 @@ import type {
   OutboundManualInput,
   StreamingPreviewState,
 } from '../../../domain/index.js';
-import type { BaseChannelAdapter, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
-import { RUNTIME_TURN_FINALIZED_REASON } from '../../../runtime/contracts.js';
+import type { BaseChannelAdapter, StreamingCardHandle, StructuredStreamingUiSnapshot } from '../../../channels/contracts.js';
+import { BRIDGE_SHUTDOWN_REASON, RUNTIME_TURN_FINALIZED_REASON } from '../../../runtime/contracts.js';
+import type { AcpCardCheckpoint } from '../../../runtime/acp/host-protocol.js';
 import { enqueueDelivery } from '../../../channels/delivery/deliver.js';
 import { supportsOutboundArtifacts } from '../../../channels/delivery/artifacts.js';
 import { resolveStructuredStreamingUiMessageId } from '../../../channels/delivery/stream-feedback.js';
@@ -240,6 +241,13 @@ export interface RunInteractiveMessageDeps {
   streamStatusIdleDetectionStartMs?: number;
   streamStatusHeartbeatMs?: number;
   codexTerminalFinalizationTimeoutMs?: number;
+  reattachAcpTurn?: {
+    turnId: string;
+    card?: StreamingCardHandle;
+    streamKey?: string;
+  };
+  onHostedAcpCardCheckpoint?: (turnId: string, card: AcpCardCheckpoint) => Promise<void> | void;
+  onHostedAcpTurnAck?: (turnId: string) => Promise<void> | void;
 }
 
 export async function runInteractiveMessage(
@@ -256,8 +264,12 @@ export async function runInteractiveMessage(
     initialSession,
     classification: turnClassification,
     codexThreadId,
-    streamKey,
+    streamKey: baseStreamKey,
   } = turnEnvironment;
+  const streamKey = deps.reattachAcpTurn?.streamKey || baseStreamKey;
+  if (deps.reattachAcpTurn?.card) {
+    adapter.adoptStreamingCardHandle?.(msg.address.chatId, streamKey, deps.reattachAcpTurn.card);
+  }
   const nowMs = deps.nowMs ?? (() => Date.now());
   const setIntervalFn = deps.setIntervalFn ?? ((callback: () => void, intervalMs: number) => setInterval(callback, intervalMs));
   const clearIntervalFn = deps.clearIntervalFn ?? ((handle: unknown) => clearInterval(handle as ReturnType<typeof setInterval>));
@@ -618,6 +630,36 @@ export async function runInteractiveMessage(
   let forceStopStarted = false;
   let runtimeMirrorActivated = false;
   let preparedPromptText: string | null = null;
+  let activeHostedTurnId: string | undefined = deps.reattachAcpTurn?.turnId;
+  let detachedForBridgeShutdown = false;
+  let lastSyncedCardSig = '';
+  let cardCheckpointTimer: ReturnType<typeof setInterval> | null = null;
+
+  const syncHostedCardCheckpoint = async (force = false): Promise<void> => {
+    if (!activeHostedTurnId || !deps.onHostedAcpCardCheckpoint) return;
+    const handle = adapter.getStreamingCardHandle?.(msg.address.chatId, streamKey);
+    if (!handle) return;
+    const sig = `${handle.cardId}:${handle.sequence}`;
+    if (!force && sig === lastSyncedCardSig) return;
+    lastSyncedCardSig = sig;
+    try {
+      await deps.onHostedAcpCardCheckpoint(activeHostedTurnId, {
+        channelType: msg.address.channelType,
+        chatId: msg.address.chatId,
+        streamKey,
+        ...handle,
+      });
+    } catch {
+      // Best effort checkpoint sync.
+    }
+  };
+
+  if (deps.onHostedAcpCardCheckpoint && (isCursorAcpTurn || isDoubaoAcpTurn)) {
+    cardCheckpointTimer = setInterval(() => {
+      void syncHostedCardCheckpoint(false);
+    }, 2_000);
+    cardCheckpointTimer.unref?.();
+  }
 
   const ensureMirrorSuppression = (promptText: string | null | undefined): void => {
     if (isProtocolTurn || isRuntimeMirrorTurn || isCursorTranscriptTurn || taskState.mirrorSuppressionId) return;
@@ -685,6 +727,17 @@ export async function runInteractiveMessage(
       {
         isCurrentTask: () => deps.isCurrentInteractiveTask(binding.bridgeSessionId, taskId),
         onInputAccepted: () => { cursorInputAccepted = true; deps.onInputAccepted?.(); },
+        acpTurnContext: {
+          channelType: msg.address.channelType,
+          chatId: msg.address.chatId,
+          requestMessageId,
+          userText: msg.text,
+        },
+        reattachAcpTurnId: deps.reattachAcpTurn?.turnId,
+        onHostedAcpTurn: (turnId) => {
+          activeHostedTurnId = turnId;
+          void syncHostedCardCheckpoint(true);
+        },
         onNativeTurn: (threadId, turnId, completed) => deps.claimDirectMirrorTurn?.(binding.bridgeSessionId, threadId, turnId, completed) || Promise.resolve(),
         expandToolCalls: true,
         streamPreview: {
@@ -784,6 +837,15 @@ export async function runInteractiveMessage(
     }
 
     const result = raced.result;
+    if (result.hostedTurnId) {
+      activeHostedTurnId = result.hostedTurnId;
+    }
+    if (result.detached || (taskAbort.signal.reason === BRIDGE_SHUTDOWN_REASON && activeHostedTurnId)) {
+      detachedForBridgeShutdown = true;
+      await syncHostedCardCheckpoint(true);
+      shouldRecordHealthEnd = false;
+      return;
+    }
     await streamingArtifacts?.close();
     if (result.codexThreadId) {
       ensureMirrorSuppression(preparedPromptText);
@@ -866,6 +928,12 @@ export async function runInteractiveMessage(
       ? (result.errorMessage?.trim() || undefined)
       : undefined);
   } catch (error) {
+    if (taskAbort.signal.reason === BRIDGE_SHUTDOWN_REASON && activeHostedTurnId) {
+      detachedForBridgeShutdown = true;
+      await syncHostedCardCheckpoint(true);
+      shouldRecordHealthEnd = false;
+      return;
+    }
     const errorMessage = error instanceof Error ? (error.message || String(error)) : String(error);
     finalOutcome = taskAbort.signal.aborted ? 'aborted' : 'failed';
     finalOutcomeDetail = errorMessage;
@@ -907,8 +975,16 @@ export async function runInteractiveMessage(
     }
     throw error;
   } finally {
+    if (cardCheckpointTimer) {
+      clearInterval(cardCheckpointTimer);
+      cardCheckpointTimer = null;
+    }
     await streamingArtifacts?.close();
-    if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {
+    if (detachedForBridgeShutdown) {
+      // Leave the Feishu streaming card untouched so the restarted bridge can adopt it seamlessly.
+      endMessageUiOnce();
+      externalTerminal.settleCompletion(false);
+    } else if (useInteractiveStreamUi || (isRuntimeMirrorTurn && streamUi.shouldSkipTextDelivery())) {
       void enqueueFinalUiWork(
         taskAbort.signal.aborted || finalOutcome === 'aborted'
           ? 'interrupted'
@@ -917,6 +993,19 @@ export async function runInteractiveMessage(
             : 'error',
         '',
       );
+    }
+
+    if (!detachedForBridgeShutdown && activeHostedTurnId && deps.onHostedAcpTurnAck) {
+      const ackTurnId = activeHostedTurnId;
+      const ackFn = deps.onHostedAcpTurnAck;
+      const pendingDelivery = finalDeliveryCompletion as Promise<boolean> | null;
+      if (pendingDelivery) {
+        void pendingDelivery.finally(() => {
+          void Promise.resolve(ackFn(ackTurnId)).catch(() => {});
+        });
+      } else {
+        void Promise.resolve(ackFn(ackTurnId)).catch(() => {});
+      }
     }
 
     if (taskState.mirrorSuppressionId) {

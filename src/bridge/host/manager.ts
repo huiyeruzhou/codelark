@@ -62,8 +62,14 @@ import {
   kimiTmuxSessionName,
 } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
-import { closeCursorAcpSessions } from '../../runtime/cursor/acp-provider.js';
-import { closeAllDoubaoAcpSessions, closeDoubaoAcpSession } from '../../runtime/doubao/acp-provider.js';
+import { detachCursorAcpHostSessions } from '../../runtime/cursor/acp-provider.js';
+import { closeDoubaoAcpSession, detachDoubaoAcpHostSessions } from '../../runtime/doubao/acp-provider.js';
+import {
+  detachSharedAcpHostClient,
+  peekSharedAcpHostClient,
+  tryConnectExistingAcpHost,
+} from '../../runtime/acp/host-client.js';
+import type { AcpCardCheckpoint } from '../../runtime/acp/host-protocol.js';
 import { archiveDoubaoSession } from '../../runtime/doubao/session-index.js';
 import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
 import {
@@ -207,6 +213,7 @@ import {
 import type { TmuxAutoForwardRecoveryPayload } from '../command/codex-tui-selection.js';
 import { prepareCodexAppServerForBinding, codexAppServerTurnOptions, scheduleCodexAppServerView } from '../command/tmux.js';
 import { CodexWriterMigrationError, getCodexAppServerSession, closeCodexAppServerSessions, releaseCodexAppServerSession, getCodexAppServerServiceStatuses } from '../../runtime/codex/app-server-registry.js';
+import { isCodexThreadNotFoundError } from '../../runtime/codex/app-server-client.js';
 import { classifyCodexThreadKeyInput, CODEX_THREAD_UNSUPPORTED_KEYS } from '../command/tmux-args.js';
 import { requestCodexDesktopRestart } from '../command/codex-desktop-restart-confirmation.js';
 import { readCodexBackendStatus, type BridgeRuntimeStatus } from '../session/display/codex-backend-status.js';
@@ -2547,6 +2554,8 @@ async function claimDirectMirrorTurn(sessionId: string, threadId: string, turnId
 }
 
 const restoringAppServerBindings = new Set<string>();
+const unrestorableAppServerThreads = new Map<string, string>();
+const appServerRestoreBackoff = new Map<string, { key: string; attempts: number; nextRetryAt: number; lastError: string }>();
 
 async function reconcileMirrorSubscriptions(): Promise<void> {
   const store = getBridgeContext().store;
@@ -2568,6 +2577,7 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
       console.warn('[bridge-manager] Cursor 订阅尚未恢复:', describeUnknownError(result.reason));
     }
   });
+  const reconcileNowMs = Date.now();
   for (const binding of protocolBindings) {
     try {
       const session = store.getSession(binding.bridgeSessionId);
@@ -2578,14 +2588,27 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
       if (!adapter) continue;
       const protocol = getCodexAppServerSession(session.id);
       if (protocol) {
+        unrestorableAppServerThreads.delete(session.id);
+        appServerRestoreBackoff.delete(session.id);
         observeAppServerRequests(session.id, protocol, adapter, { channelType: binding.channelType, chatId: binding.chatId }, store);
         INTERACTIVE_RUNTIME.syncSessionRuntimeState(session.id);
       } else if (!restoringAppServerBindings.has(binding.id)) {
+        const threadId = getSessionCodexThreadId(session) || '';
+        const restoreKey = `${session.runtime?.codex?.appServerEndpoint || ''}|${threadId}`;
+        if (threadId && unrestorableAppServerThreads.get(session.id) === threadId) continue;
+        if (unrestorableAppServerThreads.has(session.id) && unrestorableAppServerThreads.get(session.id) !== threadId) {
+          unrestorableAppServerThreads.delete(session.id);
+        }
+        const backoff = appServerRestoreBackoff.get(session.id);
+        if (backoff && backoff.key === restoreKey && reconcileNowMs < backoff.nextRetryAt) continue;
+        if (backoff && backoff.key !== restoreKey) appServerRestoreBackoff.delete(session.id);
         // Restoring one external thread must never hold every runtime's mirror
         // poll (including completion delivery). The interactive input path still
         // awaits readiness; this background observer attaches once it is ready.
         restoringAppServerBindings.add(binding.id);
         void prepareCodexAppServerForBinding(store, binding, session, { createIfMissing: false }).then((restored) => {
+          unrestorableAppServerThreads.delete(session.id);
+          appServerRestoreBackoff.delete(session.id);
           const current = store.getChannelChat(binding.channelType, binding.chatId);
           const latest = store.getSession(session.id);
           if (!restored || !getState().running || current?.id !== binding.id
@@ -2595,7 +2618,30 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
           observeAppServerRequests(session.id, restored, adapter, { channelType: binding.channelType, chatId: binding.chatId }, store);
           INTERACTIVE_RUNTIME.syncSessionRuntimeState(session.id);
         }).catch((error) => {
-          console.warn('[bridge-manager] app-server 订阅尚未恢复:', describeUnknownError(error));
+          const errorText = describeUnknownError(error);
+          if (threadId && isCodexThreadNotFoundError(error)) {
+            unrestorableAppServerThreads.set(session.id, threadId);
+            appServerRestoreBackoff.delete(session.id);
+            console.warn(
+              '[bridge-manager] Codex thread rollout 不存在，停止后台重连（下次发消息或 /p tmux 将自动重建）:',
+              session.id,
+              threadId,
+              errorText,
+            );
+            return;
+          }
+          const prev = appServerRestoreBackoff.get(session.id);
+          const attempts = prev && prev.key === restoreKey ? prev.attempts + 1 : 1;
+          const delayMs = Math.min(60_000, 5_000 * (2 ** (attempts - 1)));
+          appServerRestoreBackoff.set(session.id, {
+            key: restoreKey,
+            attempts,
+            nextRetryAt: Date.now() + delayMs,
+            lastError: errorText,
+          });
+          if (!prev || prev.key !== restoreKey || prev.lastError !== errorText) {
+            console.warn('[bridge-manager] app-server 订阅尚未恢复:', errorText);
+          }
         }).finally(() => restoringAppServerBindings.delete(binding.id));
       }
     } catch (error) {
@@ -2622,6 +2668,8 @@ async function reconcileMirrorSubscriptions(): Promise<void> {
 }
 
 function clearMirrorSubscriptions(): void {
+  unrestorableAppServerThreads.clear();
+  appServerRestoreBackoff.clear();
   MIRROR_RUNTIME.clearMirrorSubscriptions();
   CLAUDE_MIRROR_RUNTIME.clearMirrorSubscriptions();
   KIMI_MIRROR_RUNTIME.clearMirrorSubscriptions();
@@ -3054,6 +3102,13 @@ export async function start(): Promise<void> {
   // Notify host that bridge is starting (e.g., suppress competing polling)
   lifecycle.onBridgeStart?.();
 
+  // Re-attach any persistent Cursor/Doubao ACP turns that survived a bridge
+  // restart BEFORE starting inbound loops so session locks and activeTasks are
+  // 100% accurate before the first new message or Stop callback arrives.
+  await schedulePersistentAcpTurnReattachments().catch((err) => {
+    console.error('[bridge-manager] Re-attaching persistent ACP turns failed:', describeUnknownError(err));
+  });
+
   // Now start the consumer loops (state.running is already true)
   for (const [, adapter] of state.adapters) {
     if (adapter.isRunning()) {
@@ -3129,10 +3184,16 @@ export async function stop(): Promise<void> {
 
   const activeSessionIds = Array.from(state.activeTasks.keys());
   const queuedSessionIds = Array.from(state.queuedCounts.keys());
+  const hadActiveTasks = state.activeTasks.size > 0;
   for (const task of state.activeTasks.values()) {
     task.abortController.abort(BRIDGE_SHUTDOWN_REASON);
   }
   state.activeTasks.clear();
+  // Give detaching persistent ACP tasks a brief window to flush their latest
+  // Feishu card sequence checkpoint to acp-host before closing the host socket.
+  if (hadActiveTasks && peekSharedAcpHostClient()) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   stopAllEveryTasks();
   stopAllConditionMonitors();
   stopAllThenTasks();
@@ -3146,10 +3207,11 @@ export async function stop(): Promise<void> {
   }
   clearMirrorSubscriptions();
 
-  // Stop all adapters
+  // Stop all adapters while keeping persistent hosted ACP sessions alive across restarts.
   await closeCodexAppServerSessions();
-  await closeCursorAcpSessions();
-  await closeAllDoubaoAcpSessions();
+  await detachCursorAcpHostSessions();
+  await detachDoubaoAcpHostSessions();
+  detachSharedAcpHostClient();
   closeAppServerRequestObservers();
   clearCursorQuestions();
   clearCursorAcpQuestions();
@@ -4111,6 +4173,8 @@ async function sendAgentMessageToSession(options: {
     resolveInteractiveTurnDisplayInfo: () => displayService.binding(syntheticBinding, { stripInternalPrefix: true }),
     listInteractiveTurnBindings: (channelType) => getBridgeContext().store.listChannelChats(channelType),
     codexTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
+    onHostedAcpCardCheckpoint: syncHostedAcpCardCheckpoint,
+    onHostedAcpTurnAck: ackHostedAcpTurn,
     nowMs: () => Date.now(),
   });
 
@@ -5228,7 +5292,18 @@ async function handleMessage(
       const effective = resolveEffectiveRuntimeProvider(session, binding);
       if (effective.runtime === 'codex') {
         try {
-          const protocol = await prepareCodexAppServerForBinding(store, binding, session);
+          const protocol = await prepareCodexAppServerForBinding(store, binding, session, {
+            onRecoveredMissingThread: (oldThreadId, newThreadId) => {
+              unrestorableAppServerThreads.delete(session.id);
+              appServerRestoreBackoff.delete(session.id);
+              enqueueBridgeNotice(
+                adapter,
+                msg.address,
+                `原 Codex thread \`${oldThreadId}\` 的本地 rollout 已不存在，已自动新建 thread \`${newThreadId}\` 继续当前对话。`,
+                { replyToMessageId: msg.messageId },
+              );
+            },
+          });
           if (protocol) {
             if (threadControl) {
               if (threadControl === 'interrupt') await handleCommand(adapter, msg, '/stop', { scopedBinding: binding });
@@ -5636,9 +5711,150 @@ async function handleMessage(
       resolveInteractiveTurnDisplayInfo: (binding) => displayService.binding(binding, { stripInternalPrefix: true }),
       listInteractiveTurnBindings: (channelType) => store.listChannelChats(channelType),
       codexTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
+      onHostedAcpCardCheckpoint: syncHostedAcpCardCheckpoint,
+      onHostedAcpTurnAck: ackHostedAcpTurn,
     });
   } finally {
     ack();
+  }
+}
+
+async function syncHostedAcpCardCheckpoint(turnId: string, card: AcpCardCheckpoint): Promise<void> {
+  const host = peekSharedAcpHostClient();
+  if (!host?.connected) return;
+  await host.updateTurnMeta(turnId, { card }).catch(() => {});
+}
+
+async function ackHostedAcpTurn(turnId: string): Promise<void> {
+  const host = peekSharedAcpHostClient() || (process.env.CODELARK_ACP_HOST_DISABLE !== '1' ? await tryConnectExistingAcpHost() : null);
+  if (!host?.connected) return;
+  await host.ackTurn(turnId).catch(() => {});
+}
+
+async function schedulePersistentAcpTurnReattachments(): Promise<void> {
+  if (process.env.CODELARK_ACP_HOST_DISABLE === '1') return;
+  const host = await tryConnectExistingAcpHost();
+  if (!host?.connected) return;
+  const unackedTurns = await host.listUnackedTurns().catch(() => []);
+  if (unackedTurns.length === 0) return;
+
+  const state = getState();
+  const { store } = getBridgeContext();
+  const displayService = new ThreadDisplayService(store);
+
+  for (const turn of unackedTurns) {
+    const binding = (turn.meta.channelType && turn.meta.chatId
+      ? store.getChannelChat(turn.meta.channelType, turn.meta.chatId)
+      : undefined)
+      || store.listChannelChats().find((item) => item.bridgeSessionId === turn.bridgeSessionId);
+    const adapter = binding ? state.adapters.get(binding.channelType) : undefined;
+    if (!binding || !adapter || !adapter.isRunning()) {
+      console.warn('[bridge-manager] Skipping persistent ACP turn re-attach (missing binding or adapter):', {
+        turnId: turn.turnId,
+        runtime: turn.runtime,
+        bridgeSessionId: turn.bridgeSessionId,
+        status: turn.status,
+      });
+      if (turn.status !== 'running' && turn.status !== 'waiting_permission' && turn.status !== 'cancelling') {
+        await host.ackTurn(turn.turnId).catch(() => {});
+      }
+      continue;
+    }
+
+    const requestMessageId = turn.meta.requestMessageId || `reattach:${turn.turnId}`;
+    const syntheticMsg: InboundMessage = {
+      messageId: requestMessageId,
+      address: {
+        channelType: binding.channelType,
+        chatId: binding.chatId,
+      },
+      text: turn.meta.userText || '',
+      timestamp: turn.startedAt,
+      ...(turn.meta.requestMessageId ? { outputReplyToMessageId: turn.meta.requestMessageId } : {}),
+    };
+
+    console.log('[bridge-manager] Re-attaching persistent ACP turn after bridge startup:', {
+      turnId: turn.turnId,
+      runtime: turn.runtime,
+      status: turn.status,
+      bridgeSessionId: binding.bridgeSessionId,
+      chatId: binding.chatId,
+      cardId: turn.meta.card?.cardId || null,
+      lastSeq: turn.lastSeq,
+    });
+
+    const jobPromise = INTERACTIVE_RUNTIME.processWithSessionLock(
+      binding.bridgeSessionId,
+      async () => {
+        await runInteractiveMessage(adapter, syntheticMsg, syntheticMsg.text, undefined, {
+          registerInteractiveTask: (task) => INTERACTIVE_RUNTIME.registerInteractiveTask(task),
+          registerBridgeTurn: (activeTurn) => TURN_COORDINATOR.registerInteractiveTurn(activeTurn),
+          resetMirrorSessionForInteractiveRun,
+          isCurrentInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.isCurrentInteractiveTask(sessionId, taskId),
+          touchInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.touchInteractiveTask(sessionId, taskId),
+          recordInteractiveHealthStart: (sessionId, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveStart(sessionId, detail),
+          recordInteractiveHealthProgress: (sessionId, type, detail, activityAtMs) => SESSION_HEALTH_RUNTIME.recordInteractiveProgress(sessionId, type, detail, activityAtMs),
+          recordInteractiveHealthTool: (sessionId, toolId, toolName, status) => {
+            SESSION_HEALTH_RUNTIME.recordToolState(sessionId, toolId, toolName, status);
+          },
+          recordInteractiveStreamUiSnapshot: (sessionId, snapshot) => {
+            SESSION_HEALTH_RUNTIME.recordStructuredStreamUi(sessionId, snapshot);
+          },
+          recordInteractiveHealthEnd: recordInteractiveHealthEndAndScheduleThen,
+          beginMirrorSuppression,
+          claimDirectMirrorTurn,
+          abortMirrorSuppression,
+          settleMirrorSuppression,
+          releaseInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskId),
+          releaseBridgeTurn: (sessionId, taskId) => TURN_COORDINATOR.releaseSessionTurn(sessionId, taskId),
+          deliverResponse,
+          deliverManualInput: sendAgentMessageFromBinding,
+          persistCodexThreadUpdate,
+          reconcileMirrorSubscriptions,
+          resolveSdkConversationRuntime: () => ({
+            store: getBridgeContext().store,
+            llm: getBridgeContext().llm,
+            consumeSseEvents,
+            normalizeSandboxMode,
+            normalizeReasoningEffort,
+          }),
+          resolveInteractiveTurnEnvironment: (targetAddress, targetMessageId) => resolveInteractiveTurnEnvironmentBase(
+            targetAddress,
+            targetMessageId,
+            {
+              resolveBinding: () => binding,
+              getBridgeSession: (sessionId) => store.getSession(sessionId),
+              codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, 'acp reattach turn classify')),
+            },
+          ),
+          resolveInteractiveTurnRuntimeSettings: (channelType) => resolveInteractiveTurnRuntimeSettings(
+            channelType,
+            (key) => store.getSetting(key),
+          ),
+          forwardPermissionRequest: broker.forwardPermissionRequest,
+          buildStopCallbackData: (sessionId) => buildCommandCallbackData('/stop', sessionId),
+          resolveInteractiveTurnDisplayInfo: (targetBinding) => displayService.binding(targetBinding, { stripInternalPrefix: true }),
+          listInteractiveTurnBindings: (channelType) => store.listChannelChats(channelType),
+          codexTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
+          onHostedAcpCardCheckpoint: syncHostedAcpCardCheckpoint,
+          onHostedAcpTurnAck: ackHostedAcpTurn,
+          reattachAcpTurn: {
+            turnId: turn.turnId,
+            ...(turn.meta.card ? { card: turn.meta.card, streamKey: turn.meta.card.streamKey } : {}),
+          },
+        });
+      },
+      { jobKind: `interactive-turn:${turn.runtime}-acp-reattach` },
+    );
+
+    void jobPromise.catch((error) => {
+      console.error('[bridge-manager] Re-attached persistent ACP turn failed:', {
+        turnId: turn.turnId,
+        runtime: turn.runtime,
+        bridgeSessionId: binding.bridgeSessionId,
+        error: describeUnknownError(error),
+      });
+    });
   }
 }
 

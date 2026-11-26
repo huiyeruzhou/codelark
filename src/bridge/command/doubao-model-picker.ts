@@ -27,8 +27,13 @@ export function formatDoubaoModelDisplay(
     : normalized;
 }
 
-function selectionCommand(value: string, target: 'session' | 'global'): string {
-  return target === 'global' ? `/set doubaoDefaultModel ${value}` : `/model ${value}`;
+function selectionCommand(
+  value: string,
+  target: 'session' | 'global',
+  targetRuntime?: 'doubao',
+): string {
+  if (target === 'global') return `/set doubaoDefaultModel ${value}`;
+  return targetRuntime === 'doubao' ? `/model --runtime doubao ${value}` : `/model ${value}`;
 }
 
 export function attachDoubaoModelPickerControls(options: {
@@ -39,15 +44,16 @@ export function attachDoubaoModelPickerControls(options: {
   scopeSessionId?: string;
   configuredLabel: string;
   controlIdPrefix: string;
+  targetRuntime?: 'doubao';
 }): { card: OutboundRichCard; selectedModelId?: string } {
   const normalizedSelected = options.selectedModelId?.trim() || undefined;
   const matchedSelected = normalizedSelected
     ? options.models.find((model) => model.id.toLowerCase() === normalizedSelected.toLowerCase())
     : undefined;
   const callback = (command: string) => buildCommandCallbackData(command, options.scopeSessionId);
-  const defaultCallbackData = callback(selectionCommand('default', options.target));
+  const defaultCallbackData = callback(selectionCommand('default', options.target, options.targetRuntime));
   const selectedCallbackData = matchedSelected
-    ? callback(selectionCommand(matchedSelected.id, options.target))
+    ? callback(selectionCommand(matchedSelected.id, options.target, options.targetRuntime))
     : !normalizedSelected
       ? defaultCallbackData
       : undefined;
@@ -64,7 +70,7 @@ export function attachDoubaoModelPickerControls(options: {
           },
           ...options.models.map((model) => ({
             text: `${model.name}${model.isDefault ? '（默认）' : ''} · ${model.id}`,
-            callbackData: callback(selectionCommand(model.id, options.target)),
+            callbackData: callback(selectionCommand(model.id, options.target, options.targetRuntime)),
           })),
         ],
       }
@@ -105,8 +111,14 @@ export function buildDoubaoModelPickerCard(options: {
   address: ChannelAddress;
   models: readonly DoubaoModelInfo[];
   effectiveModel?: string;
+  scopeSessionId?: string;
+  targetRuntime?: 'doubao';
 }): { card: OutboundRichCard; selectedModelId?: string } {
   const override = sessionDoubaoModelOverride(options.session.id);
+  const scopeSessionId = options.scopeSessionId || options.session.id;
+  const refreshCommand = options.targetRuntime === 'doubao'
+    ? `/model --runtime doubao ${DOUBAO_MODEL_REFRESH_ARG}`
+    : `/model ${DOUBAO_MODEL_REFRESH_ARG}`;
   const effectiveLabel = formatDoubaoModelDisplay(override || options.effectiveModel, options.models);
   const effortLines = options.models.map((model) => {
     const efforts = model.efforts.length > 0
@@ -126,7 +138,7 @@ export function buildDoubaoModelPickerCard(options: {
     ],
     actions: [[{
       text: '刷新列表',
-      callbackData: buildCommandCallbackData(`/model ${DOUBAO_MODEL_REFRESH_ARG}`, options.session.id),
+      callbackData: buildCommandCallbackData(refreshCommand, scopeSessionId),
     }]],
     updateKey: `doubao-model-picker:${options.address.channelType}:${options.address.chatId}`,
     updateTtlMs: null,
@@ -137,8 +149,9 @@ export function buildDoubaoModelPickerCard(options: {
     models: options.models,
     target: 'session',
     selectedModelId: override,
-    scopeSessionId: options.session.id,
+    scopeSessionId,
     configuredLabel: '当前会话配置',
     controlIdPrefix: 'doubao_model_command',
+    targetRuntime: options.targetRuntime,
   });
 }

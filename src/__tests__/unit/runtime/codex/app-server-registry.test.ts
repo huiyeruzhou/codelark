@@ -299,3 +299,66 @@ test('a native interruption is an explicit result outcome, not an execution erro
   assert.equal(events.some((event) => event.type === 'error'), false);
   assert.equal(JSON.parse(events.find((event) => event.type === 'result').data).outcome, 'aborted');
 });
+
+test('missing thread rollout rejects passive restore but auto-recovers interactive prepareCodexAppServerForBinding', async (t) => {
+  const { AppServerRpcError, isCodexThreadNotFoundError } = await import('../../../../runtime/codex/app-server-client.js');
+  const { prepareCodexAppServerForBinding } = await import('../../../../bridge/command/tmux.js');
+  const { initBridgeTestContext, resetBridgeTestState } = await import('../../../helpers/bridge/test-bridge-utils.js');
+  const router = await import('../../../../bridge/session/channel-router.js');
+
+  assert.equal(isCodexThreadNotFoundError(new AppServerRpcError(-32600, 'no rollout found for thread id 01a21157-b8c1-7352-9994-ed8c9f0e7748')), true);
+  assert.equal(isCodexThreadNotFoundError(new AppServerRpcError(-32600, 'thread abc already has an active writer')), false);
+
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await new Promise<void>((resolve) => wss.once('listening', resolve));
+  const addr = wss.address(); assert(addr && typeof addr === 'object');
+  const endpoint = `ws://127.0.0.1:${addr.port}`;
+  const methods: string[] = [];
+  let createdCount = 0;
+  wss.on('connection', (socket) => socket.on('message', (data) => {
+    const m = JSON.parse(String(data));
+    methods.push(m.method);
+    const response = (result: unknown) => socket.send(JSON.stringify({ id: m.id, result }));
+    if (m.method === 'initialize') response({ codexHome: process.env.CODEX_HOME });
+    if (m.method === 'thread/loaded/list') response({ data: [] });
+    if (m.method === 'thread/resume') {
+      socket.send(JSON.stringify({ id: m.id, error: { code: -32600, message: `no rollout found for thread id ${m.params.threadId}` } }));
+    }
+    if (m.method === 'thread/start') {
+      createdCount += 1;
+      response({ thread: { id: `recovered-thread-${createdCount}`, turns: [] } });
+    }
+    if (m.method === 'thread/unsubscribe') response({ status: 'unsubscribed' });
+  }));
+  resetBridgeTestState();
+  const store = initBridgeTestContext();
+  t.after(async () => {
+    await closeCodexAppServerSessions();
+    resetBridgeTestState();
+    for (const client of wss.clients) client.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  });
+
+  const binding = router.createBinding({ channelType: 'feishu', chatId: 'missing-rollout-chat' }, process.cwd());
+  store.updateSession(binding.bridgeSessionId, {
+    runtime: { activeRuntime: 'codex', codex: { appServerEndpoint: endpoint, threadId: 'dead-missing-rollout-id' } },
+  });
+  const session = store.getSession(binding.bridgeSessionId)!;
+
+  // Passive restore must NOT create a new thread.
+  await assert.rejects(
+    prepareCodexAppServerForBinding(store, binding, session, { createIfMissing: false }),
+    (err: unknown) => isCodexThreadNotFoundError(err),
+  );
+  assert.equal(createdCount, 0);
+
+  // Interactive prepare auto-recovers by clearing the dead thread and starting a fresh thread.
+  let recoveredNotice: [string, string] | undefined;
+  const recovered = await prepareCodexAppServerForBinding(store, binding, store.getSession(binding.bridgeSessionId)!, {
+    onRecoveredMissingThread: (oldId, newId) => { recoveredNotice = [oldId, newId]; },
+  });
+  assert.ok(recovered);
+  assert.equal(recovered.threadId, 'recovered-thread-1');
+  assert.deepEqual(recoveredNotice, ['dead-missing-rollout-id', 'recovered-thread-1']);
+  assert.equal(store.getSession(binding.bridgeSessionId)?.runtime?.codex?.threadId, 'recovered-thread-1');
+});

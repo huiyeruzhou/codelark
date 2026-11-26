@@ -76,10 +76,29 @@ export function readTomlConfig(file: string): SourceLoadResult | null {
   return parsed === null ? null : { file, patch: tomlToConfigPatch(parsed) };
 }
 
+const cachedDefaultsConfig = new Map<string, SourceLoadResult>();
+
 export function readDefaultsConfig(file: string): SourceLoadResult {
   const loaded = readTomlConfig(file);
-  if (!loaded) throw new Error(`缺少默认配置 TOML：${file}`);
-  return loaded;
+  if (loaded) {
+    cachedDefaultsConfig.set(file, structuredClone(loaded));
+    return loaded;
+  }
+  const cached = cachedDefaultsConfig.get(file);
+  if (cached) return structuredClone(cached);
+  throw new Error(`缺少默认配置 TOML：${file}`);
+}
+
+// Warm the bundled defaults.toml once at module load so an already-running daemon
+// never crashes if its package/worktree directory is replaced or removed later.
+try {
+  const bundledDefaults = path.join(path.dirname(fileURLToPath(import.meta.url)), 'defaults.toml');
+  if (fs.existsSync(bundledDefaults)) {
+    const loaded = readTomlConfig(bundledDefaults);
+    if (loaded) cachedDefaultsConfig.set(bundledDefaults, structuredClone(loaded));
+  }
+} catch {
+  // Best-effort preload; readDefaultsConfig still reports errors if the file is absent on first load.
 }
 
 export function writeTomlConfig(file: string, patch: ConfigPatch): void {

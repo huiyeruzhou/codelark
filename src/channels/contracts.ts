@@ -32,6 +32,15 @@ export interface StructuredStreamingUiSnapshot {
   consecutiveFailures?: number;
 }
 
+export interface StreamingCardHandle {
+  cardId: string;
+  messageId: string;
+  sequence: number;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  startTime: number;
+}
+
 export interface StructuredStreamingUiActionButton {
   text: string;
   callbackData: string;
@@ -137,6 +146,8 @@ export abstract class BaseChannelAdapter {
   supportsStructuredStreamingUi?(_chatId: string): boolean;
   hasActiveStreamingUi?(_chatId: string, _streamKey?: string): boolean;
   getStructuredStreamingUiSnapshot?(_chatId: string, _streamKey?: string): StructuredStreamingUiSnapshot | null;
+  getStreamingCardHandle?(_chatId: string, _streamKey?: string): StreamingCardHandle | null;
+  adoptStreamingCardHandle?(_chatId: string, _streamKey: string, _handle: StreamingCardHandle): boolean;
   getStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): string | null;
   waitForStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): Promise<string | null>;
   onMirrorStreamStart?(_chatId: string, _streamKey?: string, _requestMessageId?: string): void;

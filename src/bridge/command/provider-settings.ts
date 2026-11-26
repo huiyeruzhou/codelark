@@ -32,6 +32,7 @@ import { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js
 import {
   cursorTmuxSessionName,
 } from '../../runtime/cursor/tmux-provider.js';
+import { closeCursorAcpSession } from '../../runtime/cursor/acp-provider.js';
 import {
   restartZcodeTmuxInputSession,
   zcodeTmuxSessionName,
@@ -668,6 +669,11 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
     } else {
       setSessionCursorProviderToml(session.id, 'acp');
     }
+    const recycledAcpSession = requested === 'acp'
+      && (!sessionHasActiveRuntimeTurn(options.deps, session) || confirmedCursorSwitch);
+    if (recycledAcpSession) {
+      await closeCursorAcpSession(session.id).catch(() => {});
+    }
     options.store.updateSession(session.id, {
       ...setSessionCursorProviderUpdate(session, 'acp'),
       ...(confirmedCursorSwitch ? { runtime_status: 'idle' as const, queued_count: 0, pending_user_input: undefined } : {}),
@@ -678,6 +684,7 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
       [['Runtime', 'cursor'], ['Provider', 'acp']],
       [
         ...(aliasedFromTmux ? ['Cursor 不支持 tmux，已将 `/p tmux` 解释为 `/p acp`。'] : []),
+        ...(recycledAcpSession ? ['已重置该会话现有的 Cursor ACP 子进程，下一条消息将重新拉起并加载最新登录状态与配置。'] : []),
         '之后的消息使用 ACP 实时事件；运行中的新消息会中断当前生成，再继续处理新消息。',
         ...(changingProvider && getSessionCursorSessionId(session)
           ? ['旧会话记录和身份已保留，下一条消息会创建新的 ACP 会话。'] : []),
@@ -832,7 +839,12 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
     );
   }
   const currentProvider = resolveEffectiveCodexProvider(session, binding);
-  const protocol = await prepareCodexAppServerForBinding(options.store, binding, session);
+  let recoveredMissingThreadNotice: string | undefined;
+  const protocol = await prepareCodexAppServerForBinding(options.store, binding, session, {
+    onRecoveredMissingThread: (oldThreadId, newThreadId) => {
+      recoveredMissingThreadNotice = `原 Codex thread \`${oldThreadId}\` 的本地 rollout 已不存在，已自动新建 thread \`${newThreadId}\`。`;
+    },
+  });
   if (protocol) {
     const currentBinding = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId);
     if (currentBinding?.bridgeSessionId !== session.id) {
@@ -843,7 +855,10 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
     scheduleMirrorSubscriptionsBestEffort(options.deps, 'app-server thread prepared');
     void scheduleCodexAppServerView({ store: options.store, binding, session, handle: protocol,
       notify: (message) => options.deps.notifyBackgroundOperation?.(message, { force: true }) });
-    return '共享 Codex 线程已就绪，可直接发送消息；正在后台准备 tmux 查看入口。';
+    return [
+      recoveredMissingThreadNotice,
+      '共享 Codex 线程已就绪，可直接发送消息；正在后台准备 tmux 查看入口。',
+    ].filter(Boolean).join('\n');
   }
   const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
   const mode = runtimeConfig.mode;

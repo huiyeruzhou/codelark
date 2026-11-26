@@ -927,6 +927,25 @@ export async function stopBridge(): Promise<BridgeStatus> {
     await sleep(300);
   }
 
+  // Escalate to SIGKILL on POSIX if a hung bridge ignored SIGTERM so a restart
+  // never leaves the old daemon alive beside the new one.
+  if (process.platform !== 'win32') {
+    for (const pid of pids) {
+      if (isProcessAlive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // ignore
+        }
+      }
+    }
+    const killStartedAt = Date.now();
+    while (Date.now() - killStartedAt < 3_000) {
+      if (pids.every((pid) => !isProcessAlive(pid))) break;
+      await sleep(150);
+    }
+  }
+
   clearBridgePidFile();
   clearStaleBridgeInstanceLock();
   return getBridgeStatus();

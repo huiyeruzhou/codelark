@@ -8,11 +8,16 @@ export const CURSOR_MODEL_PICKER_PAGE_SIZE = 36;
 export const CURSOR_MODEL_PAGE_ARG = '--cursor-model-page';
 export const CURSOR_DESKTOP_MODEL_CONTROL_NOTICE = 'Cursor Desktop 模型由目标对话管理。发送 `/model` 可通过已启用的可选增强切换模型；标准接口不支持此操作。思考级别请在 Cursor 中调整。CodeLark 不会把未应用的配置报告为切换成功。';
 
-export function attachCursorDesktopModelNotice(card: OutboundRichCard, sessionId?: string): OutboundRichCard {
+export function attachCursorDesktopModelNotice(
+  card: OutboundRichCard,
+  sessionId?: string,
+  targetRuntime?: 'cursor',
+): OutboundRichCard {
+  const command = targetRuntime === 'cursor' ? '/model --runtime cursor' : '/model';
   return {
     ...card,
     sections: [...card.sections, { fields: [['模型和思考级别', '由 Cursor Desktop 对话管理']] }],
-    ...(sessionId ? { actions: [...(card.actions || []), [{ text: '读取 / 切换 Desktop 模型', callbackData: buildCommandCallbackData('/model', sessionId) }]] } : {}),
+    ...(sessionId ? { actions: [...(card.actions || []), [{ text: '读取 / 切换 Desktop 模型', callbackData: buildCommandCallbackData(command, sessionId) }]] } : {}),
     ...(card.form ? { form: {
       ...card.form,
       extraInputs: card.form.extraInputs?.filter((input) => input.elementId !== 'cursorDefaultModel'),
@@ -82,9 +87,15 @@ function modelOptionText(model: CursorAvailableModel): string {
   return `${model.name} · ${model.slug}`;
 }
 
-function selectionCommand(model: CursorAvailableModel, target: 'session' | 'global', nativeDesktop = false): string {
+function selectionCommand(
+  model: CursorAvailableModel,
+  target: 'session' | 'global',
+  nativeDesktop = false,
+  targetRuntime?: 'cursor',
+): string {
   const value = !nativeDesktop && (model.default || model.slug === 'auto') ? 'default' : model.slug;
-  return target === 'global' ? `/set cursorDefaultModel ${value}` : `/model ${value}`;
+  if (target === 'global') return `/set cursorDefaultModel ${value}`;
+  return targetRuntime === 'cursor' ? `/model --runtime cursor ${value}` : `/model ${value}`;
 }
 
 export function attachCursorModelPickerControls(options: {
@@ -98,6 +109,7 @@ export function attachCursorModelPickerControls(options: {
   configuredLabel: string;
   controlIdPrefix: string;
   nativeDesktop?: boolean;
+  targetRuntime?: 'cursor';
 }): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
   const configuredModel = options.selectedSlug
     ? options.models.find((model) => model.slug === options.selectedSlug)
@@ -116,7 +128,7 @@ export function attachCursorModelPickerControls(options: {
   );
   const callback = (command: string) => buildCommandCallbackData(command, options.scopeSessionId);
   const selectedCallbackData = selected && pageModels.includes(selected)
-    ? callback(selectionCommand(selected, options.target, options.nativeDesktop))
+    ? callback(selectionCommand(selected, options.target, options.nativeDesktop, options.targetRuntime))
     : undefined;
   const modelSelect = {
     id: `${options.controlIdPrefix}_model`,
@@ -124,7 +136,7 @@ export function attachCursorModelPickerControls(options: {
     selectedCallbackData,
     options: pageModels.map((model) => ({
       text: modelOptionText(model),
-      callbackData: callback(selectionCommand(model, options.target, options.nativeDesktop)),
+      callbackData: callback(selectionCommand(model, options.target, options.nativeDesktop, options.targetRuntime)),
     })),
   };
   const pageSelect = {
@@ -173,8 +185,12 @@ export function buildCursorModelPickerCard(options: {
   models: CursorAvailableModel[];
   requestedPage?: number;
   desktop?: CursorDesktopModels;
+  scopeSessionId?: string;
+  targetRuntime?: 'cursor';
 }): { card: OutboundRichCard; page: number; pageCount: number; selectedSlug?: string } {
   const override = options.desktop ? options.desktop.selectedModels.join(', ') : sessionCursorModelOverride(options.session.id);
+  const scopeSessionId = options.scopeSessionId || options.session.id;
+  const pagePrefix = options.targetRuntime === 'cursor' ? '/model --runtime cursor' : '/model';
   const base: OutboundRichCard = {
     title: options.desktop ? 'Cursor Desktop 模型选择' : 'Cursor 模型选择',
     template: 'blue',
@@ -182,8 +198,8 @@ export function buildCursorModelPickerCard(options: {
     actions: [[{
       text: '刷新列表',
       callbackData: buildCommandCallbackData(
-        `/model ${CURSOR_MODEL_PAGE_ARG}=${options.requestedPage || 1}`,
-        options.session.id,
+        `${pagePrefix} ${CURSOR_MODEL_PAGE_ARG}=${options.requestedPage || 1}`,
+        scopeSessionId,
       ),
     }]],
     updateKey: `cursor-model-picker:${options.address.channelType}:${options.address.chatId}`,
@@ -195,10 +211,11 @@ export function buildCursorModelPickerCard(options: {
     target: 'session',
     selectedSlug: override,
     requestedPage: options.requestedPage,
-    pageCommand: (page) => `/model ${CURSOR_MODEL_PAGE_ARG}=${page}`,
-    scopeSessionId: options.session.id,
+    pageCommand: (page) => `${pagePrefix} ${CURSOR_MODEL_PAGE_ARG}=${page}`,
+    scopeSessionId,
     configuredLabel: options.desktop ? 'Desktop 当前选择' : '当前会话配置',
     controlIdPrefix: 'cursor_model_command',
     nativeDesktop: Boolean(options.desktop),
+    targetRuntime: options.targetRuntime,
   });
 }

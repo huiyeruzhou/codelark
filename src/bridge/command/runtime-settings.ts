@@ -1087,6 +1087,64 @@ export function handleUiCommand(options: {
   );
 }
 
+const MODEL_COMMAND_RUNTIMES = new Set<RuntimeName>(['codex', 'claude', 'kimi', 'cursor', 'zcode', 'doubao']);
+
+function parseModelRuntimeArg(rawArgs: string): {
+  runtime?: RuntimeName;
+  args: string;
+  invalid: boolean;
+} {
+  const tokens = rawArgs.trim().split(/\s+/u).filter(Boolean);
+  let runtime: RuntimeName | undefined;
+  let invalid = false;
+  const remaining: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const inline = token.match(/^--runtime=(.*)$/u);
+    if (inline) {
+      const candidate = inline[1]!.trim().toLowerCase() as RuntimeName;
+      if (runtime !== undefined || !MODEL_COMMAND_RUNTIMES.has(candidate)) invalid = true;
+      else runtime = candidate;
+      continue;
+    }
+    if (token === '--runtime') {
+      const candidate = (tokens[index + 1] || '').trim().toLowerCase() as RuntimeName;
+      if (runtime !== undefined || !MODEL_COMMAND_RUNTIMES.has(candidate)) invalid = true;
+      else runtime = candidate;
+      index += 1;
+      continue;
+    }
+    remaining.push(token);
+  }
+  return { ...(runtime ? { runtime } : {}), args: remaining.join(' '), invalid };
+}
+
+function resolveModelCommandTarget(options: {
+  store: BridgeStore;
+  binding: ChannelChat;
+  session: BridgeSession;
+  requestedRuntime?: RuntimeName;
+}): {
+  activeRuntime: RuntimeName;
+  targetRuntime: RuntimeName;
+  targetSession: BridgeSession;
+  crossRuntimeNote?: string;
+} {
+  const activeRuntime = (getSessionActiveRuntime(options.session) || 'codex') as RuntimeName;
+  const targetRuntime = options.requestedRuntime || activeRuntime;
+  if (targetRuntime === activeRuntime) {
+    return { activeRuntime, targetRuntime, targetSession: options.session };
+  }
+  const mappedId = mappedRuntimeSessionId(options.store, options.binding, targetRuntime);
+  const targetSession = (mappedId ? options.store.getSession(mappedId) : undefined) || options.session;
+  return {
+    activeRuntime,
+    targetRuntime,
+    targetSession,
+    crossRuntimeNote: `当前聊天仍在使用 \`${activeRuntime}\`，未修改 \`${activeRuntime}\` 的模型配置。`,
+  };
+}
+
 export function handleModelCommand(options: {
   msg: InboundMessage;
   args: string;
@@ -1099,78 +1157,94 @@ export function handleModelCommand(options: {
   if (!session) {
     return '当前会话不存在。';
   }
-  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
-  if (activeRuntime === 'doubao') {
-    const currentModel = resolveDoubaoRuntimeConfig(session, binding).model || session.runtime?.doubao?.model || 'default';
-    if (!options.args) {
+  const parsedRuntime = parseModelRuntimeArg(options.args);
+  if (parsedRuntime.invalid) {
+    return buildCommandFields(
+      '模型命令参数无效',
+      [['用法', '`/model [--runtime codex|claude|kimi|cursor|zcode|doubao] <model|default>`']],
+      ['请检查 `--runtime` 参数后重试；未修改任何模型配置。'],
+      options.markdown,
+    );
+  }
+  const effectiveArgs = parsedRuntime.args;
+  const { targetRuntime, targetSession, crossRuntimeNote } = resolveModelCommandTarget({
+    store: options.store,
+    binding,
+    session,
+    requestedRuntime: parsedRuntime.runtime,
+  });
+  const withCrossNote = (notes: string[]): string[] => crossRuntimeNote ? [...notes, crossRuntimeNote] : notes;
+  if (targetRuntime === 'doubao') {
+    const currentModel = resolveDoubaoRuntimeConfig(targetSession, binding).model || targetSession.runtime?.doubao?.model || 'default';
+    if (!effectiveArgs) {
       return buildCommandFields(
         '当前 Doubao 模型',
         [['模型', currentModel], ['Provider', 'acp']],
-        ['发送 `/model <model-id|名称>` 可切换；发送 `/model default` 回到 Doubao 默认模型。Doubao ACP 支持下一轮热切换。'],
+        withCrossNote(['发送 `/model <model-id|名称>` 可切换；发送 `/model default` 回到 Doubao 默认模型。Doubao ACP 支持下一轮热切换。']),
         options.markdown,
       );
     }
-    const requestedModel = options.args.trim();
+    const requestedModel = effectiveArgs.trim();
     if (requestedModel === 'default') {
-      clearSessionDoubaoModelToml(session.id);
+      clearSessionDoubaoModelToml(targetSession.id);
       return buildCommandFields(
         '已恢复默认 Doubao 模型',
-        [['模型', resolveDoubaoRuntimeConfig(options.store.getSession(session.id), binding).model || 'default'], ['Provider', 'acp']],
-        ['当前会话已清除 Doubao 模型覆盖值，后续将跟随全局默认或 Doubao CLI 默认配置。'],
+        [['模型', resolveDoubaoRuntimeConfig(options.store.getSession(targetSession.id), binding).model || 'default'], ['Provider', 'acp']],
+        withCrossNote(['当前会话已清除 Doubao 模型覆盖值，后续将跟随全局默认或 Doubao CLI 默认配置。']),
         options.markdown,
       );
     }
-    setSessionDoubaoModelToml(session.id, requestedModel);
+    setSessionDoubaoModelToml(targetSession.id, requestedModel);
     return buildCommandFields(
       '已更新 Doubao 模型',
       [['模型', requestedModel], ['Provider', 'acp']],
-      ['下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热切换模型。'],
+      withCrossNote(['下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热切换模型。']),
       options.markdown,
     );
   }
-  if (activeRuntime === 'zcode') {
-    const currentModel = resolveZcodeRuntimeConfig(session, binding).model || 'default';
-    if (!options.args) {
+  if (targetRuntime === 'zcode') {
+    const currentModel = resolveZcodeRuntimeConfig(targetSession, binding).model || 'default';
+    if (!effectiveArgs) {
       return buildCommandFields(
         '当前 ZCode 模型',
         [['模型', currentModel]],
-        ['发送 `/model <provider/model>` 可切换；发送 `/model default` 回到 ZCode 默认模型。'],
+        withCrossNote(['发送 `/model <provider/model>` 可切换；发送 `/model default` 回到 ZCode 默认模型。']),
         options.markdown,
       );
     }
-    const requestedModel = options.args.trim();
+    const requestedModel = effectiveArgs.trim();
     if (requestedModel === 'default') {
-      clearSessionZcodeModelToml(session.id);
+      clearSessionZcodeModelToml(targetSession.id);
       return buildCommandFields(
         '已恢复默认 ZCode 模型',
-        [['模型', resolveZcodeRuntimeConfig(options.store.getSession(session.id), binding).model || 'default']],
-        ['发送 `/p tmux`，确认“结束并重启”后应用 ZCode TUI 配置。'],
+        [['模型', resolveZcodeRuntimeConfig(options.store.getSession(targetSession.id), binding).model || 'default']],
+        withCrossNote(['发送 `/p tmux`，确认“结束并重启”后应用 ZCode TUI 配置。']),
         options.markdown,
       );
     }
-    setSessionZcodeModelToml(session.id, requestedModel);
+    setSessionZcodeModelToml(targetSession.id, requestedModel);
     return buildCommandFields(
       '已更新 ZCode 模型',
       [['模型', requestedModel]],
-      [`后续 ZCode tmux 启动会传入 \`--model ${requestedModel}\`；请用 \`/p tmux\` 重启后生效。`],
+      withCrossNote([`后续 ZCode tmux 启动会传入 \`--model ${requestedModel}\`；请用 \`/p tmux\` 重启后生效。`]),
       options.markdown,
     );
   }
-  if (activeRuntime === 'claude') {
-    if (!options.args) {
-      const currentModel = getSessionClaudeModel(session) || resolveClaudeRuntimeConfig(session, binding).model || 'default';
+  if (targetRuntime === 'claude') {
+    if (!effectiveArgs) {
+      const currentModel = getSessionClaudeModel(targetSession) || resolveClaudeRuntimeConfig(targetSession, binding).model || 'default';
       return buildCommandFields(
         '当前 Claude Code 模型',
         [['模型', currentModel]],
-        [
+        withCrossNote([
           '发送 `/model sonnet`、`/model opus` 或完整 Claude 模型名可切换；发送 `/model default` 可回退到全局 Claude 默认模型。',
           '模型切换保存为后续 Claude Code pty 启动参数；不会向运行中的 TUI 注入模型切换命令。',
-        ],
+        ]),
         options.markdown,
       );
     }
 
-    const requestedModel = options.args.trim();
+    const requestedModel = effectiveArgs.trim();
     if (!requestedModel) {
       return buildCommandFields(
         'Claude Code 模型用法',
@@ -1180,39 +1254,39 @@ export function handleModelCommand(options: {
       );
     }
     if (requestedModel === 'default') {
-      clearSessionClaudeModelToml(session.id);
-      const updated = options.store.getSession(session.id);
+      clearSessionClaudeModelToml(targetSession.id);
+      const updated = options.store.getSession(targetSession.id);
       return buildCommandFields(
         '已恢复默认 Claude Code 模型',
         [['模型', resolveClaudeRuntimeConfig(updated, binding).model || 'default']],
-        ['后续启动 Claude Code pty 时会跟随全局 Claude 默认模型。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+        withCrossNote(['后续启动 Claude Code pty 时会跟随全局 Claude 默认模型。', CLAUDE_PTY_RUNTIME_UPDATE_NOTE]),
         options.markdown,
       );
     }
 
-    setSessionClaudeModelToml(session.id, requestedModel);
+    setSessionClaudeModelToml(targetSession.id, requestedModel);
     return buildCommandFields(
       '已更新 Claude Code 模型',
       [['模型', requestedModel]],
-      [`后续启动 Claude Code pty 时会传入 \`--model ${requestedModel}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE],
+      withCrossNote([`后续启动 Claude Code pty 时会传入 \`--model ${requestedModel}\`。`, CLAUDE_PTY_RUNTIME_UPDATE_NOTE]),
       options.markdown,
     );
   }
-  if (activeRuntime === 'kimi') {
-    if (!options.args) {
-      const currentModel = resolveKimiRuntimeConfig(session, binding).model || 'default';
+  if (targetRuntime === 'kimi') {
+    if (!effectiveArgs) {
+      const currentModel = resolveKimiRuntimeConfig(targetSession, binding).model || 'default';
       return buildCommandFields(
         '当前 Kimi Code 模型',
         [['模型', currentModel]],
-        [
+        withCrossNote([
           '发送 `/model <kimi-model>` 可切换；发送 `/model default` 可回退到全局 Kimi 默认模型。',
           '模型切换保存为后续 Kimi Code tmux 启动参数；不会向运行中的 TUI 注入模型切换命令。',
-        ],
+        ]),
         options.markdown,
       );
     }
 
-    const requestedModel = options.args.trim();
+    const requestedModel = effectiveArgs.trim();
     if (!requestedModel) {
       return buildCommandFields(
         'Kimi Code 模型用法',
@@ -1222,109 +1296,109 @@ export function handleModelCommand(options: {
       );
     }
     if (requestedModel === 'default') {
-      clearSessionKimiModelToml(session.id);
-      const updated = options.store.getSession(session.id);
+      clearSessionKimiModelToml(targetSession.id);
+      const updated = options.store.getSession(targetSession.id);
       return buildCommandFields(
         '已恢复默认 Kimi Code 模型',
         [['模型', resolveKimiRuntimeConfig(updated, binding).model || 'default']],
-        ['后续启动 Kimi Code tmux 时会跟随全局 Kimi 默认模型。'],
+        withCrossNote(['后续启动 Kimi Code tmux 时会跟随全局 Kimi 默认模型。']),
         options.markdown,
       );
     }
 
-    setSessionKimiModelToml(session.id, requestedModel);
+    setSessionKimiModelToml(targetSession.id, requestedModel);
     return buildCommandFields(
       '已更新 Kimi Code 模型',
       [['模型', requestedModel]],
-      [`后续启动 Kimi Code tmux 时会传入 \`--model ${requestedModel}\`。`],
+      withCrossNote([`后续启动 Kimi Code tmux 时会传入 \`--model ${requestedModel}\`。`]),
       options.markdown,
     );
   }
-  if (activeRuntime === 'cursor') {
-    if (resolveCursorCapabilities(session).modelConfiguration === 'external') {
+  if (targetRuntime === 'cursor') {
+    if (resolveCursorCapabilities(targetSession).modelConfiguration === 'external') {
       return CURSOR_DESKTOP_MODEL_CONTROL_NOTICE;
     }
-    if (!options.args) {
-      const currentModel = resolveCursorRuntimeConfig(session, binding).model || 'default';
+    if (!effectiveArgs) {
+      const currentModel = resolveCursorRuntimeConfig(targetSession, binding).model || 'default';
       return buildCommandFields(
         '当前 Cursor Agent 模型',
         [['模型', currentModel]],
-        ['发送 `/model <cursor-model>` 可切换；发送 `/model default` 可回退到 Cursor 默认模型。'],
+        withCrossNote(['发送 `/model <cursor-model>` 可切换；发送 `/model default` 可回退到 Cursor 默认模型。']),
         options.markdown,
       );
     }
-    const requestedModel = options.args.trim();
-    const cursorProvider = resolveCursorRuntimeConfig(session, binding).provider;
+    const requestedModel = effectiveArgs.trim();
+    const cursorProvider = resolveCursorRuntimeConfig(targetSession, binding).provider;
     if (requestedModel === 'default') {
-      clearSessionCursorModelToml(session.id);
+      clearSessionCursorModelToml(targetSession.id);
       return buildCommandFields(
         '已恢复默认 Cursor Agent 模型',
-        [['模型', resolveCursorRuntimeConfig(options.store.getSession(session.id), binding).model || 'default']],
-        [
+        [['模型', resolveCursorRuntimeConfig(options.store.getSession(targetSession.id), binding).model || 'default']],
+        withCrossNote([
           cursorProvider === 'acp'
             ? '后续 Cursor ACP 启动不再显式传 `--model`（下一次发消息生效）。'
             : '后续 Cursor tmux 启动不再显式传 `--model`。',
-        ],
+        ]),
         options.markdown,
       );
     }
-    setSessionCursorModelToml(session.id, requestedModel);
+    setSessionCursorModelToml(targetSession.id, requestedModel);
     return buildCommandFields(
       '已更新 Cursor Agent 模型',
       [['模型', requestedModel]],
-      [
+      withCrossNote([
         cursorProvider === 'acp'
           ? `后续 Cursor ACP 启动会传入 \`--model ${requestedModel}\`（下一次发消息生效）。`
           : `后续 Cursor tmux 启动会传入 \`--model ${requestedModel}\`。`,
-      ],
+      ]),
       options.markdown,
     );
   }
 
-  if (!options.args) {
-    const currentModel = resolveCommandCodexModel(binding, session);
+  if (!effectiveArgs) {
+    const currentModel = resolveCommandCodexModel(binding, targetSession);
     return buildCommandFields(
       '当前模型',
       [['模型', formatDisplayedModel(currentModel)]],
-      [
+      withCrossNote([
         getAvailableModelChoicesText(),
         '发送 `/model <slug>` 可显式切换；发送 `/model default` 可让已有 thread 恢复使用自己的模型。',
-        hasBoundCodexAppServer(session) ? CODEX_APP_SERVER_UPDATE_NOTE : '模型切换只影响后续从 IM 发起的 Codex CLI 请求。',
-      ],
+        hasBoundCodexAppServer(targetSession) ? CODEX_APP_SERVER_UPDATE_NOTE : '模型切换只影响后续从 IM 发起的 Codex CLI 请求。',
+      ]),
       options.markdown,
     );
   }
 
-  const requestedModel = options.args.trim();
+  const requestedModel = effectiveArgs.trim();
   if (requestedModel === 'default') {
-    clearSessionCodexModelToml(session.id);
+    clearSessionCodexModelToml(targetSession.id);
     const updatedBinding = router.resolve(options.msg.address);
-    const updatedSession = options.store.getSession(updatedBinding.bridgeSessionId);
+    const updatedSession = options.store.getSession(targetSession.id) || options.store.getSession(updatedBinding.bridgeSessionId);
     const currentModel = resolveCommandCodexModel(updatedBinding, updatedSession);
     const hasExistingThread = Boolean(getSessionCodexThreadId(updatedSession));
     return buildCommandFields(
       '已恢复默认模型',
       [['模型', formatDisplayedModel(currentModel)]],
-      codexRuntimeUpdateNotes(updatedSession, updatedBinding, [hasExistingThread
+      withCrossNote(codexRuntimeUpdateNotes(updatedSession, updatedBinding, [hasExistingThread
         ? '后续从 IM 发起的 Codex 请求不再覆盖模型，由已有 thread 恢复自己的模型。'
-        : '后续新建 Codex thread 会跟随默认模型。']),
+        : '后续新建 Codex thread 会跟随默认模型。'])),
       options.markdown,
     );
   }
 
   const selectedModel = getSelectableCodexModel(requestedModel);
   const selectedSlug = selectedModel?.slug || requestedModel;
-  setSessionCodexModelToml(session.id, selectedSlug);
+  setSessionCodexModelToml(targetSession.id, selectedSlug);
   return buildCommandFields(
     '已更新模型',
     [['模型', formatDisplayedModel(selectedSlug)]],
-    [
+    withCrossNote([
       '后续从 IM 发起的 Codex CLI 请求会使用这个模型。',
-      ...codexRuntimeUpdateNotes(options.store.getSession(session.id), binding),
+      ...codexRuntimeUpdateNotes(options.store.getSession(targetSession.id), binding),
       ...(selectedModel && isCliOnlyCodexModel(selectedModel)
         ? ['这是仅 IM/CLI 模型，只能在 IM -> Codex CLI 调用中使用，Codex Native 不支持。']
         : []),
-    ],
+    ]),
     options.markdown,
   );
 }
@@ -1341,12 +1415,26 @@ export async function handleModelCommandRequest(options: {
 }): Promise<{ response: string; richCard?: OutboundRichCard }> {
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
-  const activeRuntime = getSessionActiveRuntime(session) || 'codex';
-  if (session && activeRuntime === 'doubao') {
-    const trimmed = options.args.trim();
+  const parsedRuntime = parseModelRuntimeArg(options.args);
+  if (parsedRuntime.invalid) {
+    return { response: handleModelCommand(options) };
+  }
+  const effectiveArgs = parsedRuntime.args;
+  if (!session) {
+    return { response: handleModelCommand(options) };
+  }
+  const { activeRuntime, targetRuntime, targetSession, crossRuntimeNote } = resolveModelCommandTarget({
+    store: options.store,
+    binding,
+    session,
+    requestedRuntime: parsedRuntime.runtime,
+  });
+  const crossRuntime = targetRuntime !== activeRuntime;
+  if (targetRuntime === 'doubao') {
+    const trimmed = effectiveArgs.trim();
     const isPickerRequest = !trimmed || trimmed === DOUBAO_MODEL_REFRESH_ARG;
     if (isPickerRequest) {
-      const currentModel = resolveDoubaoRuntimeConfig(session, binding).model || session.runtime?.doubao?.model || 'default';
+      const currentModel = resolveDoubaoRuntimeConfig(targetSession, binding).model || targetSession.runtime?.doubao?.model || 'default';
       try {
         const models = await (options.listDoubaoModels || listDoubaoModels)(
           trimmed === DOUBAO_MODEL_REFRESH_ARG ? { forceRefresh: true } : undefined,
@@ -1357,21 +1445,27 @@ export async function handleModelCommandRequest(options: {
         const response = buildCommandFields(
           '当前 Doubao 模型',
           [['模型', formatDoubaoModelDisplay(currentModel === 'default' ? undefined : currentModel, models)], ['Provider', 'acp']],
-          [modelSummary, '发送 `/model <model-id|名称>` 可切换，发送 `/model default` 恢复默认；Doubao ACP 下一轮自动热更新。'],
+          [
+            modelSummary,
+            '发送 `/model <model-id|名称>` 可切换，发送 `/model default` 恢复默认；Doubao ACP 下一轮自动热更新。',
+            ...(crossRuntimeNote ? [crossRuntimeNote] : []),
+          ],
           options.markdown,
         );
         if (models.length > 0) {
           const picker = buildDoubaoModelPickerCard({
-            session,
+            session: targetSession,
             address: options.msg.address,
             models,
             effectiveModel: currentModel === 'default' ? undefined : currentModel,
+            scopeSessionId: session.id,
+            ...(crossRuntime ? { targetRuntime: 'doubao' as const } : {}),
           });
           return { response, richCard: picker.card };
         }
         return { response };
       } catch {
-        return { response: handleModelCommand({ ...options, args: '' }) };
+        return { response: handleModelCommand({ ...options, args: parsedRuntime.runtime ? `--runtime ${parsedRuntime.runtime}` : '' }) };
       }
     }
     if (trimmed !== 'default') {
@@ -1379,12 +1473,15 @@ export async function handleModelCommandRequest(options: {
         const models = await (options.listDoubaoModels || listDoubaoModels)();
         const matched = resolveDoubaoModelChoice(trimmed, models);
         if (matched) {
-          setSessionDoubaoModelToml(session.id, matched.id);
+          setSessionDoubaoModelToml(targetSession.id, matched.id);
           return {
             response: buildCommandFields(
               '已更新 Doubao 模型',
               [['模型', formatDoubaoModelDisplay(matched.id, models)], ['Provider', 'acp']],
-              ['下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热切换模型。'],
+              [
+                '下一轮发消息时 Doubao ACP 会通过 `session/set_config_option` 自动热切换模型。',
+                ...(crossRuntimeNote ? [crossRuntimeNote] : []),
+              ],
               options.markdown,
             ),
           };
@@ -1395,8 +1492,8 @@ export async function handleModelCommandRequest(options: {
     }
     return { response: handleModelCommand(options) };
   }
-  const pickerRequest = parseCursorModelPickerArgs(options.args);
-  if (!session || activeRuntime !== 'cursor') {
+  const pickerRequest = parseCursorModelPickerArgs(effectiveArgs);
+  if (targetRuntime !== 'cursor') {
     return { response: handleModelCommand(options) };
   }
   if (pickerRequest.invalid) {
@@ -1409,11 +1506,11 @@ export async function handleModelCommandRequest(options: {
       ),
     };
   }
-  if (resolveCursorCapabilities(session).modelConfiguration === 'external') {
-    const threadId = getSessionCursorSessionId(session);
+  if (resolveCursorCapabilities(targetSession).modelConfiguration === 'external') {
+    const threadId = getSessionCursorSessionId(targetSession);
     const originalRoute = options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId;
     const isCurrentTarget = () => {
-      const latest = options.store.getSession(session.id);
+      const latest = options.store.getSession(targetSession.id);
       return options.store.getChannelChat(options.msg.address.channelType, options.msg.address.chatId)?.bridgeSessionId === originalRoute
         && getSessionActiveRuntime(latest) === 'cursor'
         && getSessionCursorSessionId(latest) === threadId
@@ -1424,12 +1521,14 @@ export async function handleModelCommandRequest(options: {
       const api = options.desktopModels || { get: getCursorDesktopModels, set: setCursorDesktopModel };
       const desktop = pickerRequest.requested
         ? await api.get(threadId, isCurrentTarget)
-        : await api.set(threadId, options.args.trim(), isCurrentTarget);
+        : await api.set(threadId, effectiveArgs.trim(), isCurrentTarget);
       if (!isCurrentTarget()) throw new Error('Desktop 绑定已变化，请重新读取目标对话模型。');
       const picker = buildCursorModelPickerCard({
-        session, address: options.msg.address, desktop,
+        session: targetSession, address: options.msg.address, desktop,
         models: desktop.models.map((model) => ({ slug: model.id, name: model.name, current: false, default: false })),
         requestedPage: pickerRequest.page,
+        scopeSessionId: session.id,
+        ...(crossRuntime ? { targetRuntime: 'cursor' as const } : {}),
       });
       return {
         response: pickerRequest.requested
@@ -1454,10 +1553,12 @@ export async function handleModelCommandRequest(options: {
   try {
     const models = await (options.listCursorModels || listCursorAvailableModels)();
     const picker = buildCursorModelPickerCard({
-      session,
+      session: targetSession,
       address: options.msg.address,
       models,
       requestedPage: pickerRequest.page,
+      scopeSessionId: session.id,
+      ...(crossRuntime ? { targetRuntime: 'cursor' as const } : {}),
     });
     return {
       response: `Cursor Agent 模型目录包含 ${models.length} 项；当前显示第 ${picker.page}/${picker.pageCount} 页。目录不代表管理员已允许使用。`,

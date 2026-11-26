@@ -127,6 +127,10 @@ export interface ConversationResult {
   tokenUsage: TokenUsage | null;
   hasError: boolean;
   outcome?: RuntimeTurnOutcome;
+  /** True when the bridge cleanly detached from a still-running persistent ACP host turn on shutdown. */
+  detached?: boolean;
+  /** Durable turn ID on persistent `acp-host` when this turn ran on or re-attached to `acp-host`. */
+  hostedTurnId?: string;
   errorMessage: string;
   /** Permission request events that were forwarded during streaming */
   permissionRequests: PermissionRequestInfo[];
@@ -176,6 +180,9 @@ export async function processMessage(
     onRuntimeIdentity?: OnRuntimeIdentity;
     onNativeTurn?: (threadId: string, turnId: string, completed: boolean) => Promise<void>;
     onInputAccepted?: () => void;
+    acpTurnContext?: StreamChatParams['acpTurnContext'];
+    reattachAcpTurnId?: string;
+    onHostedAcpTurn?: (turnId: string) => void;
   },
   runtime?: SdkConversationRuntime,
 ): Promise<ConversationResult> {
@@ -246,7 +253,9 @@ export async function processMessage(
       }
     }
     const { savedContent, llmFiles, persistedFileMeta } = prepareMessageAttachments({ text, files, workDir });
-    store.addMessage(sessionId, 'user', savedContent);
+    if (!options?.reattachAcpTurnId) {
+      store.addMessage(sessionId, 'user', savedContent);
+    }
 
     const promptText = buildConversationPromptText(text, persistedFileMeta);
     onPromptPrepared?.(promptText);
@@ -345,6 +354,9 @@ export async function processMessage(
       onInputAccepted: () => {
         if (isCurrentTask()) options?.onInputAccepted?.();
       },
+      acpTurnContext: options?.acpTurnContext,
+      reattachAcpTurnId: options?.reattachAcpTurnId,
+      onHostedAcpTurn: options?.onHostedAcpTurn,
       onRuntimeStatusChange: (status: string) => {
         if (!isCurrentTask()) return;
         try { store.setSessionRuntimeStatus(sessionId, status); } catch { /* best effort */ }
@@ -428,6 +440,8 @@ async function consumeStream(
   let tokenUsage: TokenUsage | null = null;
   let hasError = false;
   let outcome: RuntimeTurnOutcome | undefined;
+  let detached = false;
+  let hostedTurnId: string | undefined;
   let errorMessage = '';
   const seenToolResultIds = new Set<string>();
   const permissionRequests: PermissionRequestInfo[] = [];
@@ -804,6 +818,10 @@ async function consumeStream(
         case 'result': {
           try {
             const resultData = JSON.parse(event.data);
+            if (resultData.detached === true) detached = true;
+            if (typeof resultData.hosted_turn_id === 'string' && resultData.hosted_turn_id) {
+              hostedTurnId = resultData.hosted_turn_id;
+            }
             if (['completed', 'failed', 'aborted'].includes(resultData.outcome)) outcome = resultData.outcome;
             if (resultData.usage) tokenUsage = resultData.usage;
             if (resultData.model && activeRuntime === 'codex') {
@@ -893,6 +911,23 @@ async function consumeStream(
       }
     });
 
+    if (detached) {
+      return {
+        responseText: '',
+        outboundAttachments: [],
+        outboundQuestions: [],
+        outboundPlatformMessages: [],
+        outboundManualInputs: [],
+        tokenUsage,
+        hasError: false,
+        detached: true,
+        ...(hostedTurnId ? { hostedTurnId } : {}),
+        errorMessage: '',
+        permissionRequests,
+        codexThreadId: capturedCodexThreadId,
+      };
+    }
+
     if (options?.isCurrentTask?.() === false) throw new DOMException('Task no longer owns this session', 'AbortError');
     // Flush remaining text
     if (currentText.trim()) {
@@ -943,6 +978,7 @@ async function consumeStream(
       tokenUsage,
       hasError,
       ...(outcome ? { outcome } : {}),
+      ...(hostedTurnId ? { hostedTurnId } : {}),
       errorMessage,
       permissionRequests,
       codexThreadId: capturedCodexThreadId,

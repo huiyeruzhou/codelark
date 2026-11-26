@@ -650,4 +650,73 @@ describe('Cursor ACP direct provider', () => {
     } finally {fs.rmSync(root,{recursive:true,force:true})}
   });
 
+  it('restarts a cached ACP process when auth.json changes on disk', async () => {
+    const authDir=fs.mkdtempSync(path.join(os.tmpdir(),'codelark-acp-auth-'));
+    const authPath=path.join(authDir,'auth.json');
+    fs.writeFileSync(authPath,JSON.stringify({token:'old-account-token'}));
+    const clients:FakeAcp[]=[];
+    const provider=new CursorAcpProvider(undefined,{
+      env:{CURSOR_CONFIG_DIR:authDir},
+      clientFactory:async()=>{const c=new FakeAcp();c.onPrompt=()=>c.end();clients.push(c);return c},
+    });
+    const sessionId=`bridge-${randomUUID()}`;
+    try {
+      const first=await collect(provider.streamChat({sessionId,prompt:'turn 1'}));
+      assert.equal(first.find(event=>event.type==='result')?.data.outcome,'completed');
+      const nativeId=clients[0]!.nativeId;
+      assert.equal(clients.length,1);
+      // Same auth.json -> process is reused.
+      const second=await collect(provider.streamChat({sessionId,cursorSessionId:nativeId,prompt:'turn 2'}));
+      assert.equal(second.find(event=>event.type==='result')?.data.outcome,'completed');
+      assert.equal(clients.length,1);
+      // Updated auth.json -> old process is disposed and a fresh process re-authenticates.
+      fs.writeFileSync(authPath,JSON.stringify({token:'new-account-token'}));
+      const third=await collect(provider.streamChat({sessionId,cursorSessionId:nativeId,prompt:'turn 3'}));
+      assert.equal(third.find(event=>event.type==='result')?.data.outcome,'completed');
+      assert.equal(clients.length,2);
+      assert.equal(clients[0]!.connected,false);
+      assert.equal(clients[1]!.calls.filter(call=>call.method==='authenticate').length,1);
+    } finally {
+      await closeCursorAcpSession(sessionId);
+      fs.rmSync(authDir,{recursive:true,force:true});
+    }
+  });
+
+  it('evicts the cached ACP process on standalone Upgrade your plan to continue failure', async () => {
+    const clients:FakeAcp[]=[];
+    const provider=new CursorAcpProvider(undefined,{
+      clientFactory:async()=>{
+        const c=new FakeAcp();
+        if (clients.length===0) {
+          c.onPrompt=()=>{
+            c.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Upgrade your plan to continue'}});
+            c.end();
+          };
+        } else {
+          c.onPrompt=()=>{
+            c.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:'recovered after relogin'}});
+            c.end();
+          };
+        }
+        clients.push(c);
+        return c;
+      },
+    });
+    const sessionId=`bridge-${randomUUID()}`;
+    try {
+      const first=await collect(provider.streamChat({sessionId,prompt:'first'}));
+      assert.equal(first.find(event=>event.type==='result')?.data.outcome,'failed');
+      assert.match(String(first.find(event=>event.type==='error')?.data||''),/Upgrade your plan to continue/);
+      assert.equal(clients.length,1);
+      assert.equal(clients[0]!.connected,false);
+      // Next turn respawns a clean ACP subprocess instead of reusing the wedged process.
+      const second=await collect(provider.streamChat({sessionId,cursorSessionId:clients[0]!.nativeId,prompt:'second'}));
+      assert.equal(second.find(event=>event.type==='result')?.data.outcome,'completed');
+      assert.equal(clients.length,2);
+      assert.equal(second.find(event=>event.type==='text')?.data,'recovered after relogin');
+    } finally {
+      await closeCursorAcpSession(sessionId);
+    }
+  });
+
 });

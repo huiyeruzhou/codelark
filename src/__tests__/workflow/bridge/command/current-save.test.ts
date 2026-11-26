@@ -118,3 +118,36 @@ test('/current inherit selection stays inherited when creating another runtime s
   assert.equal(getSessionActiveRuntime(f.current()), 'claude');
   assert.notEqual(createConfigService({ migrate: false }).resolve('runtime.claude.model', { kind: 'session', sessionId: f.current().id }).source, 'session');
 });
+
+test('/model --runtime cursor and doubao never overwrite active Codex model', async (t) => {
+  const f = fixture(t);
+  const config = createConfigService({ migrate: false });
+  await f.send('/model gpt-6-astra');
+  const codexId = f.current().id;
+  assert.equal(config.get('runtime.codex.model', { kind: 'session', sessionId: codexId }), 'gpt-6-astra');
+
+  // Preview Cursor tab on Codex and pick a Cursor model: must NOT overwrite Codex's model.
+  await f.send('/model --runtime cursor gemini-4-neon-high');
+  assert.equal(getSessionActiveRuntime(f.current()), 'codex');
+  assert.equal(config.get('runtime.codex.model', { kind: 'session', sessionId: codexId }), 'gpt-6-astra');
+  assert.equal(config.get('runtime.cursor.model', { kind: 'session', sessionId: codexId }), 'gemini-4-neon-high');
+  assert.match(f.adapter.sent.at(-1)!.text, /已更新 Cursor Agent 模型/);
+  assert.match(f.adapter.sent.at(-1)!.text, /未修改 `codex` 的模型配置/);
+
+  // Once a mapped Cursor session exists, --runtime cursor writes to the mapped Cursor session, leaving Codex untouched.
+  await f.send('/runtime cursor');
+  const cursorId = f.current().id;
+  assert.notEqual(cursorId, codexId);
+  assert.equal(config.get('runtime.cursor.model', { kind: 'session', sessionId: cursorId }), 'gemini-4-neon-high');
+  await f.send('/runtime codex');
+  assert.equal(f.current().id, codexId);
+  await f.send('/model --runtime cursor claude-4-sonnet');
+  assert.equal(config.get('runtime.codex.model', { kind: 'session', sessionId: codexId }), 'gpt-6-astra');
+  assert.equal(config.get('runtime.cursor.model', { kind: 'session', sessionId: cursorId }), 'claude-4-sonnet');
+
+  // Same isolation for --runtime doubao while active runtime is Codex.
+  await f.send('/model --runtime doubao doubao-seed-2.0-pro');
+  assert.equal(config.get('runtime.codex.model', { kind: 'session', sessionId: codexId }), 'gpt-6-astra');
+  assert.equal(config.get('runtime.doubao.model', { kind: 'session', sessionId: codexId }), 'doubao-seed-2.0-pro');
+  assert.match(f.adapter.sent.at(-1)!.text, /未修改 `codex` 的模型配置/);
+});

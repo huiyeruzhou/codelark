@@ -19,7 +19,7 @@ export class CursorAcpRpcError extends AcpRpcError {
   }
 }
 
-function executable(): string {
+export function resolveCursorAcpExecutable(): string {
   const configured = process.env.CURSOR_AGENT_EXECUTABLE || process.env.CODELARK_CURSOR_EXECUTABLE;
   if (configured?.trim()) return configured.trim();
   const local = path.join(os.homedir(), '.local', 'bin', 'agent');
@@ -30,7 +30,7 @@ function executable(): string {
 export class CursorAcpClient extends AcpClient {
   static override async start(options: CursorAcpClientOptions): Promise<CursorAcpClient> {
     return await AcpClient.start({
-      executable: options.executable || executable(),
+      executable: options.executable || resolveCursorAcpExecutable(),
       args: options.args || ['acp'],
       cwd: options.cwd,
       env: options.env,

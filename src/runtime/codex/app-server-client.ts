@@ -37,6 +37,17 @@ export function isCodexActiveWriterError(error: unknown): boolean {
   return false;
 }
 
+export function isCodexThreadNotFoundError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current; depth += 1) {
+    if (current instanceof AppServerRpcError
+      && current.code === -32600
+      && /no rollout found for thread id|thread not found/i.test(current.message)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 function unixSocketPath(endpoint: string): string | undefined {
   if (!endpoint.startsWith('unix://') && !endpoint.startsWith('ws+unix://')) return undefined;
   const url = new URL(endpoint);

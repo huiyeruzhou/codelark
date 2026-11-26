@@ -3412,13 +3412,125 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   onMessageStart(chatId: string, streamKey?: string, requestMessageId?: string): void {
     if (this.isCloudDocumentChatId(chatId)) return;
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
     const messageId = requestMessageId ?? this.lastIncomingMessageId.get(chatId);
-    this.rememberStreamReplyTarget(chatId, this.resolveStreamKey(chatId, streamKey), messageId);
+    this.rememberStreamReplyTarget(chatId, cardKey, messageId);
+
+    // If this stream adopted an existing card across a bridge restart, reuse it directly.
+    if (this.activeCards.has(cardKey)) return;
 
     // Create streaming card (fire-and-forget — fallback to traditional if fails)
     if (messageId && this.isStreamingEnabled()) {
       this.createStreamingCard(chatId, messageId, streamKey).catch(() => {});
     }
+  }
+
+  getStreamingCardHandle(chatId: string, streamKey?: string) {
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const state = this.activeCards.get(cardKey);
+    if (!state) return null;
+    return {
+      cardId: state.cardId,
+      messageId: state.messageId,
+      sequence: state.sequence,
+      ...(state.replyToMessageId ? { replyToMessageId: state.replyToMessageId } : {}),
+      ...(state.replyInThread !== undefined ? { replyInThread: state.replyInThread } : {}),
+      startTime: state.startTime,
+    };
+  }
+
+  adoptStreamingCardHandle(
+    chatId: string,
+    streamKey: string,
+    handle: {
+      cardId: string;
+      messageId: string;
+      sequence: number;
+      replyToMessageId?: string;
+      replyInThread?: boolean;
+      startTime: number;
+    },
+  ): boolean {
+    if (!handle.cardId || !handle.messageId || !this.restClient) return false;
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const now = Date.now();
+    const metadata = normalizeStreamMetadata(this.pendingStreamMetadata.get(cardKey));
+    const actionRows = this.streamActionRows.get(cardKey) || [];
+    const perf = createFeishuCardPerfStats({
+      now,
+      createCardMs: 0,
+      sendMessageMs: 0,
+      initialPayloadBytes: 0,
+      initialComponentCount: 0,
+    });
+    const state: FeishuCardState = {
+      chatId,
+      cardId: handle.cardId,
+      messageId: handle.messageId,
+      replyToMessageId: handle.replyToMessageId,
+      replyInThread: handle.replyInThread,
+      // Advance sequence safely past any pre-restart in-flight CardKit request.
+      sequence: Math.max(0, handle.sequence) + 20,
+      continuationIndex: 1,
+      startTime: handle.startTime || now,
+      taskItems: [],
+      toolCalls: [],
+      historyItems: [],
+      injectedHistoryItems: [],
+      historyItemOffset: 0,
+      historyToolCallOffset: 0,
+      toolCallOffset: 0,
+      historyDriven: false,
+      thinking: false,
+      pendingText: '',
+      pendingTasksText: '',
+      pendingStatusText: INITIAL_STREAMING_STATUS,
+      terminalContextUsageText: '',
+      terminalLastResponseText: '',
+      terminalLastIoText: '',
+      renderedText: '',
+      renderedTextLayoutSignature: '',
+      renderedTasksText: '',
+      renderedHistoryElementIds: [],
+      renderedHistoryItemCount: 0,
+      renderedHistoryElementJson: {},
+      renderedToolSnapshots: {},
+      renderedToolEventCounts: {},
+      renderedStatusText: '',
+      renderedHistorySignature: '',
+      actionRows,
+      renderedActionSignature: '',
+      metadata,
+      renderedMetadataSignature: '',
+      renderedComponentCount: 0,
+      desiredRevision: 1,
+      shadowRevision: 0,
+      // Force full card.update on first post-restart flush since remote DOM shadow is unknown.
+      shadowTrust: 'unknown',
+      lastUpdateAt: 0,
+      throttleTimer: null,
+      flushInFlight: null,
+      backgroundFlushInFlight: null,
+      flushQueued: false,
+      lastFlushStartedAt: null,
+      nextFlushEarliestAt: null,
+      lastSuccessfulFlushAt: null,
+      lastFlushErrorAt: null,
+      lastFlushError: null,
+      consecutiveFlushFailures: 0,
+      lastFullRefreshAttemptAt: now,
+      lastSuccessfulFullRefreshAt: null,
+      perf,
+    };
+    this.activeCards.set(cardKey, state);
+    if (handle.replyToMessageId) {
+      this.streamReplyTargets.set(cardKey, {
+        chatId,
+        messageId: handle.replyToMessageId,
+        inThread: Boolean(handle.replyInThread),
+      });
+    }
+    return true;
   }
 
   /**

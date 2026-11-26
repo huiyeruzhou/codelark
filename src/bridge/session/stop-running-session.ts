@@ -11,6 +11,7 @@ import { claudeTmuxSessionName, codexTmuxSessionName, sendTmuxInterrupt } from '
 import { invalidateRuntimeTmuxInputReadiness } from '../../runtime/tmux/input-state-machine.js';
 import { resolveEffectiveRuntimeProvider } from './support.js';
 import { getCodexAppServerSession } from '../../runtime/codex/app-server-registry.js';
+import { isCodexThreadNotFoundError } from '../../runtime/codex/app-server-client.js';
 import { prepareCodexAppServerForBinding } from '../command/tmux.js';
 
 export interface StopRunningSessionDeps {
@@ -139,7 +140,21 @@ export async function stopRunningSession(options: {
   const registered = getCodexAppServerSession(options.binding.bridgeSessionId);
   if (session && resolveEffectiveRuntimeProvider(session, options.binding).runtime === 'codex'
     && (registered || session.runtime?.codex?.appServerEndpoint)) {
-    const protocol = registered || await prepareCodexAppServerForBinding(options.store, options.binding, session);
+    let protocol = registered;
+    if (!protocol) {
+      try {
+        protocol = await prepareCodexAppServerForBinding(options.store, options.binding, session, { createIfMissing: false });
+      } catch (error) {
+        if (isCodexThreadNotFoundError(error)) {
+          return {
+            stopped: false,
+            method: 'idle',
+            detail: '该 Codex 线程的本地 rollout 已不存在，当前没有正在运行的协议轮次。',
+          };
+        }
+        throw error;
+      }
+    }
     if (!protocol) throw new Error('协议线程的后端尚未恢复，未向独立 TUI 发送停止指令。');
     if (!isCurrentBinding()) {
       return { stopped: false, method: 'idle', detail: '当前聊天已切换绑定，未向旧会话发送停止请求。' };

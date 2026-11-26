@@ -7,6 +7,9 @@ const originalHome = process.env.HOME;
 if (originalHome && !process.env.CODELARK_TEST_ORIGINAL_HOME) {
   process.env.CODELARK_TEST_ORIGINAL_HOME = originalHome;
 }
+if (!process.env.CODELARK_ACP_HOST_DISABLE) {
+  process.env.CODELARK_ACP_HOST_DISABLE = '1';
+}
 
 function ensureDirEnv(name: string, value: string): void {
   fs.mkdirSync(value, { recursive: true });

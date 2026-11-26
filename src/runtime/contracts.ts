@@ -110,6 +110,17 @@ export interface StreamChatParams {
   onRuntimeStatusChange?: (status: string) => void;
   /** Called after the runtime confirms that the submitted input left its editor. */
   onInputAccepted?: () => void;
+  /** Optional channel/chat metadata persisted on durable ACP host turns for restart re-attach. */
+  acpTurnContext?: {
+    channelType?: string;
+    chatId?: string;
+    requestMessageId?: string;
+    userText?: string;
+  };
+  /** When re-attaching an existing turn on `acp-host` after bridge restart, pass its durable turnId. */
+  reattachAcpTurnId?: string;
+  /** Called as soon as a durable ACP host turn is started or re-attached, so card checkpoints can be synced. */
+  onHostedAcpTurn?: (turnId: string) => void;
 }
 
 export interface LLMProvider {

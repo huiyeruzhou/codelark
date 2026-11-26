@@ -281,6 +281,7 @@ async function buildCurrentCommandRichCardWithCursorModels(
         scopeSessionId: session.id,
         configuredLabel: '当前会话配置',
         controlIdPrefix: 'current_doubao',
+        targetRuntime: 'doubao',
       }).card;
     } catch {
       return card;
@@ -289,7 +290,9 @@ async function buildCurrentCommandRichCardWithCursorModels(
   if (section !== 'cursor') return card;
   const targetId = mappedRuntimeSessionId(options.store, options.binding, 'cursor') || session.id;
   const targetSession = options.store.getSession(targetId) || session;
-  if (resolveCursorCapabilities(targetSession).modelCatalog === 'unavailable') return attachCursorDesktopModelNotice(card, session.id);
+  if (resolveCursorCapabilities(targetSession).modelCatalog === 'unavailable') {
+    return attachCursorDesktopModelNotice(card, session.id, 'cursor');
+  }
   try {
     const models = await listCursorAvailableModels();
     return attachCursorModelPickerControls({
@@ -302,6 +305,7 @@ async function buildCurrentCommandRichCardWithCursorModels(
       scopeSessionId: session.id,
       configuredLabel: '当前会话配置',
       controlIdPrefix: 'current_cursor',
+      targetRuntime: 'cursor',
     }).card;
   } catch (error) {
     return {

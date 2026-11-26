@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { TaskProgressInfo } from '../../domain/progress.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
@@ -8,11 +10,25 @@ import type { PendingPermissions } from '../permission-gateway.js';
 import { sseEvent } from '../sse.js';
 import { assertCursorAcpRestrictiveResume, cursorAcpSessionStorePath } from './acp-session-policy.js';
 import { readCursorNativeTodos } from './cli-store.js';
-import { CursorAcpClient, type CursorAcpClientOptions, type CursorAcpMessage } from './acp-client.js';
+import { CursorAcpClient, resolveCursorAcpExecutable, type CursorAcpClientOptions, type CursorAcpMessage } from './acp-client.js';
+import {
+  getSharedAcpHostClient,
+  peekSharedAcpHostClient,
+  tryConnectExistingAcpHost,
+  type AcpHostClient,
+} from '../acp/host-client.js';
+import {
+  makeAcpSessionKey,
+  type AcpPendingServerRequest,
+  type AcpTurnSnapshot,
+} from '../acp/host-protocol.js';
+import { consumeHostedAcpTurn } from '../acp/hosted-session.js';
 
 type Connection = Pick<CursorAcpClient, 'request' | 'notify' | 'respond' | 'reject' | 'onMessage' | 'onDisconnect' | 'connected'> & { close(): void | Promise<void> };
 export interface CursorAcpProviderOptions {
   clientFactory?: (options: CursorAcpClientOptions) => Promise<Connection>;
+  hostClient?: AcpHostClient;
+  useHost?: boolean;
   executable?: string;
   /** Extra root CLI arguments, before the final `acp` command. */
   args?: string[];
@@ -20,6 +36,60 @@ export interface CursorAcpProviderOptions {
   requestTimeoutMs?: number;
   cancelTimeoutMs?: number;
   retryDelayMs?: number;
+}
+
+function shouldUseCursorAcpHost(options: CursorAcpProviderOptions): boolean {
+  if (options.hostClient) return true;
+  if (options.useHost === false || options.clientFactory) return false;
+  if (options.useHost === true) return true;
+  return process.env.CODELARK_ACP_HOST_DISABLE !== '1';
+}
+
+const hostedCursorAppliedEffort = new Map<string, string>();
+const hostedCursorForce = new Map<string, boolean>();
+
+function isCursorAuthOrPlanError(message: string): boolean {
+  return /\[unauthenticated\]|authentication required|not logged in|login required|upgrade your plan to continue/i.test(message);
+}
+
+function isStandalonePlanLimitText(text: string): boolean {
+  return /^upgrade your plan to continue\.?$/i.test(text.trim());
+}
+
+const PLAN_LIMIT_FAILURE_MESSAGE = 'Upgrade your plan to continue（Cursor 账号认证或套餐额度受限，已回收旧 ACP 进程；请确认重新登录后重试。）';
+
+function readCursorAuthStamp(env?: NodeJS.ProcessEnv): string {
+  const effectiveEnv = env ? { ...process.env, ...env } : process.env;
+  const home = effectiveEnv.HOME?.trim() || os.homedir();
+  const candidates = new Set<string>();
+  if (effectiveEnv.CURSOR_CONFIG_DIR?.trim()) {
+    candidates.add(path.join(effectiveEnv.CURSOR_CONFIG_DIR.trim(), 'auth.json'));
+  }
+  const xdgConfig = effectiveEnv.XDG_CONFIG_HOME?.trim() || path.join(home, '.config');
+  candidates.add(path.join(xdgConfig, 'cursor', 'auth.json'));
+  candidates.add(path.join(home, '.cursor', 'auth.json'));
+
+  const hash = createHash('sha256');
+  let hasMaterial = false;
+  if (effectiveEnv.CURSOR_API_KEY) {
+    hash.update('api_key:');
+    hash.update(effectiveEnv.CURSOR_API_KEY);
+    hash.update('\0');
+    hasMaterial = true;
+  }
+  for (const filePath of [...candidates].sort()) {
+    try {
+      const content = fs.readFileSync(filePath);
+      hash.update(filePath);
+      hash.update(':');
+      hash.update(content);
+      hash.update('\0');
+      hasMaterial = true;
+    } catch {
+      // Ignore missing or unreadable auth files.
+    }
+  }
+  return hasMaterial ? hash.digest('hex').slice(0, 16) : '';
 }
 
 // Cursor CLI 2026.11 sends caught exceptions as one diagnostic text chunk,
@@ -45,6 +115,7 @@ interface Session {
   cwd: string;
   force: boolean;
   model?: string;
+  authStamp: string;
   appliedReasoningEffort?: string;
   configOptions: Array<Record<string, any>>;
   todos: Map<string, { content: string; status: TaskProgressInfo['status'] | 'cancelled' }>;
@@ -102,24 +173,43 @@ function forget(session: Session): void {
 
 export async function interruptCursorAcpSession(sessionId: string): Promise<boolean> {
   const turn = turns.get(sessionFor(sessionId)?.bridgeId || sessionId);
-  if (!turn) return false;
-  try { await turn.cancel(); }
-  finally { await turn.done; }
-  return true;
+  if (turn) {
+    try { await turn.cancel(); }
+    finally { await turn.done; }
+    return true;
+  }
+  const host = peekSharedAcpHostClient() || (process.env.CODELARK_ACP_HOST_DISABLE !== '1' ? await tryConnectExistingAcpHost() : null);
+  if (!host) return false;
+  const res = await host.cancelTurn({ sessionKey: makeAcpSessionKey('cursor', sessionId) }).catch(() => ({ cancelled: false }));
+  return res.cancelled;
 }
 
 export async function closeCursorAcpSession(sessionId: string): Promise<void> {
+  hostedCursorAppliedEffort.delete(sessionId);
+  hostedCursorForce.delete(sessionId);
   const session = sessionFor(sessionId);
-  if (!session) return;
-  try { await interruptCursorAcpSession(session.bridgeId); }
-  finally {
-    await session.ready.catch(() => {});
-    await disposeSession(session);
-    forget(session);
+  if (session) {
+    try { await interruptCursorAcpSession(session.bridgeId); }
+    finally {
+      await session.ready.catch(() => {});
+      await disposeSession(session);
+      forget(session);
+    }
+  }
+  const host = peekSharedAcpHostClient() || (process.env.CODELARK_ACP_HOST_DISABLE !== '1' ? await tryConnectExistingAcpHost() : null);
+  if (host) {
+    await host.closeSession(makeAcpSessionKey('cursor', sessionId)).catch(() => {});
   }
 }
 
 export function getCursorAcpSessionActivity(sessionId: string): 'idle' | 'active' | 'unknown' {
+  const host = peekSharedAcpHostClient();
+  const hosted = host?.getCachedSession(makeAcpSessionKey('cursor', sessionId));
+  if (hosted) {
+    if (hosted.disposalError || hosted.state === 'failed') return 'unknown';
+    if (hosted.state === 'running' || hosted.state === 'waiting_permission' || hosted.state === 'cancelling') return 'active';
+    return 'idle';
+  }
   const session = sessionFor(sessionId);
   if (session?.disposalError) return 'unknown';
   if (!turns.has(session?.bridgeId || sessionId)) return 'idle';
@@ -128,6 +218,18 @@ export function getCursorAcpSessionActivity(sessionId: string): 'idle' | 'active
 
 export async function closeAllCursorAcpSessions(): Promise<void> {
   await Promise.all([...sessions.keys()].map(closeCursorAcpSession));
+}
+
+/** Detach bridge-local state during bridge shutdown without killing persistent hosted ACP sessions. */
+export async function detachCursorAcpHostSessions(): Promise<void> {
+  hostedCursorAppliedEffort.clear();
+  hostedCursorForce.clear();
+  await Promise.all([...sessions.keys()].map(async (sessionId) => {
+    const session = sessionFor(sessionId);
+    if (!session) return;
+    await disposeSession(session).catch(() => {});
+    forget(session);
+  }));
 }
 
 export const closeCursorAcpSessions = closeAllCursorAcpSessions;
@@ -194,12 +296,14 @@ async function prepareSession(params: StreamChatParams, options: CursorAcpProvid
   const cwd = path.resolve(params.workingDirectory || process.cwd());
   const model = params.model?.trim() || undefined;
   const requestedEffort = params.cursorReasoningEffort?.trim() || undefined;
+  const authStamp = readCursorAuthStamp(options.env);
   const existing = sessions.get(params.sessionId);
   if (existing) {
     await existing.ready;
     const clearedReasoningOverride = Boolean(existing.appliedReasoningEffort && !requestedEffort);
     if (existing.cwd === cwd && existing.nativeId === params.cursorSessionId
       && existing.force === (params.cursorForce === true) && existing.model === model
+      && existing.authStamp === authStamp
       && !clearedReasoningOverride && existing.client?.connected) return existing;
     // A cleared binding explicitly requests a new session. Finish disposing the old
     // process before changing identity, cwd or startup permissions.
@@ -213,7 +317,7 @@ async function prepareSession(params: StreamChatParams, options: CursorAcpProvid
     throw new Error('这个 Cursor ACP 会话已有执行者，未启动第二个进程。');
   }
   if (params.cursorSessionId && params.cursorForce === false) assertCursorAcpRestrictiveResume(params.cursorSessionId, options.env);
-  const session: Session = { bridgeId: params.sessionId, nativeId: params.cursorSessionId, cwd, force: params.cursorForce === true, model, configOptions: [], todos: new Map(), ready: Promise.resolve() };
+  const session: Session = { bridgeId: params.sessionId, nativeId: params.cursorSessionId, cwd, force: params.cursorForce === true, model, authStamp, configOptions: [], todos: new Map(), ready: Promise.resolve() };
   sessions.set(params.sessionId, session);
   session.ready = (async () => {
     const client = await (options.clientFactory || CursorAcpClient.start)({
@@ -345,6 +449,9 @@ export class CursorAcpProvider implements LLMProvider {
   constructor(private pendingPerms?: PendingPermissions, private options: CursorAcpProviderOptions = {}) {}
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
+    if (shouldUseCursorAcpHost(this.options)) {
+      return this.streamHostedChat(params);
+    }
     let readerCanceled = false;
     let cancel = async () => {};
     const pendingPerms = this.pendingPerms;
@@ -506,6 +613,7 @@ export class CursorAcpProvider implements LLMProvider {
           };
           let emittedTextInTurn = false;
           let needsTextBoundary = false;
+          let turnTextSample = '';
           unsubscribe = client.onMessage(message => {
             if (message.id !== undefined && message.method) {
               void handleRequest(message).catch(error => {
@@ -529,6 +637,9 @@ export class CursorAcpProvider implements LLMProvider {
                 const failure = nativeErrorChunk(content.text);
                 if (failure) nativeFailure = failure;
                 else if (content.text.length > 0) {
+                  if (turnTextSample.length < 256) {
+                    turnTextSample += content.text.slice(0, 256 - turnTextSample.length);
+                  }
                   const text = needsTextBoundary && emittedTextInTurn && !content.text.startsWith('\n')
                     ? `\n\n${content.text}`
                     : content.text;
@@ -576,6 +687,7 @@ export class CursorAcpProvider implements LLMProvider {
             acceptingUpdates = true;
             cancellation = undefined;
             nativeFailure = undefined;
+            turnTextSample = '';
             promptPromise = client.request<Record<string, any>>('session/prompt', {
               sessionId: session.nativeId, prompt: [{ type: 'text', text: prompt }],
             }, 0);
@@ -589,6 +701,9 @@ export class CursorAcpProvider implements LLMProvider {
             promptPromise = undefined;
             if (interrupted) break;
             failure ||= nativeFailure;
+            if (!failure && tools.size === 0 && isStandalonePlanLimitText(turnTextSample)) {
+              failure = PLAN_LIMIT_FAILURE_MESSAGE;
+            }
             if (failure) {
               // The old prompt has settled. Never retry an unconfirmed tool,
               // disconnected executor, or the user's cancellation.
@@ -614,7 +729,7 @@ export class CursorAcpProvider implements LLMProvider {
             stopReason = typeof result?.stopReason === 'string' ? result.stopReason : 'unknown';
             if (continuationText && !interrupted) {
               prompt = continuationText; continuationText = undefined; tools.clear();
-              emittedTextInTurn = false; needsTextBoundary = false;
+              emittedTextInTurn = false; needsTextBoundary = false; turnTextSample = '';
               emit('status', { reasoning: '自由文本回答已保留，正在作为新消息继续原任务。' });
               continue;
             }
@@ -626,8 +741,8 @@ export class CursorAcpProvider implements LLMProvider {
           emit('result', { session_id: session.nativeId, outcome: stopReason === 'cancelled' ? 'aborted' : stopReason === 'end_turn' ? 'completed' : 'failed', stop_reason: stopReason });
         } catch (error) {
           let failure = cancelFailure || error;
-          if (session?.client && !session.client.connected) {
-            try { await disposeSession(session); } catch (closeError) { failure = closeError; }
+          if (session && ((session.client && !session.client.connected) || isCursorAuthOrPlanError(errorMessage(failure)))) {
+            try { await disposeSession(session); forget(session); } catch (closeError) { failure = closeError; }
           }
           emit('error', errorMessage(failure));
           emit('result', { ...(session?.nativeId ? { session_id: session.nativeId } : {}), outcome: 'failed' });
@@ -645,6 +760,469 @@ export class CursorAcpProvider implements LLMProvider {
         }
       },
       async cancel() { readerCanceled = true; await cancel(); },
+    });
+  }
+
+  private streamHostedChat(params: StreamChatParams): ReadableStream<string> {
+    let readerCanceled = false;
+    const pendingPerms = this.pendingPerms;
+    const options = this.options;
+    let activeHost: AcpHostClient | undefined;
+    let activeTurnId: string | undefined;
+
+    return new ReadableStream<string>({
+      async start(controller) {
+        const emit = (type: string, data: unknown) => {
+          if (!readerCanceled) controller.enqueue(sseEvent(type, data));
+        };
+        const waitingPermissions = new Map<string, string>(); // requestKey -> permissionRequestId
+        const cancelLocalPermissions = () => {
+          for (const permId of waitingPermissions.values()) {
+            pendingPerms?.resolve(permId, { behavior: 'deny', message: 'Cursor 请求已中断。' });
+          }
+          waitingPermissions.clear();
+        };
+
+        let accepted = false;
+        const markAccepted = () => {
+          if (accepted) return;
+          accepted = true;
+          params.onInputAccepted?.();
+          params.onRuntimeStatusChange?.('running');
+          emit('status', { reasoning: 'Cursor ACP 已接收消息，正在执行。' });
+        };
+
+        try {
+          if (params.abortController?.signal.aborted) {
+            if (params.abortController.signal.reason === BRIDGE_SHUTDOWN_REASON) {
+              emit('result', { detached: true });
+            } else {
+              emit('result', { outcome: 'aborted', stop_reason: 'cancelled' });
+            }
+            return;
+          }
+
+          const host = options.hostClient || await getSharedAcpHostClient();
+          activeHost = host;
+          const sessionKey = makeAcpSessionKey('cursor', params.sessionId);
+          const cwd = path.resolve(params.workingDirectory || process.cwd());
+          const model = params.model?.trim() || undefined;
+          const requestedEffort = params.cursorReasoningEffort?.trim() || undefined;
+          const todos = new Map<string, TaskProgressInfo>();
+          const todoHolder = { todos } as unknown as Session;
+
+          let currentTurn: AcpTurnSnapshot;
+          let nativeSessionId: string | undefined = params.cursorSessionId;
+          let effectiveCwd = cwd;
+
+          if (params.reattachAcpTurnId) {
+            const fetched = await host.getTurn(params.reattachAcpTurnId);
+            if (!fetched) {
+              throw new Error(`找不到待续接的 Cursor ACP 轮次：${params.reattachAcpTurnId}`);
+            }
+            currentTurn = fetched;
+            nativeSessionId = fetched.nativeSessionId || params.cursorSessionId;
+            effectiveCwd = fetched.meta.cwd || cwd;
+            emit('status', { ...(nativeSessionId ? { session_id: nativeSessionId } : {}), cwd: effectiveCwd });
+          } else {
+            if (params.cursorSessionId && params.cursorForce === false) {
+              assertCursorAcpRestrictiveResume(params.cursorSessionId, options.env);
+            }
+            const previousForce = hostedCursorForce.get(params.sessionId);
+            const existingStatus = await host.getSessionStatus(sessionKey).catch(() => null);
+            if (
+              previousForce === true
+              && params.cursorForce !== true
+              && params.cursorSessionId
+              && existingStatus?.nativeSessionId === params.cursorSessionId
+            ) {
+              await host.closeSession(sessionKey).catch(() => {});
+              throw new Error('当前 Cursor ACP 版本不能在保留此会话历史时关闭已启用的 Run Everything；旧进程已停止，未假装降低权限或提交新输入。');
+            }
+            const clearedReasoningOverride = Boolean(hostedCursorAppliedEffort.get(params.sessionId) && !requestedEffort);
+            const authStamp = readCursorAuthStamp(options.env);
+            const fingerprint = JSON.stringify({
+              cwd,
+              nativeId: params.cursorSessionId || '',
+              force: params.cursorForce === true,
+              model: model || '',
+              authStamp,
+              ...(clearedReasoningOverride ? { resetAt: Date.now() } : {}),
+            });
+            const ensured = await host.ensureSession({
+              sessionKey,
+              runtime: 'cursor',
+              bridgeSessionId: params.sessionId,
+              executable: options.executable || resolveCursorAcpExecutable(),
+              args: [...(options.args || []), ...(model ? ['--model', model] : []), ...(params.cursorForce === true ? ['--force'] : []), 'acp'],
+              cwd,
+              env: options.env as Record<string, string | undefined> | undefined,
+              requestTimeoutMs: options.requestTimeoutMs,
+              label: 'Cursor ACP',
+              fingerprint,
+              initializeParams: {
+                protocolVersion: 1,
+                clientInfo: { name: 'codelark', version: '0.6.0' },
+                clientCapabilities: { _meta: { parameterizedModelPicker: true } },
+              },
+              authenticateParams: { methodId: 'cursor_login' },
+              nativeSessionId: params.cursorSessionId,
+              requireLoadCapability: true,
+              loadUnsupportedMessage: '此 Cursor ACP 版本不能恢复会话，未创建替代会话或重发输入。',
+              duplicateNativeMessage: '这个 Cursor ACP 会话已有执行者，未启动第二个进程。',
+              missingNativeIdMessage: 'Cursor ACP 未返回原生会话 ID。',
+            });
+            hostedCursorForce.set(params.sessionId, params.cursorForce === true);
+            if (clearedReasoningOverride) hostedCursorAppliedEffort.delete(params.sessionId);
+
+            let configOptions = ensured.session.configOptions as Array<Record<string, any>>;
+            nativeSessionId = ensured.session.nativeSessionId;
+            if (!ensured.reused && params.cursorSessionId) {
+              const savedTodos = readCursorNativeTodos(cursorAcpSessionStorePath(params.cursorSessionId, options.env));
+              if (savedTodos) updateTodos(todoHolder, savedTodos, false);
+            }
+            emit('status', { session_id: nativeSessionId, cwd });
+
+            if (requestedEffort) {
+              const resolved = resolveCursorThoughtLevelOption(configOptions, requestedEffort);
+              if (!resolved.option || !resolved.targetValue) {
+                const detail = resolved.availableSummary ? `（${resolved.availableSummary}）` : '';
+                throw new Error(`当前 Cursor ACP 模型不支持思考强度 ${requestedEffort}${detail}，未忽略设置或提交输入。`);
+              }
+              if (
+                resolved.thinkingToggle
+                && String(resolved.thinkingToggle.currentValue ?? '').trim().toLowerCase() === 'false'
+                && Array.isArray(resolved.thinkingToggle.options)
+                && resolved.thinkingToggle.options.some((entry: any) => String(entry?.value ?? '').trim().toLowerCase() === 'true')
+              ) {
+                const enabled = await host.sessionRpc({
+                  sessionKey,
+                  method: 'session/set_config_option',
+                  params: { sessionId: nativeSessionId, configId: resolved.thinkingToggle.id, value: 'true' },
+                });
+                configOptions = enabled.session.configOptions as Array<Record<string, any>>;
+              }
+              const configured = await host.sessionRpc({
+                sessionKey,
+                method: 'session/set_config_option',
+                params: { sessionId: nativeSessionId, configId: resolved.option.id, value: resolved.targetValue },
+              });
+              configOptions = configured.session.configOptions as Array<Record<string, any>>;
+              if (configOptions.find(option => option.id === resolved.option!.id)?.currentValue !== resolved.targetValue) {
+                throw new Error(`Cursor ACP 未确认思考强度 ${requestedEffort}，未提交输入。`);
+              }
+              hostedCursorAppliedEffort.set(params.sessionId, resolved.targetValue);
+            }
+
+            let prompt = prepareTextAttachmentPrompt(params);
+            if (!params.cursorSessionId && params.systemPrompt) prompt = `${params.systemPrompt}\n\n${prompt}`;
+            const started = await host.startTurn({
+              sessionKey,
+              prompt: [{ type: 'text', text: prompt }],
+              meta: {
+                runtime: 'cursor',
+                bridgeSessionId: params.sessionId,
+                channelType: params.acpTurnContext?.channelType,
+                chatId: params.acpTurnContext?.chatId,
+                requestMessageId: params.acpTurnContext?.requestMessageId,
+                userText: params.acpTurnContext?.userText,
+                model,
+                cwd,
+                cursorForce: params.cursorForce === true,
+              },
+            });
+            currentTurn = started.turn;
+          }
+
+          let retries = 0;
+          let continuationText: string | undefined;
+
+          for (;;) {
+            activeTurnId = currentTurn.turnId;
+            params.onHostedAcpTurn?.(currentTurn.turnId);
+
+            const tools = new Map<string, { name: string; kind?: string; complete: boolean }>();
+            let emittedTextInTurn = false;
+            let needsTextBoundary = false;
+            let nativeFailure: string | undefined;
+            let turnTextSample = '';
+
+            const waitPermission = async (req: AcpPendingServerRequest, isQuestion: boolean) => {
+              const payload = record(req.params);
+              const reqKey = `${typeof req.requestId}:${String(req.requestId)}`;
+              const id = `cursor-acp:${params.sessionId}:${randomUUID()}`;
+              if (!pendingPerms) throw new Error('Cursor ACP 需要交互确认，但当前没有权限或问卷通道。');
+              waitingPermissions.set(reqKey, id);
+              const pending = pendingPerms.waitFor(id);
+              emit('permission_request', {
+                permissionRequestId: id,
+                toolName: isQuestion ? 'Cursor AskQuestion' : record(payload.toolCall).title || 'Cursor Tool Permission',
+                toolInput: isQuestion
+                  ? { title: payload.title, toolCallId: payload.toolCallId, questions: payload.questions, freeformContinuation: true }
+                  : { ...record(payload.toolCall), options: payload.options },
+                suggestions: [],
+              });
+              params.onRuntimeStatusChange?.('waiting');
+              try {
+                return await pending;
+              } finally {
+                waitingPermissions.delete(reqKey);
+                if (params.abortController?.signal.reason !== BRIDGE_SHUTDOWN_REASON) {
+                  params.onRuntimeStatusChange?.(params.abortController?.signal.aborted ? 'interrupted' : 'running');
+                }
+              }
+            };
+
+            const outcome = await consumeHostedAcpTurn(host, currentTurn, {
+              abortSignal: params.abortController?.signal,
+              cancelTimeoutMs: options.cancelTimeoutMs,
+              onSessionUpdate: (payload) => {
+                const update = record(payload.update);
+                if (update.sessionUpdate === 'codelark_cursor_update_todos') {
+                  const tasks = updateTodos(todoHolder, update.todos, update.merge === true);
+                  emit('task_update', { tasks, todos: tasks });
+                  return;
+                }
+                if (update.sessionUpdate === 'plan') {
+                  const tasks = planTasks(update.entries);
+                  emit('task_update', { tasks, todos: tasks });
+                  return;
+                }
+                if (!['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update'].includes(update.sessionUpdate)) return;
+                markAccepted();
+                if (update.sessionUpdate === 'agent_message_chunk') {
+                  const content = record(update.content);
+                  if (content.type === 'text' && typeof content.text === 'string') {
+                    const failure = nativeErrorChunk(content.text);
+                    if (failure) nativeFailure = failure;
+                    else if (content.text.length > 0) {
+                      if (turnTextSample.length < 256) {
+                        turnTextSample += content.text.slice(0, 256 - turnTextSample.length);
+                      }
+                      const text = needsTextBoundary && emittedTextInTurn && !content.text.startsWith('\n')
+                        ? `\n\n${content.text}`
+                        : content.text;
+                      emittedTextInTurn = true;
+                      needsTextBoundary = false;
+                      emit('text', text);
+                    }
+                  }
+                } else if (update.sessionUpdate === 'agent_thought_chunk') {
+                  if (emittedTextInTurn) needsTextBoundary = true;
+                  emit('status', { reasoning: 'Cursor 正在思考。' });
+                } else if (typeof update.toolCallId === 'string') {
+                  let tool = tools.get(update.toolCallId);
+                  if (!tool) {
+                    if (emittedTextInTurn) needsTextBoundary = true;
+                    tool = { name: toolName(update), kind: update.kind, complete: false };
+                    tools.set(update.toolCallId, tool);
+                    emit('tool_use', { id: update.toolCallId, name: tool.name, input: initialToolInput(update, effectiveCwd) });
+                  }
+                  if (!tool.complete && ['completed', 'failed', 'cancelled'].includes(update.status)) {
+                    tool.complete = true;
+                    const exitCode = record(update.rawOutput).exitCode;
+                    const patch = completedPatchInput(update, tool.kind || update.kind, effectiveCwd);
+                    const missingDeleteContent = (tool.kind || update.kind) === 'delete' && Array.isArray(update.content)
+                      && update.content.some((block: any) => block?.type === 'diff' && typeof block.path === 'string' && block.oldText === block.path);
+                    const output = [
+                      toolOutput(patch ? { ...update, content: update.content.filter((block: any) => block?.type !== 'diff') } : update, tool.name),
+                      missingDeleteContent ? 'Cursor 未提供删除前文件内容。' : '',
+                    ].filter(Boolean).join('\n');
+                    emit('tool_result', {
+                      tool_use_id: update.toolCallId,
+                      content: output,
+                      ...(patch ? { name: 'apply_patch', input: patch } : {}),
+                      is_error: update.status !== 'completed' || (tool.name === 'Shell' && Number.isInteger(exitCode) && exitCode !== 0),
+                      show_output: !patch || Boolean(output),
+                    });
+                  }
+                }
+              },
+              onServerRequest: async (req) => {
+                const payload = record(req.params);
+                if (req.method === 'session/request_permission') {
+                  markAccepted();
+                  const resolution = await waitPermission(req, false);
+                  if (params.abortController?.signal.reason === BRIDGE_SHUTDOWN_REASON) return;
+                  const choices = Array.isArray(payload.options) ? payload.options : [];
+                  const option = choices.find((choice: any) => choice.kind === (resolution.behavior === 'allow' ? 'allow_once' : 'reject_once'));
+                  await host.respondTurnRequest({
+                    turnId: currentTurn.turnId,
+                    requestId: req.requestId,
+                    result: params.abortController?.signal.aborted || !option
+                      ? { outcome: { outcome: 'cancelled' } }
+                      : { outcome: { outcome: 'selected', optionId: option.optionId } },
+                  });
+                } else if (req.method === 'cursor/ask_question') {
+                  markAccepted();
+                  const resolution = await waitPermission(req, true);
+                  if (params.abortController?.signal.reason === BRIDGE_SHUTDOWN_REASON) return;
+                  if (resolution.behavior !== 'allow' || params.abortController?.signal.aborted) {
+                    await host.respondTurnRequest({
+                      turnId: currentTurn.turnId,
+                      requestId: req.requestId,
+                      result: { outcome: { outcome: 'cancelled' } },
+                    });
+                    return;
+                  }
+                  let answers: Array<{ questionId: string; selectedOptionIds: string[]; freeformText?: string }>;
+                  try { answers = JSON.parse(resolution.message || '{}').answers; } catch { throw new Error('Cursor 问卷回答格式无效。'); }
+                  const questions = Array.isArray(payload.questions) ? payload.questions : [];
+                  if (!Array.isArray(answers) || answers.length !== questions.length || questions.some((question: any) => {
+                    const answer = answers.find(item => item.questionId === question.id);
+                    return !answer || !Array.isArray(answer.selectedOptionIds) || (!question.allowMultiple && answer.selectedOptionIds.length > 1)
+                      || answer.selectedOptionIds.some(id => !question.options?.some((option: any) => option.id === id))
+                      || (!answer.selectedOptionIds.length && !answer.freeformText?.trim());
+                  })) throw new Error('Cursor 问卷回答不符合当前问题。');
+                  if (answers.some(answer => answer.freeformText?.trim())) {
+                    continuationText = '以下是我对刚才问卷的回答，请据此继续原任务：\n' + questions.map((question: any) => {
+                      const answer = answers.find(item => item.questionId === question.id)!;
+                      const labels = answer.selectedOptionIds.map(id => question.options.find((option: any) => option.id === id)?.label || id);
+                      return `${question.prompt}\n回答：${[...labels, answer.freeformText].filter(Boolean).join('；')}`;
+                    }).join('\n\n');
+                    await host.respondTurnRequest({
+                      turnId: currentTurn.turnId,
+                      requestId: req.requestId,
+                      result: { outcome: { outcome: 'cancelled' } },
+                    });
+                    await host.cancelTurn({ turnId: currentTurn.turnId, cancelTimeoutMs: options.cancelTimeoutMs });
+                  } else {
+                    await host.respondTurnRequest({
+                      turnId: currentTurn.turnId,
+                      requestId: req.requestId,
+                      result: { outcome: { outcome: 'answered', answers } },
+                    });
+                  }
+                } else {
+                  await host.respondTurnRequest({
+                    turnId: currentTurn.turnId,
+                    requestId: req.requestId,
+                    error: { code: -32601, message: `Unsupported client method: ${req.method}` },
+                  });
+                }
+              },
+              onServerRequestResolved: (requestId) => {
+                const reqKey = `${typeof requestId}:${String(requestId)}`;
+                const permId = waitingPermissions.get(reqKey);
+                if (permId) {
+                  waitingPermissions.delete(reqKey);
+                  pendingPerms?.resolve(permId, { behavior: 'deny', message: 'Cursor 请求已结束。' });
+                }
+              },
+            });
+
+            if (outcome.status === 'detached') {
+              cancelLocalPermissions();
+              emit('result', {
+                ...(nativeSessionId ? { session_id: nativeSessionId } : {}),
+                detached: true,
+                hosted_turn_id: currentTurn.turnId,
+              });
+              return;
+            }
+
+            if (continuationText && !params.abortController?.signal.aborted) {
+              const nextPrompt = continuationText;
+              continuationText = undefined;
+              await host.ackTurn(currentTurn.turnId).catch(() => {});
+              emit('status', { reasoning: '自由文本回答已保留，正在作为新消息继续原任务。' });
+              const started = await host.startTurn({
+                sessionKey,
+                prompt: [{ type: 'text', text: nextPrompt }],
+                meta: currentTurn.meta,
+              });
+              currentTurn = started.turn;
+              continue;
+            }
+
+            const planLimitFailure = !outcome.error
+              && !nativeFailure
+              && outcome.status === 'completed'
+              && tools.size === 0
+              && isStandalonePlanLimitText(turnTextSample)
+              ? PLAN_LIMIT_FAILURE_MESSAGE
+              : undefined;
+            const failure = outcome.error || nativeFailure || planLimitFailure;
+            if (failure && outcome.status !== 'aborted') {
+              const retryKind = retryableError(failure);
+              const sessionStatus = await host.getSessionStatus(sessionKey).catch(() => null);
+              if (
+                retryKind
+                && retries < RETRY_LIMIT
+                && sessionStatus?.connected
+                && ![...tools.values()].some(tool => !tool.complete)
+                && waitingPermissions.size === 0
+                && !params.abortController?.signal.aborted
+              ) {
+                retries += 1;
+                await host.ackTurn(currentTurn.turnId).catch(() => {});
+                const resourceExhausted = retryKind === 'resource_exhausted';
+                const delayMs = Math.max(0, options.retryDelayMs ?? (resourceExhausted ? 30_000 : 1000)) * retries;
+                const reason = resourceExhausted ? 'Cursor 上游资源或额度受限' : 'Cursor 连接临时中断';
+                emit('status', { reasoning: `${reason}，${Math.ceil(delayMs / 1000)} 秒后自动续接（${retries}/${RETRY_LIMIT}）。` });
+                await new Promise<void>((resolve) => {
+                  const timer = setTimeout(resolve, delayMs);
+                  const wake = () => { clearTimeout(timer); resolve(); };
+                  params.abortController?.signal.addEventListener('abort', wake, { once: true });
+                });
+                if (params.abortController?.signal.aborted) {
+                  emit('result', { ...(nativeSessionId ? { session_id: nativeSessionId } : {}), outcome: 'aborted', stop_reason: 'cancelled' });
+                  return;
+                }
+                const started = await host.startTurn({
+                  sessionKey,
+                  prompt: [{ type: 'text', text: RETRY_PROMPT }],
+                  meta: currentTurn.meta,
+                });
+                currentTurn = started.turn;
+                continue;
+              }
+              if (isCursorAuthOrPlanError(failure)) {
+                hostedCursorAppliedEffort.delete(params.sessionId);
+                hostedCursorForce.delete(params.sessionId);
+                await host.closeSession(sessionKey).catch(() => {});
+              }
+              emit('error', failure);
+              emit('result', {
+                ...(outcome.nativeSessionId || nativeSessionId ? { session_id: outcome.nativeSessionId || nativeSessionId } : {}),
+                outcome: 'failed',
+                ...(outcome.stopReason ? { stop_reason: outcome.stopReason } : {}),
+                hosted_turn_id: currentTurn.turnId,
+              });
+              return;
+            }
+
+            if (outcome.status !== 'aborted') markAccepted();
+            emit('result', {
+              ...(outcome.nativeSessionId || nativeSessionId ? { session_id: outcome.nativeSessionId || nativeSessionId } : {}),
+              outcome: outcome.status,
+              stop_reason: outcome.stopReason || (outcome.status === 'aborted' ? 'cancelled' : 'end_turn'),
+              hosted_turn_id: currentTurn.turnId,
+            });
+            return;
+          }
+        } catch (error) {
+          emit('error', errorMessage(error));
+          emit('result', {
+            ...(params.cursorSessionId ? { session_id: params.cursorSessionId } : {}),
+            outcome: 'failed',
+            ...(activeTurnId ? { hosted_turn_id: activeTurnId } : {}),
+          });
+        } finally {
+          cancelLocalPermissions();
+          if (params.abortController?.signal.reason !== BRIDGE_SHUTDOWN_REASON) {
+            emit('status', { clear_pending_questions: true });
+          }
+          emit('done', '');
+          if (!readerCanceled) controller.close();
+        }
+      },
+      async cancel() {
+        readerCanceled = true;
+        if (activeHost && activeTurnId && params.abortController?.signal.reason !== BRIDGE_SHUTDOWN_REASON) {
+          await activeHost.cancelTurn({ turnId: activeTurnId, cancelTimeoutMs: options.cancelTimeoutMs }).catch(() => {});
+        }
+      },
     });
   }
 }
