@@ -3,7 +3,7 @@
 CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 
 - 运行时：当前会话使用 Codex、Claude Code、Kimi Code、Cursor Agent 还是 ZCode。
-- 提供方：当前运行时通过哪个兼容层运行。Codex 和 Cursor 均固定为 tmux；Codex app-server 与 Cursor Desktop/CLI 是内部执行方式，不是并列提供方。
+- 提供方：当前运行时通过哪个兼容层运行。Codex 固定为 `tmux`（app-server 优先执行），Cursor 固定为 `acp`（已通过 `/t` 接管的 Cursor Desktop 会话在内部自动走 Desktop transport，与 tmux 解耦）；对不支持 tmux 的运行时，`/p tmux` 会直接解释为 `/p acp`。
 
 日常 IM 操作流程见 [会话与配置工作流](../guide/session-workflows.md)。本文主要说明 provider 能力边界和实现模块。
 
@@ -16,8 +16,8 @@ CodeLark 把“使用哪个 AI 工具”和“如何驱动它”拆成两层。
 | Claude Code | `pty` | 使用本机 `claude` 或 `ccr code` TUI | Claude JSONL mirror + pty screen |
 | Claude Code | `sdk` | 使用 Claude Agent SDK | SDK message stream |
 | Kimi Code | `tmux` | 使用本机 Kimi Code TUI 长会话；仅向 active turn 自动补 `Ctrl-S` steer | tmux screen + Kimi `wire.jsonl` mirror |
-| Cursor Agent | `tmux` | 直接运行官方 `agent` TUI，保留原生交互和 slash 命令 | tmux screen + Cursor transcript JSONL mirror |
-| Cursor Desktop | `tmux` | `/t` 接管已经在 Cursor Desktop 中存在的可见对话 | Cursor Desktop Bridge 单写入 + 同一 transcript 只读 mirror |
+| Cursor Agent | `acp` | 使用官方 `agent acp` 协议流式执行；不再支持 Cursor CLI `tmux`（`/p tmux` 自动解释为 `/p acp`） | ACP 实时文字、工具调用、原生 diff 与问答事件 |
+| Cursor Desktop | `acp`（内部 Desktop 接管） | `/t` 接管已经在 Cursor Desktop 中存在的可见对话，路由层自动优先走 Desktop transport | Cursor Desktop Bridge 单写入 + 同一 transcript 只读 mirror |
 | ZCode | `tmux` | 运行本机 `zcode` TUI，保留原生 slash 命令和可 attach 会话 | ZCode SQLite/WAL direct stream + tmux screen；后台 mirror 同步外部变化 |
 
 补充说明：

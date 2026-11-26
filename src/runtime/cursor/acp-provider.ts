@@ -169,7 +169,7 @@ async function prepareSession(params: StreamChatParams, options: CursorAcpProvid
     });
     try {
       const initialized = await client.request<Record<string, unknown>>('initialize', {
-        protocolVersion: 1, clientInfo: { name: 'codelark', version: '0.5.1' },
+        protocolVersion: 1, clientInfo: { name: 'codelark', version: '0.6.0' },
         clientCapabilities: { _meta: { parameterizedModelPicker: true } },
       });
       if (params.cursorSessionId && record(initialized.agentCapabilities).loadSession !== true) {

@@ -31,6 +31,7 @@ import {
   setSessionCursorProviderUpdate,
 } from '../../domain/session-runtime.js';
 import { resolveCursorRuntimeConfig } from '../../bridge/session/support.js';
+import { resolveCursorTransport } from '../../bridge/session/cursor-transport.js';
 import { sessionLooksRunning } from '../../bridge/command/session-args.js';
 import type { JsonFileStore } from '../../storage/json-store.js';
 import {
@@ -254,7 +255,7 @@ function applySessionConfigToml(bridgeSessionId: string, payload: Record<string,
         (model) => ({ runtime: { cursor: { model } } }),
       );
     }
-    if (payload.cursorProvider === 'tmux' || payload.cursorProvider === 'acp' || payload.cursorProvider === '') {
+    if (payload.cursorProvider === 'acp' || payload.cursorProvider === '') {
       setOrUnsetSessionConfig(
         bridgeSessionId,
         'runtime.cursor.provider',
@@ -461,7 +462,7 @@ function sessionConfigPayload(session: BridgeSession) {
     kimiProvider: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.provider') || '',
     kimiThinkingMode: getSessionConfigTomlOverride<string>(session, 'runtime.kimi.thinkingMode') || '',
     cursorModel: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.model') || '',
-    cursorProvider: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.provider') || '',
+    cursorProvider: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.provider') ? 'acp' : '',
     cursorReasoningEffort: getSessionConfigTomlOverride<string>(session, 'runtime.cursor.reasoningEffort') || '',
     cursorForce: getSessionConfigTomlOverride<boolean>(session, 'runtime.cursor.force'),
     zcodeModel: getSessionConfigTomlOverride<string>(session, 'runtime.zcode.model') || '',
@@ -674,11 +675,18 @@ export class UiSessionApplication {
 
   updateConfig(bridgeSessionId: string, payload: Record<string, unknown>) {
     assertSupportedCodexProviderPayload(payload);
+    if (Object.prototype.hasOwnProperty.call(payload, 'cursorProvider')
+      && payload.cursorProvider !== 'acp'
+      && payload.cursorProvider !== '') {
+      throw new Error('Cursor Provider 只支持 acp。');
+    }
     const registry = this.createSessionRegistry();
     const before = registry.getVisibleBridgeSession(bridgeSessionId);
-    const cursorProvider = payload.cursorProvider === 'tmux' || payload.cursorProvider === 'acp'
-      ? payload.cursorProvider
-      : payload.cursorProvider === '' ? createConfigService({ migrate: false }).get<'tmux' | 'acp'>('runtime.cursor.provider') : undefined;
+    const cursorProvider = payload.cursorProvider === 'acp'
+      ? 'acp' as const
+      : payload.cursorProvider === '' && resolveCursorTransport(before) !== 'desktop'
+        ? 'acp' as const
+        : undefined;
     const beforeCursorProvider = resolveCursorRuntimeConfig(before).provider;
     if (getSessionActiveRuntime(before) === 'cursor' && cursorProvider
       && (cursorProvider !== beforeCursorProvider || cursorProvider !== getSessionCursorNativeProvider(before, beforeCursorProvider))

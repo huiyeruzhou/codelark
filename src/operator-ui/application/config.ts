@@ -101,7 +101,7 @@ const uiConfigPayloadSchema = z.object({
   kimiProvider: optionalEnum(kimiProviderSchema),
   kimiThinkingMode: optionalEnum(kimiThinkingModeSchema),
   cursorDefaultModel: optionalString(),
-  cursorProvider: optionalEnum(cursorProviderSchema),
+  cursorProvider: optionalEnum(z.enum(['acp'])),
   cursorReasoningEffort: z.preprocess(
     (value) => typeof value === 'string' ? value.trim().toLowerCase() : value,
     z.union([cursorReasoningEffortSchema, z.literal('')]),
@@ -168,7 +168,7 @@ export function configV2ToPayload(config: ConfigV2, presentation: UiConfigPresen
     kimiProvider: config.runtime.kimi.provider || 'tmux',
     kimiThinkingMode: config.runtime.kimi.thinkingMode || 'default',
     cursorDefaultModel: config.runtime.cursor.model || '',
-    cursorProvider: config.runtime.cursor.provider || 'acp',
+    cursorProvider: 'acp',
     cursorReasoningEffort: config.runtime.cursor.reasoningEffort || '',
     cursorForce: config.runtime.cursor.force === true,
     zcodeDefaultModel: config.runtime.zcode.model || '',
@@ -247,7 +247,7 @@ export function mergeConfigV2HomePatch(current: ConfigV2, payload: Record<string
         model: parsed.cursorDefaultModel === undefined
           ? current.runtime.cursor.model
           : parsed.cursorDefaultModel || '',
-        provider: parsed.cursorProvider ?? current.runtime.cursor.provider,
+        provider: parsed.cursorProvider ?? 'acp',
         reasoningEffort: parsed.cursorReasoningEffort ?? current.runtime.cursor.reasoningEffort,
         force: hasPayloadKey(payload, 'cursorForce')
           ? parsed.cursorForce === true

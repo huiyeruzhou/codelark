@@ -359,7 +359,7 @@ export class SessionRegistryService {
         cursor: {
           sessionId: localThread.cursorSessionId,
           cwd: localThread.cwd,
-          provider: 'tmux',
+          provider: 'acp',
           transport: localThread.transport === 'desktop' ? 'desktop' : 'cli',
         },
         general: { workingDirectory: localThread.cwd },

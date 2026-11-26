@@ -727,7 +727,7 @@ stream_status_check_interval_seconds = 3
     const metadata = simulator.adapter.streamMetadata.at(-1);
     assert.ok(metadata?.title);
     assert.match((metadata?.tags || []).join(' '), /\bcursor\b/);
-    assert.match((metadata?.tags || []).join(' '), /\btmux\b/);
+    assert.match((metadata?.tags || []).join(' '), /\bacp\b/);
     assert.doesNotMatch((metadata?.tags || []).join(' '), /\bsdk\b/);
   });
 

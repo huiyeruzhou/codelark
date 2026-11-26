@@ -6,7 +6,7 @@ import { ClaudePtyProvider } from '../claude/pty-provider.js';
 import { ClaudeSdkProvider } from '../claude/sdk-provider.js';
 import { ClaudeTmuxProvider } from '../claude/tmux-provider.js';
 import { KimiTmuxProvider } from '../kimi/tmux-provider.js';
-import { CursorTmuxProvider } from '../cursor/provider.js';
+import { CursorDesktopTransport } from '../cursor/desktop-provider.js';
 import { CursorAcpProvider } from '../cursor/acp-provider.js';
 import { ZcodeTmuxProvider } from '../zcode/tmux-provider.js';
 import { CodexTmuxProvider } from './tmux-provider.js';
@@ -22,7 +22,7 @@ export class CodexRoutingProvider implements LLMProvider {
   private readonly claudeSdkProvider: LLMProvider;
   private readonly claudeTmuxProvider: LLMProvider;
   private readonly kimiTmuxProvider: LLMProvider;
-  private readonly cursorTmuxProvider: LLMProvider;
+  private readonly cursorDesktopProvider: LLMProvider;
   private readonly cursorAcpProvider: LLMProvider;
   private readonly zcodeTmuxProvider: LLMProvider;
 
@@ -32,7 +32,7 @@ export class CodexRoutingProvider implements LLMProvider {
     this.claudeSdkProvider = new ClaudeSdkProvider();
     this.claudeTmuxProvider = new ClaudeTmuxProvider(pendingPerms);
     this.kimiTmuxProvider = new KimiTmuxProvider();
-    this.cursorTmuxProvider = new CursorTmuxProvider();
+    this.cursorDesktopProvider = new CursorDesktopTransport();
     this.cursorAcpProvider = new CursorAcpProvider(pendingPerms);
     this.zcodeTmuxProvider = new ZcodeTmuxProvider();
   }
@@ -47,14 +47,14 @@ export class CodexRoutingProvider implements LLMProvider {
       return this.zcodeTmuxProvider.streamChat(params);
     }
     if (params.runtime === 'cursor') {
-      const cursorProvider = params.cursorProvider || 'acp';
+      const isDesktop = params.cursorTransport === 'desktop';
       console.log('[codex-routing-provider] Route Cursor Agent request:', {
         bridge_session_id: params.sessionId,
         runtime: params.runtime,
-        provider: cursorProvider,
-        transport: params.cursorTransport || 'cli',
+        provider: isDesktop ? 'desktop' : 'acp',
+        transport: isDesktop ? 'desktop' : 'cli',
       });
-      return (cursorProvider === 'acp' ? this.cursorAcpProvider : this.cursorTmuxProvider).streamChat(params);
+      return (isDesktop ? this.cursorDesktopProvider : this.cursorAcpProvider).streamChat(params);
     }
     if (params.runtime === 'kimi') {
       console.log('[codex-routing-provider] Route Kimi Code request:', {

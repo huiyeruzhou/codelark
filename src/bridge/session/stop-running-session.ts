@@ -103,13 +103,6 @@ export async function stopRunningSession(options: {
   }
   options.deps.cancelQueuedSessionMessages?.(options.binding.bridgeSessionId);
   const session = options.store.getSession(options.binding.bridgeSessionId);
-  if (session && resolveEffectiveRuntimeProvider(session, options.binding).identity === 'cursor:acp') {
-    const task = options.deps.getActiveTask(session.id);
-    task?.abortController.abort();
-    const interrupted = await interruptCursorAcpSession(session.id);
-    return { stopped: interrupted || Boolean(task), method: interrupted || task ? 'acp_interrupt' : 'idle',
-      detail: interrupted ? 'Cursor ACP 已确认中断当前轮次。' : task ? '已取消本次输入，等待连接收尾。' : 'Cursor ACP 当前没有正在运行的轮次。' };
-  }
   if (session && resolveCursorTransport(session) === 'desktop') {
     const threadId = getSessionCursorSessionId(session);
     if (!threadId) throw new Error('当前 Cursor Desktop 会话没有绑定 thread，未发送停止请求。');
@@ -126,6 +119,13 @@ export async function stopRunningSession(options: {
         ? '已向 Cursor Desktop 请求中断，等待后端确认轮次结束。'
         : 'Cursor Desktop 当前没有正在运行的轮次。',
     };
+  }
+  if (session && resolveEffectiveRuntimeProvider(session, options.binding).identity === 'cursor:acp') {
+    const task = options.deps.getActiveTask(session.id);
+    task?.abortController.abort();
+    const interrupted = await interruptCursorAcpSession(session.id);
+    return { stopped: interrupted || Boolean(task), method: interrupted || task ? 'acp_interrupt' : 'idle',
+      detail: interrupted ? 'Cursor ACP 已确认中断当前轮次。' : task ? '已取消本次输入，等待连接收尾。' : 'Cursor ACP 当前没有正在运行的轮次。' };
   }
   const registered = getCodexAppServerSession(options.binding.bridgeSessionId);
   if (session && resolveEffectiveRuntimeProvider(session, options.binding).runtime === 'codex'

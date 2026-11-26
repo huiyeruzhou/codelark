@@ -5,6 +5,7 @@ import {
   getSessionActiveRuntime,
   getSessionCursorCwd,
   getSessionCursorSessionId,
+  type SessionRuntimeLike,
 } from '../../domain/session-runtime.js';
 import {
   findCursorSessionFileById,
@@ -13,7 +14,7 @@ import {
 
 type FindCursorThread = (sessionId: string, cwd?: string) => CursorSessionFileSummary | null;
 export function resolveCursorTransport(
-  session: BridgeSession | null | undefined,
+  session: SessionRuntimeLike | null | undefined,
   findThread: FindCursorThread = findCursorSessionFileById,
 ): CursorTransport {
   if (getSessionActiveRuntime(session) !== 'cursor') return 'cli';
@@ -48,11 +49,11 @@ export function upgradeCursorDesktopSessionIdentity(
     getSessionActiveRuntime(session) !== 'cursor'
     || session.runtime?.cursor?.sessionProvider === 'acp'
     || transport !== 'desktop'
-    || (session.runtime?.cursor?.transport === 'desktop' && session.runtime.cursor.provider === 'tmux')
+    || (session.runtime?.cursor?.transport === 'desktop' && session.runtime.cursor.provider === 'acp')
   ) {
     return session;
   }
-  store.updateSession(session.id, { runtime: { cursor: { provider: 'tmux', transport: 'desktop' } } }, { touch: false });
+  store.updateSession(session.id, { runtime: { cursor: { provider: 'acp', transport: 'desktop' } } }, { touch: false });
   return store.getSession(session.id) || session;
 }
 
@@ -62,7 +63,7 @@ export function migrateCursorDesktopSessionIdentities(
 ): number {
   let migrated = 0;
   for (const session of store.listSessions()) {
-    if (session.runtime?.cursor?.transport === 'desktop' && session.runtime.cursor.provider === 'tmux') continue;
+    if (session.runtime?.cursor?.transport === 'desktop' && session.runtime.cursor.provider === 'acp') continue;
     if (resolveCursorTransport(session, findThread) !== 'desktop') continue;
     upgradeCursorDesktopSessionIdentity(store, session, 'desktop');
     migrated += 1;

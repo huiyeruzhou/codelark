@@ -8,7 +8,7 @@
 
 - 代码仓库：[GitHub](https://github.com/huiyeruzhou/codelark)
 - 文档站：[使用文档](https://huiyeruzhou.github.io/site/codelark/)
-- 当前 npm 版本：`codelark@0.5.1`
+- 当前 npm 版本：`codelark@0.6.0`
 
 ## 核心能力
 
@@ -96,6 +96,10 @@ npx --yes --package=npm@11.6.2 -c 'codelark_pkg=$(npm pack "git+https://github.c
 ```
 
 命令临时使用 npm 11.6.2，在当前目录生成源码构建包后全局安装；不会替换系统 npm。先打包可以避免 Git 依赖准备阶段继承全局安装配置的问题，也兼容系统 npm 12 默认禁止直接安装 Git 来源的行为。
+
+## v0.6.0
+
+`0.6.0` 将 Cursor Agent 统一收口为原生 ACP 协议流式执行（不再支持 Cursor CLI tmux，`/p tmux` 自动解释为 `/p acp`，已通过 `/t` 接管的 Cursor Desktop 会话继续保持 Desktop 接管）；群聊回复支持话题线程隔离与卡片一键 Fork 会话；同时增强飞书公式与表格渲染，并全面加固 Codex、Claude Code 与 Kimi 2.4.0 的会话隔离和投递可靠性。
 
 ## v0.5.1
 

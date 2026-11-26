@@ -31,7 +31,6 @@ import {
 import { restartKimiTmuxInputSession } from '../../runtime/kimi/tmux-provider.js';
 import {
   cursorTmuxSessionName,
-  restartCursorTmuxInputSession,
 } from '../../runtime/cursor/tmux-provider.js';
 import {
   restartZcodeTmuxInputSession,
@@ -113,7 +112,7 @@ function clearSessionKimiProviderToml(sessionId: string): void {
   );
 }
 
-function setSessionCursorProviderToml(sessionId: string, provider: CursorProviderChoice = 'tmux'): void {
+function setSessionCursorProviderToml(sessionId: string, provider: CursorProviderChoice = 'acp'): void {
   createConfigService({ migrate: false }).set(
     { kind: 'session', sessionId },
     { runtime: { cursor: { provider } } },
@@ -300,11 +299,15 @@ interface ProviderCommandOptions {
 
 export async function handleProviderCommand(options: ProviderCommandOptions): Promise<SessionCommandResult> {
   const confirmation = /^(tmux|acp) --(restart|cancel-restart)=([a-f0-9-]+)$/i.exec(options.args.trim());
-  const requested = confirmation?.[1]?.toLowerCase() || options.args.trim().toLowerCase();
+  const rawRequested = confirmation?.[1]?.toLowerCase() || options.args.trim().toLowerCase();
   const binding = options.currentBinding || router.resolve(options.msg.address);
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) return { response: '当前会话不存在。' };
   const runtime = getSessionActiveRuntime(session) || 'codex';
+  const cursorAliasedFromTmux = runtime === 'cursor' && (rawRequested === 'tmux' || rawRequested === 'tmux --confirm');
+  const requested = cursorAliasedFromTmux
+    ? (rawRequested === 'tmux --confirm' ? 'acp --confirm' : 'acp')
+    : rawRequested;
   if (runtime === 'cursor' && requested === 'acp --confirm') {
     const id = pendingProviderTransitionId(binding, session, 'acp');
     if (!id) return { response: '没有待确认的 ACP 切换，请先执行 /p acp。' };
@@ -318,7 +321,7 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
   }
   const provider = isCursorAcp ? 'acp' : 'tmux';
   const task = options.deps.getActiveTask?.(session.id)?.abortController;
-  if (provider === 'tmux' && runtime === 'cursor' && resolveCursorRuntimeConfig(session, binding).transport === 'desktop') {
+  if (cursorAliasedFromTmux && resolveCursorRuntimeConfig(session, binding).transport === 'desktop') {
     return { response: await applyProviderCommand({ ...options, args: 'tmux' }) };
   }
   if (confirmation) {
@@ -354,22 +357,21 @@ export async function handleProviderCommand(options: ProviderCommandOptions): Pr
   } else {
     const shared = runtime === 'codex'
       && (session.runtime?.codex?.appServerEndpoint || getCodexAppServerSession(session.id));
-    const recordedCursorTmux = runtime === 'cursor' && provider === 'tmux'
-      && session.runtime?.cursor?.transport !== 'desktop'
-      && session.runtime?.general?.tmuxSessionName === cursorTmuxSessionName(session.id)
-      ? { sessionName: cursorTmuxSessionName(session.id), runtime: 'cursor' as const }
-      : undefined;
-    const target = getProviderOwnedRuntimeTmuxTarget(session, binding) || recordedCursorTmux;
+    const target = getProviderOwnedRuntimeTmuxTarget(session, binding);
     const currentCursorProvider = resolveCursorRuntimeConfig(session, binding).provider;
     const changingCursor = isCursorAcp && (currentCursorProvider !== 'acp'
       || getSessionCursorNativeProvider(session, currentCursorProvider) !== 'acp');
-    if ((!isCursorAcp && !shared && (sessionHasActiveRuntimeTurn(options.deps, session)
-      || (target && (runtime !== 'cursor' || (await tmuxCore.hasSession(target.sessionName)).exists))))
+    if ((!isCursorAcp && !shared && (sessionHasActiveRuntimeTurn(options.deps, session) || Boolean(target)))
       || (changingCursor && sessionHasActiveRuntimeTurn(options.deps, session))) {
       return requestProviderTransition(binding, session, provider, task);
     }
   }
-  return { response: await applyProviderCommand({ ...options, args: provider }, Boolean(confirmation) && isCursorAcp) };
+  return {
+    response: await applyProviderCommand(
+      { ...options, args: cursorAliasedFromTmux ? 'tmux' : provider },
+      Boolean(confirmation) && isCursorAcp,
+    ),
+  };
 }
 
 async function applyProviderCommand(options: ProviderCommandOptions, confirmedCursorSwitch = false): Promise<string> {
@@ -592,138 +594,79 @@ async function applyProviderCommand(options: ProviderCommandOptions, confirmedCu
     );
   }
   if (getSessionActiveRuntime(session) === 'cursor') {
-    const requested = options.args.trim().toLowerCase();
+    const rawRequested = options.args.trim().toLowerCase();
+    const aliasedFromTmux = rawRequested === 'tmux';
+    const requested = aliasedFromTmux ? 'acp' : rawRequested;
     const currentCursorConfig = resolveCursorRuntimeConfig(session, binding);
     if (!requested) {
       return buildCommandFields(
         '当前 Cursor Provider',
-        [['Runtime', 'cursor'], ['Provider', currentCursorConfig.provider]],
-        [currentCursorConfig.provider === 'acp'
-          ? '当前使用 ACP 实时事件；运行中的新消息会中断当前生成后继续。发送 `/provider tmux` 切回终端。'
-          : currentCursorConfig.transport === 'desktop'
-          ? '当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'
-          : '发送 `/provider acp` 使用实时事件，`/provider tmux` 重新启动官方 TUI，或 `/provider default` 清除会话级覆盖。'],
+        [
+          ['Runtime', 'cursor'],
+          ['Provider', 'acp'],
+          ...(currentCursorConfig.transport === 'desktop' ? [['接管来源', 'Cursor Desktop'] as [string, string]] : []),
+        ],
+        [currentCursorConfig.transport === 'desktop'
+          ? '当前会话由 Cursor Desktop 管理，继续使用已绑定对话。Cursor 不再支持 tmux，非 Desktop 会话统一使用 ACP；发送 `/provider acp` 可切换到新 ACP 会话。'
+          : 'Cursor 已统一使用 ACP 实时事件（不再支持 tmux，`/p tmux` 会自动按 `/p acp` 处理）；运行中的新消息会中断当前生成后继续。'],
         options.markdown,
       );
     }
-    if (requested !== 'tmux' && requested !== 'acp' && requested !== 'default') {
+    if (requested !== 'acp' && requested !== 'default') {
       return buildCommandFields(
         'Cursor Provider 用法',
-        [['命令', '`/provider tmux|acp|default` 或 `/p tmux|acp|default`']],
-        ['ACP 直接同步文字和工具事件；运行中的新消息会中断当前生成后继续。'],
+        [['命令', '`/provider acp|default` 或 `/p acp|default`']],
+        ['Cursor 不再支持 tmux（`/p tmux` 会自动解释为 `/p acp`）；已通过 `/t` 接管的 Cursor Desktop 对话会自动保持 Desktop 接管。'],
         options.markdown,
       );
     }
-    const nextProvider = requested === 'default'
-      ? (currentCursorConfig.transport === 'desktop' ? 'tmux' : scopedConfigForRuntime(binding).config.runtime.cursor.provider)
-      : requested;
+    if (aliasedFromTmux && currentCursorConfig.transport === 'desktop') {
+      return buildCommandFields(
+        '当前 Cursor Provider',
+        [['Runtime', 'cursor'], ['Provider', 'acp'], ['接管来源', 'Cursor Desktop']],
+        [
+          'Cursor 不支持 tmux，已将 `/p tmux` 解释为 `/p acp`。',
+          '当前会话由 Cursor Desktop 管理，继续使用已绑定对话；如需切换到全新 ACP 会话，请发送 `/p acp` 或 `/clear`。',
+        ],
+        options.markdown,
+      );
+    }
     const nativeProvider = getSessionCursorNativeProvider(session, currentCursorConfig.provider);
-    const changingProvider = nextProvider !== currentCursorConfig.provider || nextProvider !== nativeProvider;
+    const changingProvider = requested === 'acp'
+      && (currentCursorConfig.transport === 'desktop' || nativeProvider !== 'acp');
     if (changingProvider && !confirmedCursorSwitch && sessionHasActiveRuntimeTurn(options.deps, session)) {
       return buildRuntimeSwitchWhileRunningResponse({
         sessionId: session.id, richCard: options.richCard, commandLabel: `/provider ${requested}`,
         runtime: 'cursor', provider: currentCursorConfig.provider, markdown: options.markdown,
       });
     }
-    if (requested === 'default' || requested === 'acp') {
-      if (requested === 'default') clearSessionCursorProviderToml(session.id);
-      else setSessionCursorProviderToml(session.id, nextProvider);
-      options.store.updateSession(session.id, {
-        ...setSessionCursorProviderUpdate(session, nextProvider),
-        ...(confirmedCursorSwitch ? { runtime_status: 'idle' as const, queued_count: 0, pending_user_input: undefined } : {}),
-      });
-      scheduleMirrorSubscriptionsBestEffort(options.deps, `cursor provider ${requested}`);
-      return buildCommandFields(
-        requested === 'default' ? '已清除 Cursor Provider 配置覆盖' : '已切换 Cursor Provider',
-        [['Runtime', 'cursor'], ['Provider', nextProvider]],
-        [
-          nextProvider === 'acp'
-            ? '之后的消息使用 ACP 实时事件；运行中的新消息会中断当前生成，再继续处理新消息。'
-            : currentCursorConfig.transport === 'desktop' && !changingProvider
-              ? '当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'
-              : '之后的消息使用 Cursor Agent tmux。',
-          ...(changingProvider && getSessionCursorSessionId(session)
-            ? ['两种协议使用独立的原生会话；旧会话记录和身份已保留，下一条消息会创建新会话。'] : []),
-        ],
-        options.markdown,
-      );
+    if (requested === 'default') {
+      clearSessionCursorProviderToml(session.id);
+      if (currentCursorConfig.transport === 'desktop') {
+        scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider default');
+        return buildCommandFields(
+          '已清除 Cursor Provider 配置覆盖',
+          [['Runtime', 'cursor'], ['Provider', 'acp'], ['接管来源', 'Cursor Desktop']],
+          ['当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'],
+          options.markdown,
+        );
+      }
+    } else {
+      setSessionCursorProviderToml(session.id, 'acp');
     }
-    if (currentCursorConfig.transport === 'desktop') {
-      return buildCommandFields(
-        '当前 Cursor Provider',
-        [['Runtime', 'cursor'], ['Provider', 'tmux']],
-        ['当前会话由 Cursor Desktop 管理，继续使用已绑定对话。'],
-        options.markdown,
-      );
-    }
-    const cursorConfig = currentCursorConfig;
-    const cursorSessionId = getSessionCursorSessionIdForProvider(session, 'tmux');
-    const tmuxSessionName = cursorTmuxSessionName(session.id);
-    await options.deps.notifyBackgroundOperation?.(
-      `正在重新启动 Cursor Agent tmux 后台会话 \`${tmuxSessionName}\`；首次打开工作区时可能需要先建立索引。`,
-      { force: true },
-    );
-    let prepared: Awaited<ReturnType<typeof restartCursorTmuxInputSession>>;
-    try {
-      prepared = await (options.deps.restartCursorTmuxSession || restartCursorTmuxInputSession)({
-        prompt: '',
-        sessionId: session.id,
-        runtime: 'cursor',
-        cursorSessionId,
-        cursorForce: cursorConfig.force,
-        workingDirectory: getSessionWorkingDirectory(session),
-        model: resolveCursorInvocationModel(binding, session, {
-          resuming: Boolean(cursorSessionId),
-        }),
-      }, {
-        onAuthentication: options.deps.notifyBackgroundOperation
-          ? message => { void options.deps.notifyBackgroundOperation!(message, { force: true }); } : undefined,
-      });
-    } catch (error) {
-      const staleStart = await cancelStaleTmuxProviderStart({
-        store: options.store,
-        msg: options.msg,
-        sessionId: session.id,
-        runtime: 'cursor',
-        tmuxSessionName,
-        markdown: options.markdown,
-      });
-      if (staleStart) return staleStart;
-      throw error;
-    }
-    const staleStart = await cancelStaleTmuxProviderStart({
-      store: options.store,
-      msg: options.msg,
-      sessionId: session.id,
-      runtime: 'cursor',
-      tmuxSessionName: prepared.sessionName,
-      markdown: options.markdown,
-    });
-    if (staleStart) return staleStart;
-    const identityUpdate = mergeSessionRuntimeUpdates(
-      setSessionCursorProviderUpdate(session, 'tmux'),
-      setSessionCursorIdentityUpdate(prepared.sessionId, prepared.cwd),
-    );
     options.store.updateSession(session.id, {
-      ...identityUpdate,
-      runtime: {
-        ...identityUpdate.runtime,
-        general: {
-          tmuxSessionName: prepared.sessionName,
-          autoEnter: true,
-        },
-      },
+      ...setSessionCursorProviderUpdate(session, 'acp'),
+      ...(confirmedCursorSwitch ? { runtime_status: 'idle' as const, queued_count: 0, pending_user_input: undefined } : {}),
     });
-    setSessionCursorProviderToml(session.id);
-    scheduleMirrorSubscriptionsBestEffort(options.deps, 'cursor provider tmux');
+    scheduleMirrorSubscriptionsBestEffort(options.deps, `cursor provider ${requested}`);
     return buildCommandFields(
-      'Cursor Provider · tmux 已启动',
-      [['Runtime', 'cursor'], ['Provider', 'tmux'], ['tmux session', prepared.sessionName]],
+      requested === 'default' ? '已清除 Cursor Provider 配置覆盖' : '已切换 Cursor Provider',
+      [['Runtime', 'cursor'], ['Provider', 'acp']],
       [
-        prepared.existed
-          ? '同名 tmux session 已存在，已先销毁并重新启动 Cursor Agent TUI。'
-          : '已启动 Cursor Agent TUI。',
-        '之后的普通消息会使用 Cursor Agent tmux/transcript 路径。',
+        ...(aliasedFromTmux ? ['Cursor 不支持 tmux，已将 `/p tmux` 解释为 `/p acp`。'] : []),
+        '之后的消息使用 ACP 实时事件；运行中的新消息会中断当前生成，再继续处理新消息。',
+        ...(changingProvider && getSessionCursorSessionId(session)
+          ? ['旧会话记录和身份已保留，下一条消息会创建新的 ACP 会话。'] : []),
       ],
       options.markdown,
     );

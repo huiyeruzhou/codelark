@@ -4918,89 +4918,30 @@ enabled = true
     assert.match(sent.at(-1)?.text || '', /已切换 ZCode Provider/);
   });
 
-  it('restarts an idle missing Cursor pane while retaining confirmation for a live pane', async (t) => {
+  it('interprets /p tmux on Cursor as /p acp without launching a tmux pane', async () => {
     const store = initTestContext();
     const sent: any[] = [];
     const adapter = createGroupCapableAdapter({ sent });
-    const address = { channelType: 'feishu', chatId: 'chat-cursor-missing-pane' } as const;
-    const session = store.createSession('cursor-missing-pane', 'test-model');
-    const name = `clk-cursor-${session.id}`;
+    const address = { channelType: 'feishu', chatId: 'chat-cursor-tmux-alias' } as const;
+    const session = store.createSession('cursor-tmux-alias', 'test-model');
     store.updateSession(session.id, { runtime_status: 'idle', runtime: {
-      activeRuntime: 'cursor', cursor: { sessionId: 'native-preserved' }, general: { tmuxSessionName: name },
+      activeRuntime: 'cursor', cursor: { sessionId: 'legacy-preserved' },
     } });
     store.upsertChannelChat({ ...address, bridgeSessionId: session.id });
-    let exists = true, starts = 0;
-    t.mock.method(tmuxCore, 'hasSession', async (target: string) => {
-      assert.equal(target, name);
-      return { exists, command: 'tmux has-session' };
-    });
+    let starts = 0;
     const deps = {
       getActiveTask: () => undefined, diagnoseSessionHealth: async () => null,
       diagnoseAllActiveSessions: async () => [], reconcileMirrorSubscriptions: async () => {},
-      restartCursorTmuxSession: async (params: any) => {
+      restartCursorTmuxSession: async () => {
         starts++;
-        assert.equal(params.cursorSessionId, 'native-preserved');
-        return { sessionName: name, targetPane: `${name}:0.0`, nextOffset: 0, existed: false,
-          sessionId: 'native-preserved' };
+        throw new Error('Cursor must not launch tmux');
       },
     };
-    await handleBridgeCommand(adapter, { address, text: '/p tmux', messageId: 'live-pane' } as any, '/p tmux', deps);
-    assert.equal(starts, 0, 'a live native pane still requires confirmation');
-    assert.match(sent.at(-1)?.text || '', /结束并重启/);
-    exists = false;
-    await handleBridgeCommand(adapter, { address, text: '/p tmux', messageId: 'missing-pane' } as any, '/p tmux', deps);
-    assert.equal(starts, 1, 'an old binding with no active task or native pane can be restored');
-    assert.match(sent.at(-1)?.text || '', /Cursor Provider · tmux 已启动/);
-    assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, 'native-preserved');
-  });
-
-  it('explains Cursor workspace indexing before /p tmux cold startup finishes', async () => {
-    const store = initTestContext();
-    const sent: any[] = [];
-    const adapter = createGroupCapableAdapter({ sent });
-    const address = { channelType: 'feishu', chatId: 'chat-cursor-provider-indexing' } as const;
-    const session = store.createSession('cursor-provider-indexing', 'test-model');
-    store.updateSession(session.id, { runtime: { activeRuntime: 'cursor' } });
-    store.upsertChannelChat({
-      channelType: address.channelType,
-      chatId: address.chatId,
-      bridgeSessionId: session.id,
-    });
-    const restartStarted = createDeferred<void>();
-    const releaseRestart = createDeferred<void>();
-
-    const provider = handleBridgeCommand(
-      adapter,
-      { address, text: '/p tmux', messageId: 'incoming-cursor-provider-indexing' } as any,
-      '/p tmux',
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-        reconcileMirrorSubscriptions: async () => {},
-        restartCursorTmuxSession: async () => {
-          restartStarted.resolve();
-          await releaseRestart.promise;
-          return {
-            sessionName: `clk-cursor-${session.id}`,
-            targetPane: `clk-cursor-${session.id}:0.0`,
-            nextOffset: 0,
-            existed: false,
-          };
-        },
-      },
-    );
-    await restartStarted.promise;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-
-    assert.ok(
-      sent.some((message) => /首次打开工作区时可能需要先建立索引/.test(message.text || '')),
-      'the user must see why Cursor cold startup can take time before the provider command finishes',
-    );
-
-    releaseRestart.resolve();
-    await provider;
-    assert.match(sent.at(-1)?.text || '', /Cursor Provider · tmux 已启动/);
+    await handleBridgeCommand(adapter, { address, text: '/p tmux', messageId: 'cursor-p-tmux' } as any, '/p tmux', deps);
+    assert.equal(starts, 0);
+    assert.match(sent.at(-1)?.text || '', /已将 `\/p tmux` 解释为 `\/p acp`/);
+    assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionProvider, 'acp');
+    assert.equal(store.getSession(session.id)?.runtime?.cursor?.previousSession?.sessionId, 'legacy-preserved');
   });
 
   it('does not let a delayed provider tmux startup write back after clear rebinds the chat', async () => {

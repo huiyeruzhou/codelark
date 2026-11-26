@@ -20,7 +20,7 @@ import type { ConfigPath } from '../configuration/fields.js';
 
 export type BridgeSessionRuntimeUpdate = BridgeSessionUpdate;
 
-type SessionRuntimeLike = {
+export type SessionRuntimeLike = {
   id?: string;
   runtime?: {
     activeRuntime?: BridgeSessionRuntimeState['activeRuntime'];
@@ -211,7 +211,7 @@ export function getSessionCursorModel(session: SessionRuntimeLike | null | undef
 export function getSessionCursorProvider(session: SessionRuntimeLike | null | undefined): CursorProviderChoice | undefined {
   if (!isCursorRuntime(session)) return undefined;
   const provider = getSessionTomlOverride<string>(session, 'runtime.cursor.provider');
-  return provider === 'acp' ? 'acp' : provider === 'tmux' ? 'tmux' : undefined;
+  return provider === 'acp' || provider === 'tmux' ? 'acp' : undefined;
 }
 
 export function getSessionZcodeSessionId(session: SessionRuntimeLike | null | undefined): string | undefined {
@@ -412,8 +412,15 @@ export function setSessionKimiIdentityUpdate(
 export function setSessionCursorIdentityUpdate(
   sessionId: string | undefined,
   cwd: string | undefined,
-  provider: CursorProviderChoice = 'tmux',
+  provider: CursorProviderChoice = 'acp',
+  transport?: 'cli' | 'desktop',
 ): BridgeSessionRuntimeUpdate {
+  if (transport === 'desktop') {
+    return { runtime: { activeRuntime: 'cursor', cursor: {
+      sessionId, cwd,
+      ...(sessionId ? { transport: 'desktop' } as const : { transport: undefined }),
+    } } };
+  }
   return { runtime: { activeRuntime: 'cursor', cursor: {
     sessionId, cwd, sessionProvider: provider,
     ...(provider === 'acp' ? { provider, transport: 'cli' } as const : {}),

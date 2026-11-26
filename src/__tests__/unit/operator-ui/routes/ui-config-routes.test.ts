@@ -350,21 +350,21 @@ describe('Ui config application', () => {
     const payload = configV2ToPayload(current);
     assert.equal(payload.runtime, 'cursor');
     assert.equal(payload.cursorDefaultModel, 'cursor-current');
-    assert.equal(payload.cursorProvider, 'tmux');
+    assert.equal(payload.cursorProvider, 'acp');
     assert.equal(payload.cursorReasoningEffort, 'high');
     assert.equal(payload.cursorForce, true);
 
     const patch = mergeConfigV2HomePatch(current, {
       runtime: 'cursor',
       cursorDefaultModel: 'cursor-next',
-      cursorProvider: 'tmux',
+      cursorProvider: 'acp',
       cursorReasoningEffort: 'max',
       cursorForce: false,
     });
     assert.equal(patch.runtime?.agent, 'cursor');
     assert.deepEqual(patch.runtime?.cursor, {
       model: 'cursor-next',
-      provider: 'tmux',
+      provider: 'acp',
       force: false,
       reasoningEffort: 'max',
     });
@@ -422,7 +422,7 @@ describe('Ui config application', () => {
       ['runtime', runtimeAgentSchema.options],
       ['kimiProvider', kimiProviderSchema.options],
       ['kimiThinkingMode', kimiThinkingModeSchema.options],
-      ['cursorProvider', cursorProviderSchema.options],
+      ['cursorProvider', ['acp']],
       ['cursorReasoningEffort', ['', ...cursorReasoningEffortSchema.options]],
       ['zcodeProvider', zcodeProviderSchema.options],
       ['zcodeMode', zcodeModeSchema.options],

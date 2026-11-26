@@ -235,7 +235,7 @@ describe('handleUiSessionRoute', () => {
       assert.equal(imported.statusCode, 200);
       assert.equal(imported.body.config.activeRuntime, 'cursor');
       assert.equal(imported.body.session.cursorSessionId, sessionId);
-      assert.equal(store.getSession(imported.body.bridgeSessionId)?.runtime?.cursor?.provider, 'tmux');
+      assert.equal(store.getSession(imported.body.bridgeSessionId)?.runtime?.cursor?.provider, 'acp');
 
       const history = await dispatch(store, createGetRequest(), `http://localhost/api/session-history?cursorSessionId=${encodeURIComponent(sessionId)}&cursorCwd=${encodeURIComponent(cwd)}`);
       assert.equal(history.statusCode, 200);

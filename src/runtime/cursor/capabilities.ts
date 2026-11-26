@@ -3,7 +3,7 @@ import type { CursorTransport } from '../../domain/session.js';
 /** Standard transport capabilities. Optional Desktop model control is probed per instance
  * by desktop-bridge-client; it never changes this provider or enables TOML writes. */
 export interface CursorCapabilities {
-  readonly provider: 'tmux';
+  readonly provider: 'acp';
   readonly transport: CursorTransport;
   /** A CLI catalog is neither the target conversation's selection nor an authorization result. */
   readonly modelCatalog: 'cli' | 'unavailable';
@@ -13,13 +13,13 @@ export interface CursorCapabilities {
 
 const CAPABILITIES: Record<CursorTransport, CursorCapabilities> = {
   desktop: Object.freeze({
-    provider: 'tmux',
+    provider: 'acp',
     transport: 'desktop',
     modelCatalog: 'unavailable',
     modelConfiguration: 'external',
   }),
   cli: Object.freeze({
-    provider: 'tmux',
+    provider: 'acp',
     transport: 'cli',
     modelCatalog: 'cli',
     modelConfiguration: 'process-launch',

@@ -24,8 +24,7 @@ for (const confirmation of ['text', 'button', 'tmux', 'stale-text', 'tmux-idle',
   const tmuxCommand = confirmation.startsWith('tmux');
   const acpCommand = confirmation === 'acp';
   if (acpCommand) {
-    createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { cursor: { provider: 'tmux' } } });
-    store.updateSession(binding.bridgeSessionId, { runtime_status: 'running', runtime: { activeRuntime: 'cursor', cursor: { provider: 'tmux', sessionId: 'old-tui' } } });
+    store.updateSession(binding.bridgeSessionId, { runtime_status: 'running', runtime: { activeRuntime: 'cursor', cursor: { provider: 'acp', transport: 'desktop', sessionId: 'old-tui' } } });
   }
   if (confirmation.endsWith('-idle')) {
     createConfigService({ migrate: false, env: {} }).set({ kind: 'session', sessionId: binding.bridgeSessionId }, { runtime: { codex: { provider: 'tmux' } } });

@@ -594,14 +594,14 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     group: 'runtime.cursor',
     aliases: ['cursorDefaultProvider'],
     label: 'provider',
-    usage: '/set cursorProvider tmux|acp',
+    usage: '/set cursorProvider acp',
     control: 'select',
-    options: [selectOption('tmux'), selectOption('acp')],
-    read: (config) => config.runtime.cursor.provider || 'acp',
+    options: [selectOption('acp')],
+    read: () => 'acp',
     write(rawValue) {
       const token = rawValue.trim().toLowerCase();
-      if (token === 'tmux' || token === 'acp') return patch({ runtime: { cursor: { provider: token } } });
-      return { ok: false, message: 'Cursor Provider 必须是 tmux 或 acp。' };
+      if (token === 'acp' || token === 'tmux') return patch({ runtime: { cursor: { provider: 'acp' } } });
+      return { ok: false, message: 'Cursor Provider 只支持 acp（已通过 /t 接管的 Cursor Desktop 会话会自动保持 Desktop 接管）。' };
     },
   },
   {

@@ -372,7 +372,7 @@ function materializeCursorThread(store: BridgeStore, thread: LocalRuntimeSession
     { runtime: { cursor: {
       sessionId: thread.threadId,
       cwd: thread.cwd,
-      provider: 'tmux',
+      provider: 'acp',
       transport: thread.source === 'cursor-desktop' ? 'desktop' : 'cli',
     } } },
   ));

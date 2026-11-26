@@ -227,9 +227,9 @@ export async function processMessage(
     const cursorRuntimeConfig = activeRuntime === 'cursor' ? resolveCursorRuntimeConfig(session, binding) : null;
     const zcodeRuntimeConfig = activeRuntime === 'zcode' ? resolveZcodeRuntimeConfig(session, binding) : null;
 
-    if (cursorRuntimeConfig && getSessionCursorSessionId(session)
+    if (cursorRuntimeConfig && cursorRuntimeConfig.transport !== 'desktop' && getSessionCursorSessionId(session)
       && !getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider)) {
-      throw new Error(`当前 Cursor 历史属于另一种接入方式，请先用 /p ${cursorRuntimeConfig.provider} 切换；尚未提交本条输入。`);
+      throw new Error(`当前 Cursor 历史属于旧版 CLI/tmux 会话，请先用 /p ${cursorRuntimeConfig.provider} 切换到新 ACP 会话；尚未提交本条输入。`);
     }
     const { savedContent, llmFiles, persistedFileMeta } = prepareMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
@@ -250,7 +250,11 @@ export async function processMessage(
     const codexThreadId = getSessionCodexThreadId(session);
     const claudeSessionId = getSessionClaudeSessionId(session);
     const kimiSessionId = getSessionKimiSessionId(session);
-    const cursorSessionId = cursorRuntimeConfig ? getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider) : undefined;
+    const cursorSessionId = cursorRuntimeConfig
+      ? (cursorRuntimeConfig.transport === 'desktop'
+        ? getSessionCursorSessionId(session)
+        : getSessionCursorSessionIdForProvider(session, cursorRuntimeConfig.provider))
+      : undefined;
     const zcodeSessionId = getSessionZcodeSessionId(session);
 
     // Effective model
@@ -343,12 +347,13 @@ export async function processMessage(
         // ACP cancellation is a request, not the terminal event. Its owner must
         // drain the remaining text/tool results until session/prompt settles.
         // A genuinely superseded task still cannot write to the next turn.
-        isCurrentTask: cursorRuntimeConfig?.provider === 'acp'
+        isCurrentTask: cursorRuntimeConfig?.provider === 'acp' && cursorRuntimeConfig.transport !== 'desktop'
           ? () => options?.isCurrentTask?.() !== false
           : isCurrentTask,
       },
       activeRuntime,
       cursorRuntimeConfig?.provider,
+      cursorRuntimeConfig?.transport,
     );
   } finally {
     clearInterval(renewalInterval);
@@ -387,6 +392,7 @@ async function consumeStream(
   },
   activeRuntime: RuntimeAgent = 'codex',
   cursorProvider: 'tmux' | 'acp' = 'acp',
+  cursorTransport?: 'cli' | 'desktop',
 ): Promise<ConversationResult> {
   const { store } = runtime;
   const contentBlocks: MessageContentBlock[] = [];
@@ -610,6 +616,7 @@ async function consumeStream(
                   statusData.session_id,
                   typeof statusData.cwd === 'string' ? statusData.cwd : undefined,
                   cursorProvider,
+                  cursorTransport,
                 ));
                 await options?.onRuntimeIdentity?.({
                   runtime: 'cursor',
@@ -777,6 +784,7 @@ async function consumeStream(
                   resultData.session_id,
                   typeof resultData.cwd === 'string' ? resultData.cwd : undefined,
                   cursorProvider,
+                  cursorTransport,
                 ));
                 await options?.onRuntimeIdentity?.({
                   runtime: 'cursor',

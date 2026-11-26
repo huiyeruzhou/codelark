@@ -197,7 +197,7 @@ describe('SessionRegistryService', () => {
     const materialized = registry.materializeCursorThread('cursor-registry-session', '/tmp/cursor-registry');
     assert.equal(materialized.runtime?.activeRuntime, 'cursor');
     assert.equal(materialized.runtime?.cursor?.sessionId, 'cursor-registry-session');
-    assert.equal(materialized.runtime?.cursor?.provider, 'tmux');
+    assert.equal(materialized.runtime?.cursor?.provider, 'acp');
     const result = registry.archiveCursorThread('cursor-registry-session', '/tmp/cursor-registry');
     assert.deepEqual(archived, [{ sessionId: 'cursor-registry-session', cwd: '/tmp/cursor-registry' }]);
     assert.deepEqual(result.deletedBridgeSessionIds, [materialized.id]);
@@ -218,11 +218,11 @@ describe('SessionRegistryService', () => {
 
     const materialized = registry.materializeCursorThread('cursor-desktop-session', '/tmp/cursor-desktop');
     assert.equal(materialized.runtime?.activeRuntime, 'cursor');
-    assert.equal(materialized.runtime?.cursor?.provider, 'tmux');
+    assert.equal(materialized.runtime?.cursor?.provider, 'acp');
     assert.equal(materialized.runtime?.cursor?.transport, 'desktop');
     assert.deepEqual(resolveCursorRuntimeConfig(materialized), {
       runtime: 'cursor',
-      provider: 'tmux',
+      provider: 'acp',
       transport: 'desktop',
       model: undefined,
       force: false,
@@ -276,8 +276,9 @@ describe('SessionRegistryService', () => {
     const materialized = registry.materializeCursorThread('cursor-desktop-session', '/tmp/cursor-desktop');
 
     assert.equal(materialized.id, legacy.id);
-    assert.equal(materialized.runtime?.cursor?.provider, 'tmux');
-    assert.equal(store.getSession(legacy.id)?.runtime?.cursor?.provider, 'tmux');
+    assert.equal(materialized.runtime?.cursor?.provider, 'acp');
+    assert.equal(materialized.runtime?.cursor?.transport, 'desktop');
+    assert.equal(store.getSession(legacy.id)?.runtime?.cursor?.provider, 'acp');
   });
 
   it('materializes, renames, and archives ZCode sessions through the registry port', () => {

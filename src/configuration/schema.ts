@@ -5,8 +5,8 @@ import { z } from 'zod';
 
 export const runtimeAgentSchema = z.enum(['codex', 'claude', 'kimi', 'cursor', 'zcode']);
 // Keep historical values parseable so existing TOML files still load. Runtime
-// resolution normalizes every Codex value to tmux; new user-facing writes only
-// accept tmux.
+// resolution normalizes every Codex value to tmux and every Cursor value to acp;
+// new user-facing writes only accept the supported public provider.
 export const codexProviderSchema = z.enum(['sdk', 'tmux', 'pty']);
 export const claudeProviderSchema = z.enum(['sdk', 'pty', 'tmux']);
 export const kimiProviderSchema = z.enum(['tmux']);

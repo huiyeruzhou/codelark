@@ -20,10 +20,10 @@ describe('Cursor tmux provider and internal transport', () => {
       const findThread = () => ({ sessionId: 'desktop-thread', sessionDir: '/tmp/cursor', transport: 'desktop' as const });
       assert.equal(migrateCursorDesktopSessionIdentities(store, findThread), 1);
       const migrated = store.getSession(session.id)!;
-      assert.equal(migrated.runtime?.cursor?.provider, 'tmux');
+      assert.equal(migrated.runtime?.cursor?.provider, 'acp');
       assert.equal(migrated.runtime?.cursor?.transport, 'desktop');
       assert.equal(migrated.runtime?.cursor?.sessionId, 'desktop-thread');
-      assert.equal(getSessionRuntimeProviderIdentity(migrated), 'cursor:tmux');
+      assert.equal(getSessionRuntimeProviderIdentity(migrated), 'cursor:acp');
       assert.equal(migrateCursorDesktopSessionIdentities(store, findThread), 0);
       assert.equal(resolveCursorTransport(migrated, () => { throw new Error('index offline'); }), 'desktop');
     });
@@ -36,7 +36,7 @@ describe('Cursor tmux provider and internal transport', () => {
     store.updateSession(session.id, setSessionCursorIdentityUpdate(undefined, undefined));
     const fresh = store.getSession(session.id)!;
     assert.equal(resolveCursorTransport(fresh), 'cli');
-    assert.equal(getSessionRuntimeProviderIdentity(fresh), 'cursor:tmux');
+    assert.equal(getSessionRuntimeProviderIdentity(fresh), 'cursor:acp');
   });
 
   it('provider configuration cannot override a Desktop transport discovered from the bound thread', () => {
@@ -47,10 +47,10 @@ describe('Cursor tmux provider and internal transport', () => {
     createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'tmux' } } });
     const findThread = () => ({ sessionId: 'thread', sessionDir: '/tmp/cursor', transport: 'desktop' as const });
     assert.deepEqual(resolveCursorCapabilities(persisted, findThread), {
-      provider: 'tmux', transport: 'desktop', modelCatalog: 'unavailable', modelConfiguration: 'external',
+      provider: 'acp', transport: 'desktop', modelCatalog: 'unavailable', modelConfiguration: 'external',
     });
     assert.deepEqual(resolveCursorCapabilities(persisted, () => null), {
-      provider: 'tmux', transport: 'cli', modelCatalog: 'cli', modelConfiguration: 'process-launch',
+      provider: 'acp', transport: 'cli', modelCatalog: 'cli', modelConfiguration: 'process-launch',
     });
   });
 });

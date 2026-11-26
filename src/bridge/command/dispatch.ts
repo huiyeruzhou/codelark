@@ -122,6 +122,7 @@ import { requestCodexTuiSelectionViaPermissionBroker } from './codex-tui-selecti
 import { cancelCodexDesktopRestart, consumeCodexDesktopRestart } from './codex-desktop-restart-confirmation.js';
 import { restartCodexDesktop } from '../../runtime/codex/desktop-restart.js';
 import { handleMirrorHistorySyncCommand } from '../mirror/history-sync.js';
+import { resolveCursorTransport } from '../session/cursor-transport.js';
 
 function describeReactionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -473,13 +474,16 @@ async function handleCurrentConfigFormCommand(options: {
   }
   const cursorProviderDefinition = definitions.find(definition => definition.key === 'cursorProvider');
   const cursorProviderValue = cursorProviderDefinition ? currentSettingFormValue(formValue, cursorProviderDefinition) : undefined;
-  const nextCursorProvider = cursorProviderValue === 'tmux' || cursorProviderValue === 'acp' ? cursorProviderValue
-    : cursorProviderValue === '' ? scopedConfigForRuntime(binding).config.runtime.cursor.provider : undefined;
   const cursorSession = options.store.getSession(targetSessionId) || session;
+  const nextCursorProvider = cursorProviderValue === 'acp' || cursorProviderValue === 'tmux'
+    ? 'acp' as const
+    : cursorProviderValue === '' && resolveCursorTransport(cursorSession) !== 'desktop'
+      ? 'acp' as const
+      : undefined;
   const currentCursorProvider = resolveEffectiveRuntimeProvider(cursorSession, binding).provider;
   if (nextCursorProvider && getSessionActiveRuntime(cursorSession) === 'cursor'
     && (nextCursorProvider !== currentCursorProvider
-      || nextCursorProvider !== getSessionCursorNativeProvider(cursorSession, currentCursorProvider === 'tmux' ? 'tmux' : 'acp'))
+      || nextCursorProvider !== getSessionCursorNativeProvider(cursorSession, 'acp'))
     && sessionHasActiveRuntimeTurn(options.deps, cursorSession)) {
     let richCard: OutboundRichCard | undefined;
     const response = buildRuntimeSwitchWhileRunningResponse({
@@ -508,7 +512,12 @@ async function handleCurrentConfigFormCommand(options: {
   if (nextCursorProvider) {
     const savedCursorSession = options.store.getSession(scope.sessionId);
     if (savedCursorSession && getSessionActiveRuntime(savedCursorSession) === 'cursor') {
+      const migratedLegacy = getSessionCursorNativeProvider(savedCursorSession, nextCursorProvider) !== nextCursorProvider;
       options.store.updateSession(savedCursorSession.id, setSessionCursorProviderUpdate(savedCursorSession, nextCursorProvider));
+      if (migratedLegacy) {
+        service.set(scope, { runtime: { cursor: { provider: nextCursorProvider } } });
+        responses.push(`provider: ${nextCursorProvider}`);
+      }
     }
   }
   if (name && name !== (session.name || '').trim()) {

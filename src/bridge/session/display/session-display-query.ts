@@ -342,10 +342,12 @@ export function buildLocalRuntimeSessionDisplaySummary(
     mode: '-',
     executionProvider: runtime === 'cursor' && session.source === 'cursor-desktop'
       ? 'desktop'
-      : runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? 'tmux' : 'pty',
+      : runtime === 'cursor' ? 'acp'
+      : runtime === 'kimi' || runtime === 'zcode' ? 'tmux' : 'pty',
     codexProvider: runtime === 'cursor' && session.source === 'cursor-desktop'
       ? 'desktop'
-      : runtime === 'kimi' || runtime === 'cursor' || runtime === 'zcode' ? 'tmux' : '-',
+      : runtime === 'cursor' ? 'acp'
+      : runtime === 'kimi' || runtime === 'zcode' ? 'tmux' : '-',
     creatorKind: 'tui_cli',
     creatorLabel: creatorBadge.label,
     creatorClass: creatorBadge.className,

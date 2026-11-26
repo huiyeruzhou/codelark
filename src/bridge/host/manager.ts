@@ -1906,7 +1906,7 @@ const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
     const state = getState();
     const runtime = getSessionActiveRuntime(session) || 'codex';
     // ACP has one bridge-owned executor; it has no external TUI writer to probe.
-    if (runtime === 'cursor' && resolveEffectiveRuntimeProvider(session).provider === 'acp') return 'idle';
+    if (runtime === 'cursor' && resolveEffectiveRuntimeProvider(session).provider === 'acp' && resolveCursorTransport(session) !== 'desktop') return 'idle';
     const subscriptions = runtime === 'claude' ? state.claudeMirrorSubscriptions
       : runtime === 'kimi' ? state.kimiMirrorSubscriptions
       : runtime === 'cursor' ? state.cursorMirrorSubscriptions
@@ -2427,8 +2427,7 @@ const CURSOR_MIRROR_RUNTIME = createMirrorRuntime(getCursorMirrorState, {
   getCodexSessionByThreadIdSafe: () => null,
   hasSessionMirrorSource: (session) => Boolean(
     getSessionActiveRuntime(session) === 'cursor'
-    && session?.runtime?.cursor?.provider !== 'acp'
-    && session?.runtime?.cursor?.sessionProvider !== 'acp'
+    && resolveCursorTransport(session) === 'desktop'
     && getSessionCursorSessionId(session)
     && (getSessionCursorCwd(session) || getSessionWorkingDirectory(session)),
   ),
@@ -2637,7 +2636,9 @@ function shouldRouteTerminalAppendInline(msg: InboundMessage): boolean {
   if (!session) return false;
   if (session.runtime?.codex?.appServerEndpoint) return getCodexAppServerSession(session.id)?.direct === true;
   const runtimeProvider = resolveEffectiveRuntimeProvider(session, binding);
-  return runtimeProvider.provider === 'tmux' || (!hasAttachments && runtimeProvider.provider === 'pty');
+  return runtimeProvider.provider === 'tmux'
+    || (runtimeProvider.runtime === 'cursor' && resolveCursorTransport(session) === 'desktop')
+    || (!hasAttachments && runtimeProvider.provider === 'pty');
 }
 
 function resolveInboundCommandText(rawText: string): string {
@@ -2768,7 +2769,7 @@ function cursorAcpInputSession(msg: InboundMessage): string | undefined {
   const binding = store.getChannelChat(msg.address.channelType, msg.address.chatId);
   const session = binding && store.getSession(binding.bridgeSessionId);
   const effective = resolveEffectiveRuntimeProvider(session, binding);
-  return binding && effective.runtime === 'cursor' && effective.provider === 'acp' ? binding.bridgeSessionId : undefined;
+  return binding && effective.runtime === 'cursor' && effective.provider === 'acp' && resolveCursorTransport(session) !== 'desktop' ? binding.bridgeSessionId : undefined;
 }
 
 const pendingCursorAcpInputs = new Map<string, { messages: InboundMessage[]; completion: Promise<void> }>();
@@ -5263,8 +5264,7 @@ async function handleMessage(
     tmuxProviderSession
     && tmuxProviderRuntime?.provider === 'tmux'
     && (tmuxProviderRuntime.runtime !== 'codex' || codexHasLegacyTmuxState)
-    && (tmuxProviderRuntime.runtime !== 'cursor'
-      || (tmuxProviderActiveTask && resolveCursorTransport(tmuxProviderSession) === 'cli'))
+    && tmuxProviderRuntime.runtime !== 'cursor'
     && tmuxProviderRuntime.runtime !== 'zcode'
     && !tmuxProviderSession.runtime?.codex?.appServerEndpoint
   ) {
@@ -5277,9 +5277,7 @@ async function handleMessage(
       const activeTmuxSessionName = getSessionRuntimeTmuxSessionName(tmuxProviderSession)
         || (tmuxProviderRuntime.runtime === 'kimi'
           ? kimiTmuxSessionName(tmuxProviderSession.id)
-          : tmuxProviderRuntime.runtime === 'cursor'
-            ? cursorTmuxSessionName(tmuxProviderSession.id)
-            : undefined);
+          : undefined);
       if (activeTmuxSessionName) {
         transitionRuntimeTmuxInputState(
           tmuxProviderRuntime.runtime,

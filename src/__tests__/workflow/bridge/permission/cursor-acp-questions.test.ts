@@ -99,7 +99,7 @@ describe('Cursor ACP question lifecycle', () => {
     await f.callback(); assert.equal((await p.result).behavior, 'allow');
   });
 
-  for (const change of ['binding', 'native session', 'provider'] as const) {
+  for (const change of ['binding', 'native session', 'runtime'] as const) {
     it(`invalidates an old question after ${change} changes`, async () => {
       const f = fixture(); const p = await f.start();
       if (change === 'binding') {
@@ -108,7 +108,7 @@ describe('Cursor ACP question lifecycle', () => {
       } else if (change === 'native session') {
         f.store.updateSession(f.session.id, setSessionCursorIdentityUpdate('replacement-native', '/tmp', 'acp'));
       } else {
-        createConfigService({ migrate: false }).set({ kind: 'session', sessionId: f.session.id }, { runtime: { cursor: { provider: 'tmux' } } });
+        f.store.updateSession(f.session.id, { runtime: { activeRuntime: 'codex' } });
       }
       assert.match(await f.callback() || '', /失效/);
       assert.equal((await p.result).behavior, 'deny');

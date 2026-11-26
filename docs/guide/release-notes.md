@@ -1,12 +1,36 @@
 # Release Notes
 
-## Unreleased
+## v0.6.0
 
-- 修复流式卡片吞空格：按原始快照追加正文增量，保留单词间空格、纯空白分片、段落换行和代码缩进；相同快照仍去重。
+发布日期：2026-11-26
 
-- 修正 CodeLark skill 将“展示/查看文件”误当成发送附件的指引：文件展示、引用和生成结果使用普通链接，仅在用户要求文件本体时发送附件；本地链接按扩展名识别图片，普通链接和图片写法均适用，展示图片后仍保留原链接和前后文；其他文件带不带行号都不自动上传，保留标签、路径和正文。
-- 带行号的源码引用不会进入附件上传；无效发送块保留原文，代码示例不会因流式截取而执行。冷启动自动检查并同步内置 skills，同步失败不再报告启动成功；源码升级在重启前完成同步。
-- 修复 Claude 共用工作目录时输出镜像错绑：新建进程显式指定会话 UUID，tmux/PTY 仅监听自身 ID 的 JSONL；窗口身份不明或与保存绑定冲突时拒绝发送，不再按文件修改时间猜测归属。
+`0.6.0` 将 Cursor Agent 统一收口为 ACP 协议流式执行（下线 Cursor CLI tmux 支持、保留 Cursor Desktop 接管，并将不支持 tmux 的 runtime 的 `/p tmux` 直接解释为 `/p acp`），新增群聊话题线程回复与卡片一键 Fork 会话，完善飞书公式与表格渲染，并集中加固 Codex、Claude Code 与 Kimi 2.4.0 的会话隔离和跨平台可靠性。
+
+### Cursor ACP 收口与 Desktop 接管解耦
+
+- Cursor Agent 统一使用 ACP 协议作为唯一公开 Provider：流式输出、工具活动、原生文件 diff、取消排空、控制通道切换与作用域确认命令均经由 ACP 协议完成，并在模式命令中明确回报当前活跃 Provider。
+- 下线 Cursor CLI 的 `tmux` 执行路径：历史配置里的 `runtime.cursor.provider = "tmux"` 读取时自动归一为 `acp`；在 Cursor 会话中发送 `/p tmux` 会直接解释为 `/p acp`（不再启动 Cursor tmux TUI）。
+- Cursor Desktop 接管与 `tmux` 彻底解耦：通过 `/t` 接管或已绑定的 Cursor Desktop 对话自动走 `CursorDesktopTransport`（保留消息 steer、Stop、模型选择与后台 mirror），`/p tmux` 不会破坏已绑定的 Desktop 对话。
+- 加固 ACP 容错与恢复：瞬态故障与资源耗尽按上限退避重试并保留错误终态，空会话保留原生身份，工作目录切换后仍能跨 workspace 解析绑定输出。
+
+### 飞书话题、Fork 与卡片渲染
+
+- 群聊回复默认保持在对应话题线程内，`/every` 等定时任务回复隔离在新话题并保留原线程目标；消息卡片支持一键 Fork 对话，覆盖 tmux 与 app-server runtime 以及飞书/Lark 双站点。
+- 公式与表格渲染升级：简单公式保持行内可复制文本，复杂公式按受限尺寸渲染为图片并保留强调格式，含公式的表格整表渲染为图片并保留代码单元格内的竖线。
+- 修复流式卡片吞空格：按原始快照追加正文增量，保留单词间空格、纯空白分片、段落换行和代码缩进；修复重写答案跨页丢失、停止历史卡片重复正文以及超大最终回复投递。
+- 修正附件与技能同步行为：带行号的源码引用不进入附件上传，普通链接与图片展示保留前后文；冷启动自动检查并同步内置 skills，同步失败不再报告启动成功。
+
+### Codex、Claude Code 与 Kimi
+
+- Codex app-server：限制实时工具输出与恢复历史体积，补齐 resume 漏记提交对账，明确上游错误与 tmux 查看入口，并在交接会话前回收 bootstrap 进程树。
+- Claude Code：新建进程显式指定会话 UUID，tmux/PTY 仅监听自身 ID 的 JSONL，修复共用工作目录时的输出镜像错绑；支持旧版 Claude tmux 会话自动升级与 Windows 粘贴重试。
+- Kimi Code：适配 Kimi CLI 2.4.0 协议与生命周期变更，持久化延迟返回的 session id 并规范时间戳。
+
+### 升级
+
+```bash
+npm install -g codelark@0.6.0
+```
 
 ## v0.5.1
 

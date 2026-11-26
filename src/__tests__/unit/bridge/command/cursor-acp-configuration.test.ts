@@ -80,10 +80,10 @@ describe('Cursor ACP configuration and provider switching', () => {
     assert.match(reasoningReply, /Cursor acp/);
     assert.doesNotMatch(reasoningReply, /tmux/);
 
-    // Explicit tmux override still reports tmux in /mode.
+    // Historical tmux overrides normalize to ACP everywhere.
     config.set({ kind: 'session', sessionId: fresh.id }, { runtime: { cursor: { provider: 'tmux' } } });
-    const tmuxMode = handleModeCommand({ msg: msg('/mode yolo'), args: 'yolo', currentBinding: binding, store, markdown: true });
-    assert.match(tmuxMode, /Provider[\s\S]*tmux/);
+    const normalizedMode = handleModeCommand({ msg: msg('/mode yolo'), args: 'yolo', currentBinding: binding, store, markdown: true });
+    assert.match(normalizedMode, /Provider[\s\S]*acp/);
   });
 
   it('switches an idle TUI conversation to ACP without reusing its native ID or mirror cursor', async () => {
@@ -119,7 +119,7 @@ describe('Cursor ACP configuration and provider switching', () => {
       const action = result.richCard?.actions?.flat().find(action => action.text === '结束并切换 ACP');
       assert.match(parseCommandCallbackData(action?.callbackData || '')?.commandText || '', /^\/p acp --restart=/);
       assert.deepEqual(f.store.getSession(f.session.id), before);
-      assert.equal(resolveCursorRuntimeConfig(before).provider, 'tmux');
+      assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionProvider, undefined);
     });
   }
 
@@ -158,7 +158,7 @@ describe('Cursor ACP configuration and provider switching', () => {
     t.mock.method(tmuxCore, 'killSession', async () => { throw new Error('cannot stop'); });
     await assert.rejects(f.command(command.slice(3)), /尚未切换/);
     assert.deepEqual(f.store.getSession(f.session.id), before);
-    assert.equal(resolveCursorRuntimeConfig(before).provider, 'tmux');
+    assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionProvider, undefined);
   });
 
   it('confirms the current ACP card by command once, preserving the old native identity', async () => {
@@ -185,7 +185,7 @@ describe('Cursor ACP configuration and provider switching', () => {
     });
     assert.match(result.response, /已失效/);
     assert.equal(stopped, false);
-    assert.equal(resolveCursorRuntimeConfig(f.store.getSession(f.session.id)).provider, 'tmux');
+    assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionProvider, undefined);
   });
 
   it('rejects an old switch button after a new task has started', async () => {
@@ -200,7 +200,7 @@ describe('Cursor ACP configuration and provider switching', () => {
     });
     assert.match(result.response, /已失效/);
     assert.equal(stopped, false);
-    assert.equal(resolveCursorRuntimeConfig(f.store.getSession(f.session.id)).provider, 'tmux');
+    assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionProvider, undefined);
   });
 
   it('lets a global ACP default affect new requests without making a legacy TUI ID resumable by ACP', () => {
@@ -214,22 +214,17 @@ describe('Cursor ACP configuration and provider switching', () => {
     assert.equal(saved.runtime?.cursor?.sessionId, 'legacy-tui', 'changing a default must preserve original native history');
   });
 
-  it('protects /p default when the inherited provider changes and preserves the old ACP identity on an idle switch', async () => {
+  it('keeps ACP active on /p default even when global config still contains legacy tmux', async () => {
     const f = fixture();
     await f.command('acp');
     f.store.updateSession(f.session.id, setSessionCursorIdentityUpdate('native-acp', '/tmp/cursor-acp', 'acp'));
-    f.store.updateSession(f.session.id, { runtime_status: 'running' });
-    assert.match((await f.command('default')).response, /请先停止当前对话/);
-    assert.equal(resolveCursorRuntimeConfig(f.store.getSession(f.session.id)).provider, 'acp');
-    f.store.updateSession(f.session.id, { runtime_status: 'idle' });
     await f.command('default');
     const saved = f.store.getSession(f.session.id)!;
-    assert.equal(resolveCursorRuntimeConfig(saved).provider, 'tmux');
-    assert.equal(saved.runtime?.cursor?.sessionId, undefined);
-    assert.equal(saved.runtime?.cursor?.previousSession?.sessionId, 'native-acp');
+    assert.equal(resolveCursorRuntimeConfig(saved).provider, 'acp');
+    assert.equal(saved.runtime?.cursor?.sessionId, 'native-acp');
   });
 
-  it('starts a fresh TUI on switching back from ACP and never resumes the ACP ID', async () => {
+  it('interprets /p tmux as /p acp without launching a tmux TUI', async () => {
     const f = fixture();
     await f.command('acp');
     f.store.updateSession(f.session.id, setSessionCursorIdentityUpdate('native-acp', '/tmp/cursor-acp', 'acp'));
@@ -237,27 +232,26 @@ describe('Cursor ACP configuration and provider switching', () => {
     const result = await handleProviderCommand({
       store: f.store, currentBinding: f.binding, args: 'tmux', markdown: true,
       msg: { address: { channelType: 'feishu', chatId: f.binding.chatId }, messageId: 'back-to-tmux', text: '/p tmux', timestamp: Date.now() },
-      deps: { restartCursorTmuxSession: async params => {
+      deps: { restartCursorTmuxSession: async () => {
         launches += 1;
-        assert.equal(params.cursorSessionId, undefined);
-        return { sessionName: 'fake-acp-return', targetPane: 'fake-acp-return:0.0', sessionId: 'new-tui', cwd: '/tmp/cursor-acp', nextOffset: 0, existed: false };
+        throw new Error('must not launch Cursor tmux');
       } },
     });
-    assert.match(result.response, /tmux 已启动/);
-    assert.equal(launches, 1);
+    assert.match(result.response, /已将 `\/p tmux` 解释为 `\/p acp`/);
+    assert.equal(launches, 0);
     const saved = f.store.getSession(f.session.id)!;
-    assert.equal(saved.runtime?.cursor?.sessionId, 'new-tui');
-    assert.equal(saved.runtime?.cursor?.sessionProvider, 'tmux');
-    assert.equal(saved.runtime?.cursor?.previousSession?.sessionId, 'native-acp');
-    assert.equal(resolveEffectiveRuntimeProvider(saved).identity, 'cursor:tmux');
+    assert.equal(saved.runtime?.cursor?.sessionId, 'native-acp');
+    assert.equal(saved.runtime?.cursor?.sessionProvider, 'acp');
+    assert.equal(resolveEffectiveRuntimeProvider(saved).identity, 'cursor:acp');
   });
 
-  it('keeps the UI provider selector consistent and prevents bypassing a running-session guard', () => {
+  it('keeps the UI provider selector consistent, rejects tmux writes, and prevents bypassing a running-session guard', () => {
     const f = fixture();
     const app = new UiSessionApplication(f.store);
+    assert.throws(() => app.updateConfig(f.session.id, { activeRuntime: 'cursor', cursorProvider: 'tmux' }), /只支持 acp/);
     f.store.updateSession(f.session.id, { runtime_status: 'running' });
     assert.throws(() => app.updateConfig(f.session.id, { activeRuntime: 'cursor', cursorProvider: 'acp' }), /请先停止/);
-    assert.equal(resolveCursorRuntimeConfig(f.store.getSession(f.session.id)).provider, 'tmux');
+    assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionProvider, undefined);
     f.store.updateSession(f.session.id, { runtime_status: 'idle' });
     const updated = app.updateConfig(f.session.id, { activeRuntime: 'cursor', cursorProvider: 'acp' });
     assert.equal(updated.cursorProvider, 'acp');

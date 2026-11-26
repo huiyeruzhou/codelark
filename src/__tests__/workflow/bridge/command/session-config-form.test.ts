@@ -99,7 +99,7 @@ it('Desktop /p tmux keeps the active conversation and public provider without a 
   const before = f.store.getSession(f.session.id)?.runtime;
   for (const command of ['/provider', '/p tmux', '/p default']) {
     const result = await f.command(command);
-    assert.match(result.text, /Provider[\s\S]*tmux/u);
+    assert.match(result.text, /Provider[\s\S]*acp/u);
     assert.match(result.text, /当前会话由 Cursor Desktop 管理/u);
     assert.doesNotMatch(result.text, /改用|重新启动|确认重启/u);
     assert.equal(result.richCard, undefined);

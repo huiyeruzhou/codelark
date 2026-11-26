@@ -182,7 +182,7 @@ it('the ownership query does not invent a target for an unstarted Kimi provider'
   assert.equal(getProviderOwnedRuntimeTmuxTarget(f.store.getSession(f.session.id), f.binding), undefined);
 });
 
-for (const runtime of ['claude', 'kimi', 'cursor', 'zcode'] as const) it(`${runtime} ownership uses this BridgeSession's exact recorded target`, () => {
+for (const runtime of ['claude', 'kimi', 'zcode'] as const) it(`${runtime} ownership uses this BridgeSession's exact recorded target`, () => {
   const f = fixture(runtime);
   assert.deepEqual(getProviderOwnedRuntimeTmuxTarget(f.store.getSession(f.session.id), f.binding), { runtime, sessionName: f.target });
   f.store.updateSession(f.session.id, { runtime: { general: { tmuxSessionName: `${f.target}-other` } } });
@@ -225,13 +225,13 @@ it('active SDK /stop aborts the actual task without claiming its terminal result
   assert.doesNotMatch(response, /任务已停止/);
 });
 
-it('active Cursor stop still uses its stream abort and cleanup instead of adding a new key sequence', async () => {
+it('active Cursor ACP stop aborts the active task without sending tmux key sequences', async () => {
   const f = fixture('cursor');
   const abortController = new AbortController();
   f.state.activeTasks.set(f.session.id, { id: 'active', sessionId: f.session.id, abortController });
-  await f.stop();
+  const result = await f.stop();
+  assert.equal(result.method, 'acp_interrupt');
   assert.equal(abortController.signal.aborted, true);
-  assert.equal(f.interactive.getActiveTask(f.session.id), undefined);
   assert.deepEqual(f.sent, []);
 });
 

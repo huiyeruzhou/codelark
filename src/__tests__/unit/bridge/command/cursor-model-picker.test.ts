@@ -132,7 +132,7 @@ describe('Cursor model picker', () => {
     const scope = { kind: 'session' as const, sessionId: session.id };
     service.set(scope, { runtime: { cursor: { provider: 'tmux', model: 'stored-cli-model', reasoningEffort: 'high' } } });
     const persisted = store.getSession(session.id)!;
-    assert.equal(resolveCursorCapabilities(persisted).provider, 'tmux');
+    assert.equal(resolveCursorCapabilities(persisted).provider, 'acp');
     assert.equal(resolveCursorCapabilities(persisted).transport, 'desktop');
     const result = await handleModelCommandRequest({
       msg: { address: { channelType: 'feishu', chatId: binding.chatId }, text: '/model', messageId: 'model', timestamp: Date.now() },
