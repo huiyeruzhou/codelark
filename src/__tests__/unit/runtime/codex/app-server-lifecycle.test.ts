@@ -80,6 +80,66 @@ async function fixture(t: TestContext) {
 }
 const text = [{ type: 'text' as const, text: 'hello' }];
 
+test('a failed turn with systemError accepts one new input before and after reconnect', async (t) => {
+  const f = await fixture(t);
+  const first = await f.runtime.submit('thread', text);
+  const fail = async (turnId: string) => {
+    const turn = f.thread.turns!.find((entry) => entry.id === turnId)!;
+    turn.status = 'failed';
+    turn.error = { message: 'exceeded retry limit, last status: 429 Too Many Requests' };
+    f.thread.status = { type: 'systemError' };
+    f.send('turn/completed', { turn });
+    f.send('thread/status/changed', { status: f.thread.status });
+    await until(() => f.runtime.recordsAfter('thread').records.some((r) => r.turnId === turnId && r.type === 'task_complete' && r.isError));
+  };
+  await fail(first);
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle');
+  const second = await f.runtime.submit('thread', [{ type: 'text', text: 'new request after failure' }]);
+  assert.notEqual(second, first);
+  await fail(second);
+  const cursor = f.runtime.recordsAfter('thread').cursor;
+  f.socket().close();
+  await until(() => f.runtime.snapshot('thread').connection === 'disconnected');
+  await f.runtime.connect();
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle');
+  assert.equal(await f.runtime.interrupt('thread'), false, 'a failed turn is already stopped');
+  assert.equal(f.runtime.recordsAfter('thread', cursor).records.length, 0, 'do not replay failed history');
+  await f.runtime.detach('thread');
+  await f.runtime.ensureThread({ threadId: 'thread' });
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle', 'cold attachment after Bridge restart also recovers');
+  assert.equal(f.runtime.recordsAfter('thread').records.length, 0, 'cold attachment must not replay history');
+  const third = await f.runtime.submit('thread', [{ type: 'text', text: 'new request after reconnect' }]);
+  assert.notEqual(third, second);
+  assert.equal(f.received.filter((m) => m.method === 'turn/start').length, 3);
+  assert.equal(f.received.filter((m) => m.method === 'turn/steer' || m.method === 'turn/interrupt').length, 0);
+});
+
+test('systemError does not finish an observed turn, while unknown activity still blocks input', async (t) => {
+  const f = await fixture(t);
+  const turnId = await f.runtime.submit('thread', text);
+  f.send('thread/status/changed', { status: { type: 'systemError' } });
+  await until(() => f.runtime.snapshot('thread').activity === 'unknown');
+  assert.equal(f.runtime.snapshot('thread').turnId, turnId);
+  assert(!f.runtime.recordsAfter('thread').records.some((r) => r.type === 'task_complete'));
+  f.thread.turns![0]!.status = 'failed';
+  f.thread.status = { type: 'systemError' };
+  f.send('turn/completed', { turn: f.thread.turns![0] });
+  await until(() => f.runtime.snapshot('thread').activity === 'idle');
+  for (const type of ['active', 'notLoaded']) {
+    f.thread.status = { type };
+    await f.runtime.refresh('thread');
+    await assert.rejects(f.runtime.submit('thread', text), /尚未确认线程状态/);
+  }
+  assert.equal(f.received.filter((m) => m.method === 'turn/start' || m.method === 'turn/steer').length, 1);
+  f.handle((m) => {
+    if (m.method !== 'thread/resume') return false;
+    f.respond(m, { thread: { id: 'thread', status: { type: 'systemError' } } });
+    return true;
+  });
+  await f.runtime.refresh('thread');
+  assert.equal(f.runtime.snapshot('thread').activity, 'idle', 'status-only resume also distinguishes stopped-with-error from unknown');
+});
+
 test('manual inputs cannot replace a platform reply target, including legacy persisted origins', async (t) => {
   const f = await fixture(t);
   const origin = { channelType: 'feishu', chatId: 'oc_group', messageId: 'om_origin', rootMessageId: 'om_origin' };

@@ -485,7 +485,7 @@ export class CodexAppServerLifecycle {
     state.snapshot.error = undefined;
     if (!Array.isArray(thread.turns)) {
       state.snapshot.activity = state.snapshot.turnId || thread.status?.type === 'active' ? 'unknown'
-        : thread.status?.type === 'idle' ? 'idle' : 'unknown';
+        : ['idle', 'systemError'].includes(thread.status?.type || '') ? 'idle' : 'unknown';
       this.changed(thread.id); return;
     }
     if (!newerEvents) state.snapshot.activity = 'idle';
@@ -514,7 +514,9 @@ export class CodexAppServerLifecycle {
     }
     if (state.snapshot.requests.length) state.snapshot.activity = 'waiting';
     else if (state.snapshot.turnId && !thread.turns.some((turn) => turn.id === state.snapshot.turnId && turn.status === 'inProgress')) state.snapshot.activity = 'unknown';
-    else if (['active', 'systemError', 'notLoaded'].includes(thread.status?.type || '') && !state.snapshot.turnId) state.snapshot.activity = 'unknown';
+    // Codex reports systemError only after execution and pending requests have
+    // stopped. Keep the failed turn visible, but allow the user's next input.
+    else if (['active', 'notLoaded'].includes(thread.status?.type || '') && !state.snapshot.turnId) state.snapshot.activity = 'unknown';
     this.changed(thread.id);
   }
 
@@ -652,7 +654,8 @@ export class CodexAppServerLifecycle {
         break;
       }
       case 'thread/status/changed':
-        if (p.status?.type === 'systemError' || p.status?.type === 'notLoaded') state.snapshot.activity = 'unknown';
+        if (p.status?.type === 'notLoaded') state.snapshot.activity = 'unknown';
+        if (p.status?.type === 'systemError') state.snapshot.activity = state.snapshot.requests.length ? 'waiting' : state.snapshot.turnId ? 'unknown' : 'idle';
         if (p.status?.type === 'active') state.snapshot.activity = state.snapshot.requests.length ? 'waiting' : state.snapshot.turnId ? 'active' : 'unknown';
         // idle is not a turn terminal; do not close a card from a status hint.
         if (p.status?.type === 'idle' && !state.snapshot.turnId) state.snapshot.activity = 'idle';
