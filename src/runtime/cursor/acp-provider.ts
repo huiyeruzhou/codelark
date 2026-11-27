@@ -974,6 +974,7 @@ export class CursorAcpProvider implements LLMProvider {
             };
 
             const outcome = await consumeHostedAcpTurn(host, currentTurn, {
+              onReplayComplete: () => emit('history_replay_complete', {}),
               abortSignal: params.abortController?.signal,
               cancelTimeoutMs: options.cancelTimeoutMs,
               onSessionUpdate: (payload) => {

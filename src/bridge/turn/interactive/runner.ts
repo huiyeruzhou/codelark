@@ -745,6 +745,7 @@ export async function runInteractiveMessage(
         },
         onThinkingNote: useStatusStreamUi ? sdkStreamEvents.onThinkingNote : undefined,
         onHistoryItem: useInteractiveStreamUi ? sdkStreamEvents.onHistoryItem : undefined,
+        onHistoryReplayComplete: () => adapter.onStreamHistoryReplayComplete?.(msg.address.chatId, streamKey),
         onAnswerText: streamingArtifacts?.observeAnswerText,
         onContextUsage: useInteractiveStreamUi ? sdkStreamEvents.onContextUsage : undefined,
         onRuntimeIdentity: async (identity) => {

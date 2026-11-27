@@ -201,3 +201,20 @@ export interface ContextUsageInfo {
   lastTokenUsage?: ContextTokenUsage;
   totalTokenUsage?: ContextTokenUsage;
 }
+
+export interface StreamingCardHandle {
+  cardId: string;
+  messageId: string;
+  sequence: number;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+  startTime: number;
+  page?: {
+    continuationIndex: number;
+    historyItemOffset: number;
+    historyToolCallOffset: number;
+    historyTextOffset: number;
+    toolCallOffset: number;
+    historyPayloadBytesLimit?: number;
+  };
+}

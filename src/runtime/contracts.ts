@@ -30,6 +30,7 @@ export type SSEEventType =
   | 'text'
   | 'text_snapshot'
   | 'history_item'
+  | 'history_replay_complete'
   | 'native_turn'
   | 'tool_use'
   | 'tool_result'

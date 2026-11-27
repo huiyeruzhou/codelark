@@ -59,6 +59,7 @@ import {
   type GroupChatInfo,
   type StructuredStreamingUiMetadata,
   type StructuredStreamingUiSnapshot,
+  type StreamingCardHandle,
 } from '../contracts.js';
 import { enqueueDelivery } from '../delivery/deliver.js';
 import { getBridgeContext } from '../../bridge/host/context.js';
@@ -128,6 +129,8 @@ const GROUP_AUTHORIZATION_IMAGE_FILE_NAME = 'codelark-group-authorization.png';
 
 /** State for an active CardKit v2 streaming card. */
 interface FeishuCardState {
+  /** Hold remote writes until the durable turn's history has been reconstructed. */
+  restoringHistory?: boolean;
   chatId: string;
   cardId: string;
   messageId: string;
@@ -3431,7 +3434,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   getStreamingCardHandle(chatId: string, streamKey?: string) {
     const cardKey = this.resolveStreamKey(chatId, streamKey);
     const state = this.activeCards.get(cardKey);
-    if (!state) return null;
+    if (!state || state.restoringHistory) return null;
     return {
       cardId: state.cardId,
       messageId: state.messageId,
@@ -3439,20 +3442,21 @@ export class FeishuAdapter extends BaseChannelAdapter {
       ...(state.replyToMessageId ? { replyToMessageId: state.replyToMessageId } : {}),
       ...(state.replyInThread !== undefined ? { replyInThread: state.replyInThread } : {}),
       startTime: state.startTime,
+      page: {
+        continuationIndex: state.continuationIndex,
+        historyItemOffset: state.historyItemOffset,
+        historyToolCallOffset: state.historyToolCallOffset,
+        historyTextOffset: state.historyTextOffset || 0,
+        toolCallOffset: state.toolCallOffset,
+        historyPayloadBytesLimit: state.historyPayloadBytesLimit,
+      },
     };
   }
 
   adoptStreamingCardHandle(
     chatId: string,
     streamKey: string,
-    handle: {
-      cardId: string;
-      messageId: string;
-      sequence: number;
-      replyToMessageId?: string;
-      replyInThread?: boolean;
-      startTime: number;
-    },
+    handle: StreamingCardHandle,
   ): boolean {
     if (!handle.cardId || !handle.messageId || !this.restClient) return false;
     const cardKey = this.resolveStreamKey(chatId, streamKey);
@@ -3474,15 +3478,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
       replyInThread: handle.replyInThread,
       // Advance sequence safely past any pre-restart in-flight CardKit request.
       sequence: Math.max(0, handle.sequence) + 20,
-      continuationIndex: 1,
+      continuationIndex: handle.page?.continuationIndex || 1,
+      restoringHistory: true,
       startTime: handle.startTime || now,
       taskItems: [],
       toolCalls: [],
       historyItems: [],
       injectedHistoryItems: [],
-      historyItemOffset: 0,
-      historyToolCallOffset: 0,
-      toolCallOffset: 0,
+      historyItemOffset: handle.page?.historyItemOffset || 0,
+      historyToolCallOffset: handle.page?.historyToolCallOffset || 0,
+      historyTextOffset: handle.page?.historyTextOffset || 0,
+      historyPayloadBytesLimit: handle.page?.historyPayloadBytesLimit,
+      toolCallOffset: handle.page?.toolCallOffset || 0,
       historyDriven: false,
       thinking: false,
       pendingText: '',
@@ -3534,6 +3541,30 @@ export class FeishuAdapter extends BaseChannelAdapter {
       });
     }
     return true;
+  }
+
+  onStreamHistoryReplayComplete(chatId: string, streamKey: string): void {
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const state = this.activeCards.get(cardKey);
+    if (!state?.restoringHistory) return;
+    // Older checkpoints have no page cursor. Rebuild pages locally and refresh
+    // the latest page once; never publish a backlog as a burst of new messages.
+    if (state.historyItemOffset >= state.historyItems.length) {
+      state.historyItemOffset = 0;
+      state.historyToolCallOffset = 0;
+      state.historyTextOffset = 0;
+    }
+    if (state.historyDriven) {
+      while (true) {
+        const page = this.currentStreamingCardRender(state, state.pendingText || '',
+          state.pendingTasksText || '', state.pendingStatusText || '', state.actionRows, state.metadata);
+        if (!page.hasMore || !page.next) break;
+        Object.assign(state, page.next);
+      }
+    }
+    state.restoringHistory = false;
+    this.markStreamingDesiredDirty(state);
+    this.scheduleCardFlush(cardKey);
   }
 
   /**
@@ -4112,7 +4143,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
   private enqueueCardFlush(streamKey: string): void {
     const state = this.activeCards.get(streamKey);
-    if (!state) return;
+    if (!state || state.restoringHistory) return;
     if (state.flushInFlight || state.backgroundFlushInFlight) {
       this.markCardFlushQueued(state);
       return;
@@ -4142,7 +4173,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private scheduleCardFlush(streamKey: string): void {
     if (this.runtimeHandoffInProgress) return;
     const state = this.activeCards.get(streamKey);
-    if (!state) return;
+    if (!state || state.restoringHistory) return;
     if (state.flushInFlight || state.backgroundFlushInFlight) {
       this.markCardFlushQueued(state);
       return;
@@ -4783,7 +4814,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
    */
   private async flushCardUpdate(streamKey: string): Promise<void> {
     const state = this.activeCards.get(streamKey);
-    if (!state || !this.restClient) return;
+    if (!state || state.restoringHistory || !this.restClient) return;
     const cardkit = (this.restClient as any).cardkit?.v1;
     if (!cardkit?.cardElement?.content) return;
 
@@ -5251,6 +5282,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   }
 
   private rebaseStreamingHistoryPage(state: FeishuCardState, items: StreamingHistoryItem[]): void {
+    // A partial replay is not a replacement of the text underlying the saved cursor.
+    if (state.restoringHistory) return;
     const startChanged = !historyTextCursorMatches(state.historyItems, items, state);
     const endChanged = state.renderedPageNext
       && !historyTextCursorMatches(state.historyItems, items, state.renderedPageNext);
@@ -5327,6 +5360,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     const initialState = this.activeCards.get(cardKey);
     if (!initialState || !this.restClient) return false;
+    this.onStreamHistoryReplayComplete(chatId, cardKey);
     let state: FeishuCardState = initialState;
     const cardkit = (this.restClient as any).cardkit?.v1;
     if (!cardkit?.card?.settings || !cardkit?.card?.update) return false;

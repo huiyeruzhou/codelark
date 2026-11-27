@@ -412,6 +412,7 @@ it('moves a restored legacy non-thread-mode card off its inherited thread withou
       replyToMessageId: 'om_inside', replyInThread, startTime: Date.now(),
     }));
     f.adapter.onStreamText(chatId, '重启后接续', key);
+    f.adapter.onStreamHistoryReplayComplete(chatId, key);
     f.a.enqueueCardFlush(key); await f.a.awaitCardFlushCompletion(key);
     if (replyInThread) {
       assert.equal(f.sent.length, 0, 'explicit thread cards continue in place');

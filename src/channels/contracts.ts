@@ -1,3 +1,5 @@
+import type { StreamingCardHandle } from '../domain/progress.js';
+export type { StreamingCardHandle } from '../domain/progress.js';
 import type {
   ChannelAddress,
   ChannelChatKind,
@@ -32,14 +34,6 @@ export interface StructuredStreamingUiSnapshot {
   consecutiveFailures?: number;
 }
 
-export interface StreamingCardHandle {
-  cardId: string;
-  messageId: string;
-  sequence: number;
-  replyToMessageId?: string;
-  replyInThread?: boolean;
-  startTime: number;
-}
 
 export interface StructuredStreamingUiActionButton {
   text: string;
@@ -148,6 +142,7 @@ export abstract class BaseChannelAdapter {
   getStructuredStreamingUiSnapshot?(_chatId: string, _streamKey?: string): StructuredStreamingUiSnapshot | null;
   getStreamingCardHandle?(_chatId: string, _streamKey?: string): StreamingCardHandle | null;
   adoptStreamingCardHandle?(_chatId: string, _streamKey: string, _handle: StreamingCardHandle): boolean;
+  onStreamHistoryReplayComplete?(_chatId: string, _streamKey: string): void;
   getStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): string | null;
   waitForStructuredStreamingUiMessageId?(_chatId: string, _streamKey?: string): Promise<string | null>;
   onMirrorStreamStart?(_chatId: string, _streamKey?: string, _requestMessageId?: string): void;

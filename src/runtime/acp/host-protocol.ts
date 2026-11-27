@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CODELARK_HOME } from '../../configuration/paths.js';
+import type { StreamingCardHandle } from '../../domain/progress.js';
 
 export const ACP_HOST_PROTOCOL_VERSION = 1;
 
@@ -24,16 +25,10 @@ export type AcpTurnStatus =
   | 'aborted'
   | 'failed';
 
-export interface AcpCardCheckpoint {
+export interface AcpCardCheckpoint extends StreamingCardHandle {
   channelType: string;
   chatId: string;
   streamKey: string;
-  cardId: string;
-  messageId: string;
-  sequence: number;
-  replyToMessageId?: string;
-  replyInThread?: boolean;
-  startTime: number;
 }
 
 export interface AcpTurnMeta {

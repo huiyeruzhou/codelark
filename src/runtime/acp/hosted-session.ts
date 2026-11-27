@@ -13,6 +13,7 @@ export interface ConsumeHostedTurnHooks {
   onSessionUpdate: (params: Record<string, unknown>) => void;
   onServerRequest: (request: AcpPendingServerRequest) => Promise<void>;
   onServerRequestResolved?: (requestId: string | number) => void;
+  onReplayComplete?: () => void;
 }
 
 export interface ConsumeHostedTurnResult {
@@ -48,6 +49,13 @@ export async function consumeHostedAcpTurn(
   const dispatchedRequestKeys = new Set<string>();
   let snapshotLastSeq = initialTurn.lastSeq;
   let subscribed = false;
+  let replayComplete = false;
+  const beforeSubscribe: AcpTurnEvent[] = [];
+  const completeReplay = (): void => {
+    if (replayComplete) return;
+    replayComplete = true;
+    hooks.onReplayComplete?.();
+  };
 
   const finish = (result: ConsumeHostedTurnResult): void => {
     if (settled) return;
@@ -69,7 +77,7 @@ export async function consumeHostedAcpTurn(
     });
   };
 
-  const handleEvent = (evt: AcpTurnEvent): void => {
+  const applyEvent = (evt: AcpTurnEvent): void => {
     if (settled) return;
     if (evt.seq <= lastSeq) return;
     lastSeq = evt.seq;
@@ -106,6 +114,14 @@ export async function consumeHostedAcpTurn(
         nativeSessionId: evt.nativeSessionId,
       });
     }
+  };
+
+  const handleEvent = (evt: AcpTurnEvent): void => {
+    // The socket may deliver the RPC response and replay in the same read.
+    // Install the response's exact replay boundary before consuming those events.
+    if (!subscribed) { beforeSubscribe.push(evt); return; }
+    applyEvent(evt);
+    if (lastSeq >= snapshotLastSeq) completeReplay();
   };
 
   const unsubEvents = host.onTurnEvent(turnId, handleEvent);
@@ -148,6 +164,9 @@ export async function consumeHostedAcpTurn(
       snapshotLastSeq = sub.turn.lastSeq;
       activePendingKeys.clear();
       for (const req of sub.turn.pendingRequests) activePendingKeys.add(reqKey(req.requestId));
+      if (snapshotLastSeq === 0) completeReplay();
+      for (const evt of beforeSubscribe) handleEvent(evt);
+      beforeSubscribe.length = 0;
 
       // If the turn already ended with 0 events (edge case) or after replay finishes,
       // subscribeTurn's microtask replay will emit turn_end. Guard against an empty terminal turn.

@@ -181,6 +181,26 @@ describe('buildInlineToolBlock', () => {
 });
 
 describe('interactive-turn sdk-conversation-engine tool expansion', () => {
+  it('delivers the history replay barrier after restored tools and before live text', async () => {
+    resetBridgeTestState();
+    const observed: string[] = [];
+    const llm: LLMProvider = { streamChat: () => new ReadableStream({ start(controller) {
+      controller.enqueue(sseEvent('tool_use', { id: 'restored', name: 'Shell', input: { command: 'pwd' } }));
+      controller.enqueue(sseEvent('tool_result', { tool_use_id: 'restored', content: 'saved output' }));
+      controller.enqueue(sseEvent('history_replay_complete', {}));
+      controller.enqueue(sseEvent('text', 'live result'));
+      controller.close();
+    } }) };
+    const store = initBridgeTestContext({ settings: makeBridgeSettings(), llm });
+    const session = store.createSession('restored stream', 'default');
+    const binding = store.upsertChannelChat({ channelType: 'feishu', chatId: 'replayed-card', bridgeSessionId: session.id });
+    await processMessage(binding, 'original request', undefined, undefined, undefined,
+      () => { observed.push('text'); }, (_id, _name, status) => { observed.push(status); },
+      undefined, undefined, undefined,
+      { streamPreview: { includeToolSnippets: false }, onHistoryReplayComplete: () => { observed.push('replayed'); } },
+      createTestSdkConversationRuntime(store, llm));
+    assert.deepEqual(observed, ['running', 'complete', 'replayed', 'text']);
+  });
   for (const transport of ['cli', 'desktop'] as const) {
     it(`passes acp identity with ${transport} transport and the matching model policy to the runtime`, async () => {
       resetBridgeTestState();

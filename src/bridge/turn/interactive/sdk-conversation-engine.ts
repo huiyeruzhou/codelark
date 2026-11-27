@@ -174,6 +174,7 @@ export async function processMessage(
     };
     onThinkingNote?: OnThinkingNote;
     onHistoryItem?: OnHistoryItem;
+    onHistoryReplayComplete?: () => void;
     /** Full accumulated answer text only; excludes thinking, status, and tool previews. */
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
@@ -420,6 +421,7 @@ async function consumeStream(
     };
     onThinkingNote?: OnThinkingNote;
     onHistoryItem?: OnHistoryItem;
+    onHistoryReplayComplete?: () => void;
     /** Full accumulated answer text only; excludes thinking, status, and tool previews. */
     onAnswerText?: OnPartialText;
     onContextUsage?: OnContextUsage;
@@ -632,6 +634,11 @@ async function consumeStream(
               });
             }
           } catch { /* skip */ }
+          break;
+        }
+
+        case 'history_replay_complete': {
+          options?.onHistoryReplayComplete?.();
           break;
         }
 
