@@ -4465,7 +4465,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         : state.toolCalls.slice(state.toolCallOffset, state.toolCallOffset + renderedToolCount);
       const staticCard = buildStreamingCardBody(
         state.historyDriven ? state.pendingText || '' : state.renderedText || '',
-        state.renderedTasksText || EMPTY_STREAMING_TASKS,
+        // The successfully delivered continuation now owns the live todo list.
+        EMPTY_STREAMING_TASKS,
         statusText,
         renderedTools,
         [],

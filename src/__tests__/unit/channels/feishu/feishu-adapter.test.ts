@@ -4403,6 +4403,7 @@ describe('feishu-adapter structured streaming regions', () => {
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
     adapter.onStreamActions('chat-1', [[{ text: '停止', callbackData: 'clk-command:s1:%2Fstop', type: 'danger' }]], 'stream-1');
+    adapter.onTaskEvent('chat-1', [{ text: '最新卡片专属待办', status: 'in_progress' }], 'stream-1');
     const firstLargeGroup = `上一组 ${'a'.repeat(14_500)}`;
     const currentLargeGroup = `当前组 ${'b'.repeat(14_500)}`;
     adapter.onStreamHistory('chat-1', [{
@@ -4410,7 +4411,7 @@ describe('feishu-adapter structured streaming regions', () => {
       role: 'assistant' as const,
       content: firstLargeGroup,
     }], 'stream-1');
-    await waitForCondition(() => elementUpdates.length >= 1 || cardUpdates.length >= 1);
+    assert.equal(await (adapter as any).awaitCardFlushCompletion('stream-1'), true);
 
     adapter.onStreamHistory('chat-1', [{
       type: 'markdown' as const,
@@ -4433,11 +4434,13 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.match(rolloverStaticJson, /上一组/);
     assert.doesNotMatch(rolloverStaticJson, /当前组/);
     assert.doesNotMatch(rolloverStaticJson, /clk-command:s1:%2Fstop/, 'rolled-over source card must clear stop buttons');
+    assert.doesNotMatch(rolloverStaticJson, /最新卡片专属待办/, 'rolled-over source card must clear its todo list');
     const continuationJson = JSON.stringify(createdCards.at(-1));
     assert.ok(Buffer.byteLength(continuationJson, 'utf8') < 28_000);
     assert.match(continuationJson, /当前组/);
     assert.doesNotMatch(continuationJson, /上一组/);
     assert.match(continuationJson, /clk-command:s1:%2Fstop/, 'new continuation card keeps the active stop button');
+    assert.match(continuationJson, /最新卡片专属待办/, 'new continuation card keeps the current todo list');
     const activeState = (adapter as any).activeCards.get('stream-1');
     assert.equal(activeState.cardId, 'card-2');
     assert.equal(activeState.historyItemOffset, 1);

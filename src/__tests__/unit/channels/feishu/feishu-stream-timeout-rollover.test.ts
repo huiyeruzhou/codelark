@@ -118,10 +118,13 @@ it('finalization waits for timeout recovery and adopts the continuation with the
   const f = fixture();
   try {
     await f.internal.createStreamingCard(chat, undefined, stream);
+    f.adapter.onTaskEvent(chat, [{ text: '待办原状态', status: 'pending' }], stream);
+    assert.equal(await f.internal.awaitCardFlushCompletion(stream), true);
     f.adapter.onStreamText(chat, 'timeout', stream);
     await f.continuationStarted.promise;
     await nextTurn();
     f.adapter.onStreamText(chat, 'latest while creating', stream);
+    f.adapter.onTaskEvent(chat, [{ text: '待办最新状态', status: 'completed' }], stream);
     let finalized = false;
     const result = f.internal.finalizeCard(chat, 'completed', 'final response', stream).then((value: boolean) => {
       finalized = true; return value;
@@ -135,6 +138,10 @@ it('finalization waits for timeout recovery and adopts the continuation with the
     assert.equal(final.payload.path.card_id, 'card-2');
     assert.match(final.payload.data.card.data, /latest while creating/);
     assert.match(final.payload.data.card.data, /final response/);
+    assert.match(final.payload.data.card.data, /待办最新状态/);
+    const oldCard = f.requests.find(r => r.kind === 'update' && r.payload.path?.card_id === 'card-1');
+    assert.ok(oldCard);
+    assert.doesNotMatch(oldCard.payload.data.card.data, /待办原状态|待办最新状态/);
   } finally { f.cleanup(); }
 });
 
@@ -142,6 +149,8 @@ it('releases the background request and retries the source card when continuatio
   const f = fixture(200850, true);
   try {
     await f.internal.createStreamingCard(chat, undefined, stream);
+    f.adapter.onTaskEvent(chat, [{ text: '续页失败仍需保留的待办', status: 'in_progress' }], stream);
+    assert.equal(await f.internal.awaitCardFlushCompletion(stream), true);
     f.adapter.onStreamText(chat, 'timeout', stream);
     await f.continuationStarted.promise;
     f.adapter.onStreamText(chat, 'latest after failed continuation', stream);
@@ -150,6 +159,8 @@ it('releases the background request and retries the source card when continuatio
       && JSON.stringify(r.payload).includes('latest after failed continuation')));
     assert.equal(await f.internal.awaitCardFlushCompletion(stream, 100), true);
     assert.equal(f.state().cardId, 'card-1');
+    const sourceUpdate = f.requests.filter(r => r.kind === 'update' && r.payload.path?.card_id === 'card-1').at(-1);
+    assert.match(sourceUpdate?.payload.data.card.data || '', /续页失败仍需保留的待办/);
   } finally { f.cleanup(); }
 });
 
