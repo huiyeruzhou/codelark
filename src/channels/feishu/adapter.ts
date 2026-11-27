@@ -2492,6 +2492,9 @@ export class FeishuAdapter extends BaseChannelAdapter {
     // 无平台来源也是明确的路由，后续刷新不能借用群里最后一条输入。
     if (!this.streamReplyTargets.has(streamKey)) {
       if (messageId && /^(?:manual|every|then):/.test(messageId)) messageId = undefined;
+      // Feishu replies to a thread member stay in that thread even when
+      // reply_in_thread=false. Ordinary timeline streams must use message.create.
+      if (!parseTopicConversationId(chatId) && !this.isThreadReplyChat(chatId)) messageId = undefined;
       this.streamReplyTargets.set(streamKey, { chatId, messageId, inThread: Boolean(messageId) && this.isThreadReplyChat(chatId) });
     }
   }
@@ -3526,7 +3529,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     if (handle.replyToMessageId) {
       this.streamReplyTargets.set(cardKey, {
         chatId,
-        messageId: handle.replyToMessageId,
+        messageId: handle.replyInThread || parseTopicConversationId(chatId) ? handle.replyToMessageId : undefined,
         inThread: Boolean(handle.replyInThread),
       });
     }

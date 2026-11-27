@@ -2809,7 +2809,7 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          reply: async () => ({ data: { message_id: 'stream-message-1' } }),
+          create: async () => ({ data: { message_id: 'stream-message-1' } }),
         },
       },
     };
@@ -3233,9 +3233,9 @@ describe('feishu-adapter structured streaming regions', () => {
 
     const created = await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
     assert.equal(created, true);
-    assert.equal(createCalls.length, 0);
-    assert.equal(replyCalls.length, 1);
-    assert.deepEqual(replyCalls[0]?.path, { message_id: 'reply-1' });
+    assert.equal(createCalls.length, 1);
+    assert.equal(replyCalls.length, 0);
+    assert.equal(createCalls[0]?.data.receive_id, 'chat-1');
 
     const elements = createdCards[0]?.body?.elements || [];
     assert.equal(elements.length, 3);
@@ -3466,8 +3466,8 @@ describe('feishu-adapter structured streaming regions', () => {
     adapter.onStreamStatus('chat-1', '已运行 5分，上次响应距今 2分', 'stream-1');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    assert.equal(createCalls.length, 0);
-    assert.equal(replyCalls.length, 1);
+    assert.equal(createCalls.length, 1);
+    assert.equal(replyCalls.length, 0);
     assert.equal(cardUpdateCalls.length, 1);
     assert.equal(elementUpdates.length, 0);
 
@@ -3487,7 +3487,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const settingsCalls: Array<Record<string, any>> = [];
     const batchUpdates: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
-    const replyCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     const operations: Array<{ kind: string; cardId?: string; elementId?: string; content?: string }> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
@@ -3544,9 +3544,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
-          reply: async (payload: Record<string, any>) => {
-            replyCalls.push(payload);
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
             return { data: { message_id: `msg-${cardIndex}` } };
           },
         },
@@ -3571,7 +3570,7 @@ describe('feishu-adapter structured streaming regions', () => {
     adapter.onStreamHistory('chat-1', secondBatch, 'stream-1');
     await waitForCondition(() => createdCards.length >= 2);
 
-    assert.equal(replyCalls.length, 2);
+    assert.equal(createCalls.length, 2);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     assert.equal(cardUpdates.length, 1);
     const rolloverSettingsCall = settingsCalls.find((call) => call.path?.card_id === 'card-1');
@@ -3994,7 +3993,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const elementUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
-    const replyCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -4041,9 +4040,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
-          reply: async (payload: Record<string, any>) => {
-            replyCalls.push(payload);
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
             return { data: { message_id: `msg-${cardIndex}` } };
           },
         },
@@ -4064,7 +4062,7 @@ describe('feishu-adapter structured streaming regions', () => {
       await waitForCondition(() => cardUpdates.length >= index + 1, 1000);
     }
 
-    assert.equal(replyCalls.length, 1);
+    assert.equal(createCalls.length, 1);
     assert.equal(settingsCalls.some((call) => call.path?.card_id === 'card-1'), false);
     assert.equal(elementCreates.length, 1);
     assert.equal(createdCards.length, 1);
@@ -4082,7 +4080,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const settingsCalls: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
-    const replyCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -4126,9 +4124,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
-          reply: async (payload: Record<string, any>) => {
-            replyCalls.push(payload);
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
             return { data: { message_id: `msg-${cardIndex}` } };
           },
         },
@@ -4149,7 +4146,7 @@ describe('feishu-adapter structured streaming regions', () => {
       await waitForCondition(() => cardUpdates.length >= index + 1, 1000);
     }
 
-    assert.equal(replyCalls.length, 1);
+    assert.equal(createCalls.length, 1);
     assert.equal(settingsCalls.length, 0);
     assert.equal(createdCards.length, 1);
     assert.equal(elementCreates.length, 1);
@@ -4160,7 +4157,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const settingsCalls: Array<Record<string, any>> = [];
     const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
-    const replyCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -4207,9 +4204,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
-          reply: async (payload: Record<string, any>) => {
-            replyCalls.push(payload);
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
             return { data: { message_id: `msg-${cardIndex}` } };
           },
         },
@@ -4235,7 +4231,7 @@ describe('feishu-adapter structured streaming regions', () => {
       lastCreateCount = elementCreates.length;
     }
 
-    assert.equal(replyCalls.length, 2);
+    assert.equal(createCalls.length, 2);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     assert.ok(cardUpdates.some((update) => String(update.data?.card?.data || '').includes('st_1_t_13')));
     const activeState = (adapter as any).activeCards.get('stream-1');
@@ -4251,7 +4247,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const elementUpdates: Array<Record<string, any>> = [];
-    const replyCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -4301,9 +4297,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
-          reply: async (payload: Record<string, any>) => {
-            replyCalls.push(payload);
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
             return { data: { message_id: `msg-${cardIndex}` } };
           },
         },
@@ -4329,7 +4324,7 @@ describe('feishu-adapter structured streaming regions', () => {
     }], 'stream-1');
     await waitForCondition(() => createdCards.length >= 2, 1000);
 
-    assert.equal(replyCalls.length, 2);
+    assert.equal(createCalls.length, 2);
     assert.equal(cardUpdates.length, 1);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));
     assert.ok(elementCreates.some((create) => String(create.data?.elements || '').includes('stream_txt_2')));
@@ -4351,7 +4346,7 @@ describe('feishu-adapter structured streaming regions', () => {
     const cardUpdates: Array<Record<string, any>> = [];
     const elementCreates: Array<Record<string, any>> = [];
     const elementUpdates: Array<Record<string, any>> = [];
-    const replyCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     let cardIndex = 0;
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -4398,9 +4393,8 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: `msg-${cardIndex}` } }),
-          reply: async (payload: Record<string, any>) => {
-            replyCalls.push(payload);
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
             return { data: { message_id: `msg-${cardIndex}` } };
           },
         },
@@ -4429,7 +4423,7 @@ describe('feishu-adapter structured streaming regions', () => {
     }], 'stream-1');
     await waitForCondition(() => createdCards.length >= 2, 1000);
 
-    assert.equal(replyCalls.length, 2);
+    assert.equal(createCalls.length, 2);
     assert.ok(cardUpdates.length >= 1);
     assert.equal(elementCreates.length, 0);
     assert.ok(settingsCalls.some((call) => call.path?.card_id === 'card-1'));

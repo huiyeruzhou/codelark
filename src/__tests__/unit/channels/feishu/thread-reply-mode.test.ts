@@ -166,7 +166,8 @@ it('pins the initiating message through delayed creation, another incoming messa
   f.adapter.onMessageEnd(chatId, 'turn-a');
   f.adapter.onMessageStart(chatId, 'turn-b', 'om_newer');
   await f.a.cardCreatePromises.get('turn-b');
-  assert.equal(f.sent.at(-1).path.message_id, 'om_newer');
+  assert.equal(f.sent.at(-1).method, 'create');
+  assert.equal(f.sent.at(-1).path, undefined);
   assert.equal(f.sent.at(-1).data.reply_in_thread, undefined);
   f.adapter.onMessageEnd(chatId, 'turn-b');
 });
@@ -375,5 +376,51 @@ it('does not send synthetic scheduled execution IDs to Feishu when thread mode i
     assert.equal(f.sent.at(-1).method, 'create');
     assert.equal(f.sent.at(-1).path, undefined);
     f.adapter.onMessageEnd(chatId, executionId);
+  }
+});
+
+it('keeps ordinary-group output on the timeline for thread input, outside steer, continuation and recovery when thread mode is off', async () => {
+  for (const mirror of [false, true]) {
+    const f = fixture(); f.adapter.manageThreadReplyMode(input('om_off'), 'off');
+    const key = mirror ? 'mirror-off' : 'request-off';
+    if (mirror) f.adapter.onMirrorStreamStart(chatId, key, 'om_inside');
+    else f.adapter.onMessageStart(chatId, key, 'om_inside');
+    await f.a.cardCreatePromises.get(key);
+    assert.equal(f.sent[0].method, 'create', 'reply to a thread member stays in that thread even with reply_in_thread=false');
+    await f.adapter.onInputDelivery(input('om_outside'), 'accepted', undefined, { streamKey: key, requestMessageId: 'om_inside' });
+    const state = f.a.activeCards.get(key); assert(state);
+    await f.a.rolloverStreamingCard(key, state, { historyItemOffset: 0, historyToolCallOffset: 0, toolCallOffset: 0 }, '续页', '', '', [], {});
+    assert(await f.adapter.onStreamEnd(chatId, 'completed', '主线完成', key));
+    assert.equal(f.sent.length, 2);
+    assert(f.sent.every(s => s.method === 'create' && !s.path && !s.data.reply_in_thread));
+    f.adapter.onMessageEnd(chatId, key);
+    const recoveryKey = `${key}-recovery`; f.failCreate();
+    f.adapter.onMessageStart(chatId, recoveryKey, 'om_inside');
+    await f.a.cardCreatePromises.get(recoveryKey);
+    assert(await f.adapter.onStreamEnd(chatId, 'completed', '恢复后的结果仍在主线', recoveryKey));
+    assert(f.sent.every(s => s.method === 'create' && !s.path && !s.data.reply_in_thread));
+    await f.adapter.stop();
+  }
+});
+
+it('moves a restored legacy non-thread-mode card off its inherited thread without changing explicit thread cards', async () => {
+  for (const replyInThread of [false, true]) {
+    const f = fixture(); f.adapter.manageThreadReplyMode(input('om_off'), 'off');
+    const key = `restored-${replyInThread}`;
+    assert(f.adapter.adoptStreamingCardHandle(chatId, key, {
+      cardId: 'legacy-card', messageId: 'om_legacy_card', sequence: 10,
+      replyToMessageId: 'om_inside', replyInThread, startTime: Date.now(),
+    }));
+    f.adapter.onStreamText(chatId, '重启后接续', key);
+    f.a.enqueueCardFlush(key); await f.a.awaitCardFlushCompletion(key);
+    if (replyInThread) {
+      assert.equal(f.sent.length, 0, 'explicit thread cards continue in place');
+      assert.equal(f.adapter.getStreamingCardHandle(chatId, key)?.replyToMessageId, 'om_inside');
+    } else {
+      assert.equal(f.sent.length, 1);
+      assert.equal(f.sent[0].method, 'create');
+      assert.equal(f.adapter.getStreamingCardHandle(chatId, key)?.replyToMessageId, undefined);
+    }
+    await f.adapter.stop();
   }
 });
