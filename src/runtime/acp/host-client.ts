@@ -377,32 +377,35 @@ export async function tryConnectExistingAcpHost(home = currentHome()): Promise<A
  * or unacked turns exist, stays seamlessly connected without interrupting them.
  */
 export async function getSharedAcpHostClient(home = currentHome()): Promise<AcpHostClient> {
-  if (sharedClient?.connected) return sharedClient;
   if (sharedConnecting) return sharedConnecting;
 
   sharedConnecting = (async () => {
     const socketPath = acpHostEndpoint(home);
     const entry = resolveAcpHostEntrypoint();
     try {
-      const existing = await connectAcpHostAt(socketPath, 1_500);
+      const existing = sharedClient?.connected ? sharedClient : await connectAcpHostAt(socketPath, 1_500);
       const hello = await existing.hello();
       if (
         hello.protocolVersion === ACP_HOST_PROTOCOL_VERSION
         && (hello.codeHash === entry.codeHash || hello.activeTurnCount > 0 || hello.unackedTurnCount > 0)
       ) {
-        sharedClient = existing;
-        existing.onDisconnect(() => {
-          if (sharedClient === existing) sharedClient = null;
-        });
+        if (sharedClient !== existing) {
+          sharedClient = existing;
+          existing.onDisconnect(() => {
+            if (sharedClient === existing) sharedClient = null;
+          });
+        }
         return existing;
       }
       // Host is idle and outdated; recycle cleanly to pick up the new acp-host build.
       const shut = await existing.shutdownHost(false).catch(() => ({ ok: false }));
       if (!shut.ok) {
-        sharedClient = existing;
-        existing.onDisconnect(() => {
-          if (sharedClient === existing) sharedClient = null;
-        });
+        if (sharedClient !== existing) {
+          sharedClient = existing;
+          existing.onDisconnect(() => {
+            if (sharedClient === existing) sharedClient = null;
+          });
+        }
         return existing;
       }
       existing.detach();

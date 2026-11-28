@@ -20,6 +20,8 @@ IM 命令从用户视角分为五组。命令入口是 [src/bridge/command/dispa
 - 默认选择需要卡片记录已完成状态；升级前仅记录了历史边界的卡片仍可通过“回复”分叉。转发后的有效 Codex 卡片保留边界，可继续从它们分叉。
 - 分支沿用工作目录及会话设置，但只复制对话历史，不复制或回退文件。原会话可继续运行。当前仅支持本机 Codex；旧版本卡片、活动卡片、单条原生记录的中间分页、外部 app-server 和其他 runtime 会明确拒绝，不会用最新历史替代卡片边界。
 - 发送 `//...`：把以 `/` 开头的内容作为模型 prompt，而不是 bridge 命令。
+- Cursor ACP 使用 `//goal <目标及完成条件>` 调用原生 goal skill，目标未完成时会自动续跑，结果显示在当前对话卡片；完成、暂停、清除或 `/stop` 时停止。连续输入时 goal 保持独立，不与相邻消息拼成同一个目标；空 `//goal` 仅显示用法。
+- Cursor ACP 使用 `//compact` 原地压缩上下文（同义 `//compress`、`//summarize`）。临时调用 Cursor CLI 原生压缩，再接回相同 session、目录和模型；历史和目标保留。命令期间可以 `/stop`，失败不把未完成的压缩写回原会话。
 - 新聊天收到普通文本或 slash 命令时，都会先按当前默认 runtime 建立隐藏的临时 BridgeSession；正式接管用 `/t`。
 - 修改当前会话参数优先用 `/runtime`、`/provider`、`/model`、`/cd` 等会话级命令。
 - 修改全局默认值用 `/set`；卡片按 TOML section 写入 `~/.codelark/config.toml`。

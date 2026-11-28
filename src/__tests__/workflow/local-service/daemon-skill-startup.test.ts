@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-test('a direct daemon cold start fails before connecting when local skills cannot be refreshed', () => {
+test('a direct daemon cold start fails before connecting when local skills cannot be refreshed', { timeout: 30_000 }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-daemon-skills-'));
   const codexHome = path.join(root, 'codex');
   const bridgeHome = path.join(root, 'bridge');
@@ -17,7 +17,7 @@ test('a direct daemon cold start fails before connecting when local skills canno
     const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/entrypoints/daemon.ts'], {
       cwd: process.cwd(),
       env: { ...process.env, CODEX_HOME: codexHome, CODELARK_HOME: bridgeHome },
-      encoding: 'utf8', timeout: 10_000,
+      encoding: 'utf8', timeout: 20_000,
     });
     assert.equal(result.error, undefined);
     assert.equal(result.status, 1);

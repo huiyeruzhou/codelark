@@ -116,6 +116,7 @@ export interface AcpSessionSnapshot {
 }
 
 export interface AcpHostHelloResult {
+  capabilities?: { cursorCommands?: boolean };
   pid: number;
   protocolVersion: number;
   codeHash: string;

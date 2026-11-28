@@ -23,6 +23,7 @@ export function buildHelpCommandResponse(): string {
     '',
     '**Bridge 控制**',
     '- `//...` 向模型发送以 `/` 开头的文本',
+    '- Cursor ACP：`//goal <目标及完成条件>` 设置目标并自动续跑；`//compact` 原地压缩上下文',
     '- `/h` 帮助',
     '- `/provider` 或 `/p` 查看或切换当前 runtime 的 Provider（使用何种方式运行 agent）；Codex 固定 `tmux`（app-server 自动执行），Claude 可用 `tmux | pty | sdk` 且默认 `tmux`，Cursor 支持 `acp | tmux` 且默认 `acp`，Doubao 固定 `acp`，Kimi 与 ZCode 固定 `tmux`',
     '- `/stop` 停止当前任务',

@@ -93,6 +93,33 @@ function setup(perms?: PendingPermissions) {
 afterEach(async () => { await closeAllCursorAcpSessions(); });
 
 describe('Cursor ACP direct provider', () => {
+  it('preserves the leading native goal command and first-turn instructions, then resumes the same session', async () => {
+    const { client, provider, sessionId } = setup();
+    client.onPrompt = () => {
+      client.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '目标执行完成' } });
+      client.end();
+    };
+    const first = await collect(provider.streamChat({ sessionId, prompt: '/goal 修复并通过回归', systemPrompt: '使用中文，保留用户文件' }));
+    const firstPrompt = client.calls.find(call => call.method === 'session/prompt')!.params.prompt[0].text;
+    assert.match(firstPrompt, /^\/goal 修复并通过回归\n/);
+    assert.match(firstPrompt, /<session_instructions>\n使用中文，保留用户文件/);
+    assert.equal(first.find(event => event.type === 'result')?.data.outcome, 'completed');
+    await collect(provider.streamChat({ sessionId, cursorSessionId: client.nativeId, prompt: '/goal 新目标', systemPrompt: '不要重复注入' }));
+    const prompts = client.calls.filter(call => call.method === 'session/prompt');
+    assert.equal(prompts[1].params.prompt[0].text, '/goal 新目标');
+    assert.equal(prompts[0].params.sessionId, prompts[1].params.sessionId);
+  });
+
+  for (const useHost of [false, true]) it(`rejects malformed compact before opening a native session (host=${useHost})`, async () => {
+    const provider = new CursorAcpProvider(undefined, { useHost, clientFactory: async () => { throw new Error('must not start'); },
+      hostClient: { ensureSession: async () => { throw new Error('must not start host'); } } as any });
+    let accepted = false;
+    const events = await collect(provider.streamChat({ sessionId: randomUUID(), prompt: '/compact extra', onInputAccepted: () => { accepted = true; } }));
+    assert.equal(accepted, false);
+    assert.match(events.find(event => event.type === 'error')?.data, /用法/);
+    assert.equal(events.find(event => event.type === 'result')?.data.outcome, 'failed');
+  });
+
   const transient = 'RetriableError: [canceled] http/2 stream closed with error code CANCEL (0x8)';
   const nativeError = (client: FakeAcp, message = transient) => {
     client.update({sessionUpdate:'agent_message_chunk',content:{type:'text',text:`\n\nError: ${message}`}});
@@ -719,4 +746,15 @@ describe('Cursor ACP direct provider', () => {
     }
   });
 
+});
+
+it('never sends compact or goal to an old active ACP host without command support', async () => {
+  const provider = new CursorAcpProvider(undefined, { useHost: true, hostClient: {
+    hello: async () => ({ capabilities: undefined }),
+    ensureSession: async () => { throw new Error('must not submit'); },
+  } as any });
+  for (const prompt of ['/compact', '/goal 完成目标']) {
+    const events = await collect(provider.streamChat({ sessionId: randomUUID(), prompt }));
+    assert.match(String(events.find(e => e.type === 'error')?.data), /本条命令未执行/);
+  }
 });

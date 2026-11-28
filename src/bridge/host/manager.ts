@@ -63,6 +63,7 @@ import {
 } from '../../runtime/kimi/tmux-provider.js';
 import { cursorTmuxSessionName } from '../../runtime/cursor/tmux-provider.js';
 import { detachCursorAcpHostSessions } from '../../runtime/cursor/acp-provider.js';
+import { cursorAcpCommandNotice, isCursorCompactPrompt, isCursorControlPrompt } from '../../runtime/cursor/acp-commands.js';
 import { closeDoubaoAcpSession, detachDoubaoAcpHostSessions } from '../../runtime/doubao/acp-provider.js';
 import {
   detachSharedAcpHostClient,
@@ -2832,32 +2833,43 @@ function cursorAcpInputSession(msg: InboundMessage): string | undefined {
   ) ? binding.bridgeSessionId : undefined;
 }
 
-const pendingCursorAcpInputs = new Map<string, { messages: InboundMessage[]; completion: Promise<void> }>();
+const pendingCursorAcpInputs = new Map<string, { messages: InboundMessage[]; inputs: InboundMessage[]; completion: Promise<void> }>();
 
 function enqueueCursorAcpInput(adapter: BaseChannelAdapter, msg: InboundMessage, sessionId: string): Promise<void> {
   const pending = pendingCursorAcpInputs.get(sessionId);
   if (pending) {
-    if (!pending.messages.some(input => input.messageId === msg.messageId)) pending.messages.push(msg);
+    if (!pending.inputs.some(input => input.messageId === msg.messageId)) {
+      pending.messages.push(msg);
+      pending.inputs.push(msg);
+      INTERACTIVE_RUNTIME.getActiveTask(sessionId)?.abortController.abort('codelark:cursor-acp-follow-up');
+    }
     return pending.completion;
   }
-  const entry = { messages: [msg], completion: Promise.resolve() };
+  const entry = { messages: [msg], inputs: [msg], completion: Promise.resolve() };
   pendingCursorAcpInputs.set(sessionId, entry);
   INTERACTIVE_RUNTIME.getActiveTask(sessionId)?.abortController.abort('codelark:cursor-acp-follow-up');
   entry.completion = INTERACTIVE_RUNTIME.processWithSessionLock(sessionId, async () => {
-    // Inputs received while cancellation was pending share one next prompt, in
-    // arrival order. Its card belongs to the latest input's reply target.
-    pendingCursorAcpInputs.delete(sessionId);
-    const last = entry.messages.at(-1)!;
-    const combined: InboundMessage = entry.messages.length === 1 ? last : {
-      ...last,
-      text: entry.messages.map(input => appendModelContextText(input.text, input.contextText)).join('\n\n'),
-      contextText: undefined,
-      attachments: entry.messages.flatMap(input => input.attachments || []),
-    };
-    await handleMessage(adapter, combined, sessionId, entry.messages);
+    // Keep one queue owner through every command boundary. A new steer must
+    // cancel whichever batch is running, including a goal continuation/compact.
+    while (entry.messages.length) {
+      const batch = [entry.messages.shift()!];
+      if (!isCursorControlPrompt(toModelPromptText(batch[0]!.text))) {
+        while (entry.messages.length && !isCursorControlPrompt(toModelPromptText(entry.messages[0]!.text))) {
+          batch.push(entry.messages.shift()!);
+        }
+      }
+      const last = batch.at(-1)!;
+      const combined: InboundMessage = batch.length === 1 ? last : {
+        ...last,
+        text: batch.map(input => appendModelContextText(input.text, input.contextText)).join('\n\n'),
+        contextText: undefined,
+        attachments: batch.flatMap(input => input.attachments || []),
+      };
+      await handleMessage(adapter, combined, sessionId, batch);
+    }
   }, { jobKind: 'interactive-turn:cursor-acp' }).finally(() => {
     if (pendingCursorAcpInputs.get(sessionId) === entry) pendingCursorAcpInputs.delete(sessionId);
-    for (const input of entry.messages) if (input.updateId != null) adapter.acknowledgeUpdate?.(input.updateId);
+    for (const input of entry.inputs) if (input.updateId != null) adapter.acknowledgeUpdate?.(input.updateId);
   });
   return entry.completion;
 }
@@ -4837,6 +4849,14 @@ async function handleMessage(
     }
   }
   const acpSessionId = cursorAcpInputSession(msg);
+  if (acpSessionId && getSessionActiveRuntime(store.getSession(acpSessionId)) === 'cursor') {
+    const notice = cursorAcpCommandNotice(toModelPromptText(msg.text));
+    if (notice) {
+      enqueueBridgeNotice(adapter, msg.address, notice, { replyToMessageId: msg.messageId });
+      if (msg.updateId != null) adapter.acknowledgeUpdate?.(msg.updateId);
+      return;
+    }
+  }
   if (acpSessionId) hasCursorAcpQuestion(acpSessionId);
   if (acpQueuedSessionId && acpSessionId !== acpQueuedSessionId) {
     enqueueBridgeNotice(adapter, msg.address, '排队期间聊天已切换会话，本条输入尚未提交。', { replyToMessageId: msg.messageId });
@@ -5639,10 +5659,11 @@ async function handleMessage(
   }
 
   // Sanitize general message text before routing to conversation engine
-  const fullModelText = appendModelContextText(
-    modelText,
-    msg.contextText,
-  );
+  const cursorControl = acpSessionId && getSessionActiveRuntime(store.getSession(acpSessionId)) === 'cursor'
+    && isCursorControlPrompt(modelText);
+  const fullModelText = cursorControl
+    ? (isCursorCompactPrompt(modelText) ? modelText : [modelText, msg.contextText?.trim()].filter(Boolean).join('\n\n'))
+    : appendModelContextText(modelText, msg.contextText);
   const { text, truncated } = sanitizeInput(fullModelText);
   if (truncated) {
     console.warn(`[bridge-manager] Input truncated from ${fullModelText.length} to ${text.length} chars for chat ${msg.address.chatId}`);

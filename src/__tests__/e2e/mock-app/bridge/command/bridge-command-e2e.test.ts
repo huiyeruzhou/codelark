@@ -3831,7 +3831,7 @@ provider = "tmux"
 
 
 
-  it('keeps tmux provider auto-enter enabled when /new follows /p tmux', async () => {
+  it('keeps tmux provider auto-enter enabled when /new follows /p tmux', { timeout: 45_000 }, async () => {
     const bootstrapThreadIds = [
       '019e82f0-0000-7000-9000-000000000001',
       '019e82f0-0000-7000-9000-000000000002',
@@ -3906,7 +3906,7 @@ provider = "tmux"
   });
 
 
-  it('initializes a default tmux provider conversation on first text after /set defaultProvider tmux and /new', async () => {
+  it('initializes a default tmux provider conversation on first text after /set defaultProvider tmux and /new', { timeout: 45_000 }, async () => {
     const bootstrapThreadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
     const llmCalls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({

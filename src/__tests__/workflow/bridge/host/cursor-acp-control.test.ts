@@ -122,3 +122,67 @@ it('ACP rapid follow-ups cancel once, wait for confirmation, preserve both input
   assert.equal(store.getSession(session.id)?.runtime?.cursor?.sessionId, 'acp-native-session',
     'the absent TUI transcript must not clear the ACP identity');
 });
+
+it('ACP commands stay separate from rapid follow-ups; malformed compact and goal help do not interrupt work', { timeout: 15_000 }, async t => {
+  const calls: StreamChatParams[] = [];
+  const streams: ReadableStreamDefaultController<string>[] = [];
+  const jobs: Promise<void>[] = [];
+  const store = initBridgeTestContext({ llm: { streamChat(params) {
+    calls.push(params);
+    return new ReadableStream({ start(controller) {
+      streams.push(controller);
+      controller.enqueue(sseEvent('status', { session_id: 'native-goal-session' }));
+      params.onInputAccepted?.();
+    } });
+  } } });
+  manager.resetStateForTests();
+  const session = store.createSession('ACP commands', 'model', undefined, os.tmpdir());
+  store.updateSession(session.id, { runtime: { activeRuntime: 'cursor', cursor: { provider: 'acp', sessionProvider: 'acp' } } });
+  createConfigService({ migrate: false }).set({ kind: 'session', sessionId: session.id }, { runtime: { cursor: { provider: 'acp' } } });
+  const address = { channelType: 'feishu', chatId: 'oc_cursor_acp_commands' };
+  store.upsertChannelChat({ ...address, bridgeSessionId: session.id });
+  const adapter = new RecordingAdapter();
+  const message = (text: string, id: string) => ({ address, text, messageId: id, timestamp: Date.now() });
+  const finish = (index: number) => {
+    streams[index]!.enqueue(sseEvent('text', `完成 ${index}`));
+    streams[index]!.enqueue(sseEvent('result', { session_id: 'native-goal-session', outcome: 'completed' }));
+    streams[index]!.close();
+  };
+  t.after(async () => {
+    for (const stream of streams) { try { stream.close(); } catch {} }
+    await Promise.allSettled(jobs);
+    manager.resetStateForTests();
+  });
+  jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, message('当前工作', 'om_work')));
+  await until(() => calls.length === 1);
+  await manager.handleMessage(adapter, message('//compact extra', 'om_compact'));
+  await manager.handleMessage(adapter, message('//goal', 'om_goal_help'));
+  assert.equal(calls[0].abortController!.signal.aborted, false);
+  assert.equal(calls.length, 1);
+  assert.match(JSON.stringify(adapter.sent), /用法/);
+  assert.match(JSON.stringify(adapter.sent), /目标及完成条件/);
+  jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, message('先记住约束', 'om_before')));
+  jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, { ...message('//goal 完成修复并验证', 'om_goal'), contextText: '<quoted_message>thread source</quoted_message>' }));
+  jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, { ...message('//compact', 'om_compact_valid'), contextText: '<quoted_message>thread source</quoted_message>' }));
+  jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, message('补充说明', 'om_after')));
+  await delay(20);
+  assert.equal(calls[0].abortController!.signal.aborted, true);
+  finish(0);
+  await until(() => calls.length === 2);
+  assert.equal(calls[1].prompt, '先记住约束');
+  finish(1);
+  await until(() => calls.length === 3);
+  assert.equal(calls[2].prompt, '/goal 完成修复并验证\n\n<quoted_message>thread source</quoted_message>');
+  finish(2);
+  await until(() => calls.length === 4);
+  assert.equal(calls[3].prompt, '/compact');
+  jobs.push(manager.handleMessageWithoutDeliveryWait(adapter, message('压缩中追加', 'om_during_compact')));
+  await delay(20);
+  assert.equal(calls[3].abortController!.signal.aborted, true);
+  finish(3);
+  await until(() => calls.length === 5);
+  assert.equal(calls[4].prompt, '补充说明\n\n压缩中追加');
+  finish(4);
+  await Promise.all(jobs);
+  assert.ok(calls.slice(1).every(call => call.cursorSessionId === 'native-goal-session'));
+});

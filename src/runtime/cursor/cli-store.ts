@@ -156,6 +156,46 @@ export function readCursorNativeMessages(storePath: string): CursorNativeMessage
   return readCursorNativeSnapshot(storePath)?.messages ?? null;
 }
 
+export interface CursorNativeGoal {
+  id: string;
+  conversationId: string;
+  objective: string;
+  status: number;
+}
+
+/** Read the current root only. Never infer a goal from assistant prose. */
+export function readCursorNativeGoal(storePath: string): { goal: CursorNativeGoal | null; pendingTools: boolean } | null {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(storePath, { readOnly: true });
+    const row = db.prepare("SELECT value FROM meta WHERE key = '0'").get() as { value?: string | Uint8Array } | undefined;
+    if (!row?.value) return null;
+    const raw = typeof row.value === 'string' ? row.value : Buffer.from(row.value).toString('utf8');
+    const meta = JSON.parse(raw.startsWith('{') ? raw : Buffer.from(raw, 'hex').toString('utf8'));
+    const root = db.prepare('SELECT data FROM blobs WHERE id = ?').get(meta.latestRootBlobId) as { data?: Uint8Array } | undefined;
+    if (!root?.data) return null;
+    const fields = byteFields(root.data);
+    const pendingTools = (fields.get(4) || []).some(bytes => {
+      const message = JSON.parse(bytes.toString('utf8'));
+      if (message.role === 'assistant') return typeof message.content !== 'string'
+        && (!Array.isArray(message.content) || message.content.some((block: any) => block.type === 'tool-call'));
+      return message.role !== 'tool' || !Array.isArray(message.content)
+        || message.content.some((block: any) => block.type !== 'tool-result' || !block.toolCallId || !block.toolName);
+    });
+    const bytes = fields.get(32)?.at(-1);
+    if (!bytes) return { goal: null, pendingTools };
+    const scalars = new Map<number, number[]>();
+    const goal = byteFields(bytes, scalars);
+    const id = goal.get(2)?.at(-1)?.toString('utf8') || '';
+    const conversationId = goal.get(1)?.at(-1)?.toString('utf8') || '';
+    const objective = goal.get(3)?.at(-1)?.toString('utf8') || '';
+    const status = scalars.get(4)?.at(-1) ?? 0;
+    if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(id) || !conversationId || !objective || status < 1 || status > 4) return null;
+    return { goal: { id, conversationId, objective, status }, pendingTools };
+  } catch { return null; }
+  finally { db?.close(); }
+}
+
 export function readCursorNativeUserPrompts(storePath: string): string[] | null {
   return readCursorNativeSnapshot(storePath)?.userPrompts ?? null;
 }

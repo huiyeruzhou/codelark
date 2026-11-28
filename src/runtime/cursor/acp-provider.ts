@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { TaskProgressInfo } from '../../domain/progress.js';
 import type { LLMProvider, StreamChatParams } from '../contracts.js';
 import { BRIDGE_SHUTDOWN_REASON } from '../contracts.js';
-import { prepareTextAttachmentPrompt } from '../local-attachments.js';
+import { cursorAcpCommandNotice, isCursorControlPrompt, prepareCursorAcpPrompt } from './acp-commands.js';
 import type { PendingPermissions } from '../permission-gateway.js';
 import { sseEvent } from '../sse.js';
 import { assertCursorAcpRestrictiveResume, cursorAcpSessionStorePath } from './acp-session-policy.js';
@@ -449,6 +449,13 @@ export class CursorAcpProvider implements LLMProvider {
   constructor(private pendingPerms?: PendingPermissions, private options: CursorAcpProviderOptions = {}) {}
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
+    const commandNotice = cursorAcpCommandNotice(params.prompt);
+    if (commandNotice) return new ReadableStream({ start(controller) {
+      controller.enqueue(sseEvent('error', commandNotice));
+      controller.enqueue(sseEvent('result', { outcome: 'failed' }));
+      controller.enqueue(sseEvent('done', ''));
+      controller.close();
+    } });
     if (shouldUseCursorAcpHost(this.options)) {
       return this.streamHostedChat(params);
     }
@@ -625,6 +632,11 @@ export class CursorAcpProvider implements LLMProvider {
             const payload = record(message.params);
             if (!acceptingUpdates || message.method !== 'session/update' || payload.sessionId !== session!.nativeId) return;
             const update = record(payload.update);
+            if (update.sessionUpdate === 'codelark_goal_update') {
+              needsTextBoundary = true;
+              emit('status', { reasoning: update.continuing ? '目标尚未完成，Cursor 正在自动继续。' : ({ 2: 'Cursor 目标已暂停。', 3: 'Cursor 目标已完成。', 4: 'Cursor 目标已清除。' } as Record<number, string>)[Number(record(update.goal).status)] || 'Cursor 目标已停止。' });
+              return;
+            }
             if (update.sessionUpdate === 'plan') {
               const tasks = planTasks(update.entries);
               emit('task_update', { tasks, todos: tasks }); return;
@@ -679,8 +691,7 @@ export class CursorAcpProvider implements LLMProvider {
               }
             }
           });
-          let prompt = prepareTextAttachmentPrompt(params);
-          if (!params.cursorSessionId && params.systemPrompt) prompt = `${params.systemPrompt}\n\n${prompt}`;
+          let prompt = prepareCursorAcpPrompt(params);
           let stopReason = 'cancelled';
           let retries = 0;
           while (!interrupted) {
@@ -804,6 +815,10 @@ export class CursorAcpProvider implements LLMProvider {
 
           const host = options.hostClient || await getSharedAcpHostClient();
           activeHost = host;
+          if (!params.reattachAcpTurnId && isCursorControlPrompt(params.prompt)
+            && !(await host.hello()).capabilities?.cursorCommands) {
+            throw new Error('ACP 后台仍在完成更新前的任务；本条命令未执行，旧任务结束后将自动升级。');
+          }
           const sessionKey = makeAcpSessionKey('cursor', params.sessionId);
           const cwd = path.resolve(params.workingDirectory || process.cwd());
           const model = params.model?.trim() || undefined;
@@ -914,8 +929,7 @@ export class CursorAcpProvider implements LLMProvider {
               hostedCursorAppliedEffort.set(params.sessionId, resolved.targetValue);
             }
 
-            let prompt = prepareTextAttachmentPrompt(params);
-            if (!params.cursorSessionId && params.systemPrompt) prompt = `${params.systemPrompt}\n\n${prompt}`;
+            const prompt = prepareCursorAcpPrompt(params);
             const started = await host.startTurn({
               sessionKey,
               prompt: [{ type: 'text', text: prompt }],
@@ -979,6 +993,11 @@ export class CursorAcpProvider implements LLMProvider {
               cancelTimeoutMs: options.cancelTimeoutMs,
               onSessionUpdate: (payload) => {
                 const update = record(payload.update);
+                if (update.sessionUpdate === 'codelark_goal_update') {
+                  needsTextBoundary = true;
+                  emit('status', { reasoning: update.continuing ? '目标尚未完成，Cursor 正在自动继续。' : ({ 2: 'Cursor 目标已暂停。', 3: 'Cursor 目标已完成。', 4: 'Cursor 目标已清除。' } as Record<number, string>)[Number(record(update.goal).status)] || 'Cursor 目标已停止。' });
+                  return;
+                }
                 if (update.sessionUpdate === 'codelark_cursor_update_todos') {
                   const tasks = updateTodos(todoHolder, update.todos, update.merge === true);
                   emit('task_update', { tasks, todos: tasks });

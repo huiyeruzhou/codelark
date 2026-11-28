@@ -14,7 +14,7 @@ export interface CursorLegacyCliToAcpMigrationResult {
 
 function resolveCursorConfigRoot(env: NodeJS.ProcessEnv = process.env): string {
   return env.CURSOR_CONFIG_DIR?.trim()
-    || (env.XDG_CONFIG_HOME?.trim() ? path.join(env.XDG_CONFIG_HOME, 'cursor') : path.join(os.homedir(), '.cursor'));
+    || (env.XDG_CONFIG_HOME?.trim() ? path.join(env.XDG_CONFIG_HOME, 'cursor') : path.join(env.HOME || env.USERPROFILE || os.homedir(), '.cursor'));
 }
 
 export function cursorAcpSessionStorePath(sessionId: string, env: NodeJS.ProcessEnv = process.env): string {

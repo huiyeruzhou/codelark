@@ -1,5 +1,20 @@
 # Cursor runtime
 
+## ACP 原生命令
+
+`//goal <目标及完成条件>` 经 Bridge 去掉一个 `/`，通过同一原生会话的 `session/prompt` 调用 Cursor builtin goal skill。首轮有会话指令时保留 `/goal` 在开头，把指令放入后面的独立标记块；连续输入在 goal 两侧分批，避免把其他消息拼进目标。空 `//goal` 只显示用法，不中断任务。thread 引用上下文放在 goal 命令后，避免覆盖命令开头；compact 不把引用内容当命令参数。
+
+Cursor CLI `2026.11.22-e9042b2` 的 ACP 没有 TUI 的 goal 自动续跑循环。CodeLark 在 ACP host 内读取当前原生 GoalState：ACTIVE 且无未完成工具时，在同一 UUID 下提交一次继续已有目标的 prompt；COMPLETE、PAUSED、CLEARED 时停止。目标完成由原生状态确认，不从回复正文猜测。所有续跑属于同一逻辑 turn、卡片和停止按钮，不创建定时 monitor；Bridge 断线或重启时独立 host 继续执行，重连回放日志。原生错误仍走已有有限重试，用户 stop 在下一轮开始前生效。host 自身进程死亡时不承诺自动恢复执行。续跑使用 `session/prompt`，并非 Cursor 未开放的 `goalContinuationAction`，不能宣称其原生 continuation 计数相同。
+
+`//compact`（同义 `//compress`、`//summarize`）调用 CLI 的原生 `/summarize`，不会发普通“总结”提示词。当前 ACP 没有 summarize RPC；extMethod 只开放模型列表，prompt 固定生成 userMessageAction。实现遵循一次性独占交接：
+
+1. 当前 ACP prompt 完成中断并释放原生进程，再复制 SQLite 到权限为 0700 的临时目录。原始库在核验前保持不变。
+2. CLI 使用独立配置和相同 UUID、cwd、模型加载副本，通过 PTY 执行一次 `/summarize`，不依赖 tmux，也不把 CLI 屏幕当成模型输出。副本中 ACTIVE goal 暂停，防止 CLI 启动后自行推进业务；CLI 结束后逐字节恢复原始 GoalState。
+3. 只有原生 summary 引用已更新、CLI 已确认退出、turns 与 goal 保留、原库 root 未变化，才在同一 SQLite 写事务中再次核对原库 root，追加原生 summary blobs 并切换 root。保留原始 session 元数据、权限和所有旧 blobs。未知格式、失败、超时、写回前取消均不提交；取消与提交同时到达时按原子事务先后处理，不留下半份状态。
+4. 重新启动 ACP，load 原 UUID，恢复认证、模型/推理/模式配置；确认恢复后才报告完成。随后继续对话仍使用同一原生会话，ACTIVE goal 可以继续。若重载本身失败，明确报错，由下一条输入重新恢复；不新建替代 session。
+
+CLI 启动与斜杠菜单依赖当前原生版本的界面，命令只输入一次，只有菜单明确选中原生 summarize 动作才发送回车；180 秒内未出现可核验的 summary 就失败，不反复补交。成功只依据原生库，不依据界面说“完成”。临时目录在子进程结束后清理。热更新时先检查 host 命令能力：旧 host 有活动或未确认轮次时保留执行，拒绝把新控制命令误送给旧实现；空闲后即使连接已缓存也会检查版本并升级。该适配需要随 Cursor 原生格式/界面变化回归；未来 ACP 正式支持压缩时应替换 CLI 交接。
+
 ## 目标
 
 Cursor 支持两种独立 provider，默认使用 `acp`：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择。切换命令走独立控制通道；运行中选择 ACP 会立即给出“结束并切换 ACP”按钮，确认后结束旧执行、保存旧身份并提交新配置，不必等待原任务结束后重发命令。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。`/mode`、`/model` 与 `/reasoning` 均按当前有效 provider（`acp` 或 `tmux`）展示状态与生效方式。

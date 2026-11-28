@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { AcpClient, AcpRpcError, type AcpClientOptions, type AcpConnection, type AcpMessage } from './client.js';
+import { cursorCliModel } from '../cursor/acp-commands.js';
+import { withCursorCompaction } from '../cursor/compact-client.js';
+import { withCursorGoalContinuation } from '../cursor/goal-continuation.js';
 import {
   ACP_HOST_PROTOCOL_VERSION,
   isAcpTurnActiveStatus,
@@ -399,7 +402,7 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
     broadcastSessionState(session);
 
     session.ready = (async () => {
-      const client = await clientFactory({
+      const start = () => clientFactory({
         executable: params.executable,
         args: params.args,
         cwd: params.cwd,
@@ -408,6 +411,9 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
         label: params.label,
         stdinPipe: params.stdinPipe,
       });
+      const connection = await start();
+      const client = params.runtime === 'cursor'
+        ? withCursorGoalContinuation(withCursorCompaction(connection, start, { executable: params.executable, cwd: params.cwd, env: sanitizeEnv(params.env), model: cursorCliModel(params.args) }), sanitizeEnv(params.env)) : connection;
       session.client = client;
 
       const loadingRejector = client.onMessage((message: AcpMessage) => {
@@ -692,6 +698,7 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
       if (!turn.acked) unackedTurnCount += 1;
     }
     return {
+      capabilities: { cursorCommands: true },
       pid: process.pid,
       protocolVersion: ACP_HOST_PROTOCOL_VERSION,
       codeHash,
