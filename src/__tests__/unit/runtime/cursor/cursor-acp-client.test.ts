@@ -10,8 +10,18 @@ const directories: string[]=[];
 const clients: CursorAcpClient[]=[];
 async function start(script: string, requestTimeoutMs=500): Promise<CursorAcpClient> {
   const cwd=fs.mkdtempSync(path.join(os.tmpdir(),'codelark-acp-protocol-')); directories.push(cwd);
-  const file=path.join(cwd,'fake.cjs'); fs.writeFileSync(file,script);
-  const client=await CursorAcpClient.start({executable:process.execPath,args:[file],cwd,requestTimeoutMs}); clients.push(client);return client;
+  const file=path.join(cwd,'fake.cjs');
+  fs.writeFileSync(file,`${script}\nprocess.stdout.write(JSON.stringify({jsonrpc:'2.0',method:'fixture/ready'})+'\\n');`);
+  const client=await CursorAcpClient.start({executable:process.execPath,args:[file],cwd,requestTimeoutMs});
+  clients.push(client);
+  await new Promise<void>((resolve,reject)=>{
+    const offMessage=client.onMessage(message=>{
+      if(message.method!=='fixture/ready')return;
+      offMessage();offDisconnect();resolve();
+    });
+    const offDisconnect=client.onDisconnect(error=>{offMessage();offDisconnect();reject(error);});
+  });
+  return client;
 }
 afterEach(async()=>{await Promise.all(clients.splice(0).map(client=>client.close()));for(const dir of directories.splice(0))fs.rmSync(dir,{recursive:true,force:true});});
 

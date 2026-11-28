@@ -535,19 +535,19 @@ describe('Cursor Desktop provider', () => {
       JSON.stringify(input, null, 2),
       '',
     ].join('\n');
+    let emitHooks!: () => void;
+    let finishTranscript!: () => void;
     await startBridge((payload) => {
       if (payload.type !== 'sendMessage') return;
-      setTimeout(() => {
-        fs.writeFileSync(transcript, [
-          { role: 'user', message: { content: [{ type: 'text', text: String(payload.text) }] } },
-          { role: 'assistant', message: { content: [{
-            type: 'tool_use',
-            name: 'Shell',
-            input: { command: 'pwd', description: 'Print working directory' },
-          }] } },
-        ].map((line) => JSON.stringify(line)).join('\n') + '\n');
-      }, 50);
-      setTimeout(() => {
+      fs.writeFileSync(transcript, [
+        { role: 'user', message: { content: [{ type: 'text', text: String(payload.text) }] } },
+        { role: 'assistant', message: { content: [{
+          type: 'tool_use',
+          name: 'Shell',
+          input: { command: 'pwd', description: 'Print working directory' },
+        }] } },
+      ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+      emitHooks = () => {
         fs.appendFileSync(hookLog, [
           hookBlock('2026-10-09T03:00:01.000Z', 'afterAgentThought', {
             conversation_id: THREAD_ID,
@@ -578,8 +578,8 @@ describe('Cursor Desktop provider', () => {
             tool_output: JSON.stringify({ output: '/workspace-hooks' }),
           }),
         ].join(''));
-      }, 100);
-      setTimeout(() => {
+      };
+      finishTranscript = () => {
         fs.appendFileSync(transcript, [
           { role: 'tool', message: { content: [{
             type: 'text',
@@ -588,10 +588,12 @@ describe('Cursor Desktop provider', () => {
           { role: 'assistant', message: { content: [{ type: 'text', text: 'HOOK_FINAL_OUTPUT' }] } },
           { type: 'turn_ended', status: 'success' },
         ].map((line) => JSON.stringify(line)).join('\n') + '\n');
-      }, 250);
+      };
     }, 'submitted', 'completed');
 
     let output = '';
+    let hooksWritten = false;
+    let finalWritten = false;
     for await (const chunk of streamCursorDesktop({
       prompt: 'show hooks live',
       sessionId: 'bridge-session-hooks',
@@ -600,7 +602,18 @@ describe('Cursor Desktop provider', () => {
       cursorTransport: 'desktop',
       cursorSessionId: THREAD_ID,
       workingDirectory: cwd,
-    })) output += chunk;
+    })) {
+      output += chunk;
+      if (!hooksWritten && output.includes('"type":"tool_use"')) {
+        hooksWritten = true;
+        emitHooks();
+      }
+      if (!finalWritten && output.includes('FULL_END') && output.includes('"type":"tool_result"')) {
+        finalWritten = true;
+        finishTranscript();
+      }
+    }
+    assert.equal(finalWritten, true, 'the final transcript follows observed hook delivery');
 
     const events = output.trim().split('\n')
       .filter((line) => line.startsWith('data: '))
