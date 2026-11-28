@@ -117,6 +117,8 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 
 Linux CI 使用与本地相同的完整 `npm test` 入口，先独占运行 local-e2e，再并行运行其余分组；显式开启的真实 CLI 生命周期检查继续单独保留。在线开发机资源不足时，使用同一提交在隔离 CI runner 上的完整验收结果，不能删减测试、放宽产品期限或把本地失败日志标成成功。
 
+真实 Codex 故事显式选择原生 executable 时，Bridge bootstrap 和直接启动 TUI 必须使用同一路径，并在文件结束后恢复继承配置；不能一边检查原生 CLI 的版本，一边让 Bridge 调用 CI 的假 bootstrap 命令。
+
 模拟“已有原生会话”的 workflow 必须给出完整原生身份；切换 runtime 后，应按故事恢复对应身份。专门测试首次创建时使用受控 CLI 子进程，不能让缺失夹具的测试意外调用开发机安装的真实 CLI。 配置表单的模型目录也属于外部依赖；workflow 应在命令执行边界提供受控目录，真实 CLI/登录通信由原生进程测试验证。
 
 模拟应用的命令故事在文件级隔离目录中复用 `scripts/setup-ci-tool-shims.js` 的 Codex bootstrap，与 CI 使用同一契约；真实进程层仍调用实际 CLI。假 tmux 的 `load-buffer` 必须读完标准输入，不能直接退出。另用提前退出的真实子进程验证输入管道关闭时，调用返回可捕获的错误，不产生未处理的 `EPIPE`。

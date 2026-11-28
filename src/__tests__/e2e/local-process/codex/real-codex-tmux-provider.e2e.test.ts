@@ -1,5 +1,5 @@
 import '../../../setup/test-setup.js';
-import { describe, it, type TestContext } from 'node:test';
+import { after, before, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -42,6 +42,18 @@ import { codexFixtureStartupChoice } from '../../../helpers/runtime/codex-startu
 
 const execFileAsync = promisify(execFile);
 const REAL_CODEX_E2E_MODEL_ENV = 'CODELARK_REAL_CODEX_E2E_MODEL';
+const inheritedCodexExecutable = process.env.CODELARK_CODEX_CLI_PATH;
+before(() => {
+  // Bridge bootstrap and direct TUI calls must use the same real executable,
+  // even when the surrounding CI suites install a fake bootstrap command.
+  if (process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE) {
+    process.env.CODELARK_CODEX_CLI_PATH = process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE;
+  }
+});
+after(() => {
+  if (inheritedCodexExecutable === undefined) delete process.env.CODELARK_CODEX_CLI_PATH;
+  else process.env.CODELARK_CODEX_CLI_PATH = inheritedCodexExecutable;
+});
 
 function installedCodexExecutable(): string {
   return process.env.CODELARK_REAL_CODEX_E2E_EXECUTABLE
