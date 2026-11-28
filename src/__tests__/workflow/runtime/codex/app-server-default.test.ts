@@ -29,6 +29,7 @@ function fixture(t: TestContext, mode = 'ok') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-local-fixture-'));
   const executable = path.join(root, 'codex.mjs');
   const log = path.join(root, 'requests.jsonl');
+  fs.writeFileSync(log, '');
   const stateFile = path.join(root, 'threads.json');
   const env: NodeJS.ProcessEnv = { ...process.env, CODELARK_CODEX_APP_SERVER: '1', CODELARK_CODEX_DESKTOP_REMOTE: '0', CODELARK_CODEX_CLI_PATH: executable };
   const source = `import fs from 'node:fs';
@@ -86,7 +87,8 @@ process.on('SIGTERM', () => { for (const s of wss.clients) s.terminate(); server
     fs.rmSync(root, { recursive: true, force: true });
   });
   return { root, executable, env, endpoint, source,
-    records: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map((s) => JSON.parse(s)) : [],
+    // The child may have opened the log without completing its next record yet.
+    records: () => fs.readFileSync(log, 'utf8').split('\n').slice(0, -1).map((s) => JSON.parse(s)),
     prepare: () => prepareCodexLocalAppServer({ executable, env, codelarkHome: root }) };
 }
 
