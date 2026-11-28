@@ -126,6 +126,15 @@ if (requestedArgs.length > 0 && !parallelSelected) {
     });
   }
 
+  // Real CLI cold starts have their own readiness budgets. Like the CI runtime
+  // gate, run them without competing build/harness processes from other groups.
+  const exclusiveResults = [];
+  const nativeGroup = groups.find((group) => group.layer === '--local-e2e');
+  if (nativeGroup) {
+    exclusiveResults.push(await runGroup(nativeGroup));
+    groups = groups.filter((group) => group !== nativeGroup);
+  }
+
   const results = new Array(groups.length);
   const workerCount = Math.min(groups.length, os.availableParallelism());
   let nextGroupIndex = 0;
@@ -137,7 +146,8 @@ if (requestedArgs.length > 0 && !parallelSelected) {
     }
   }
   await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
-  const totals = results.reduce((sum, result) => {
+  const allResults = [...exclusiveResults, ...results];
+  const totals = allResults.reduce((sum, result) => {
     for (const key of ['tests', 'suites', 'pass', 'fail', 'cancelled', 'skipped', 'todo']) {
       sum[key] += result.summary[key];
     }
@@ -156,5 +166,5 @@ if (requestedArgs.length > 0 && !parallelSelected) {
     `wall_ms=${wallMs}`,
     `logs=${runRoot}`,
   ].join(' ') + '\n');
-  process.exitCode = results.some((result) => result.code !== 0 || result.signal) ? 1 : 0;
+  process.exitCode = allResults.some((result) => result.code !== 0 || result.signal) ? 1 : 0;
 }

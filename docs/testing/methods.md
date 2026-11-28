@@ -18,7 +18,7 @@ nvm use 24
 
 | 目的 | 命令 | 说明 |
 | --- | --- | --- |
-| 全量本地测试 | `npm test` | 由 `scripts/run-test-groups.js` 并行调度分组，每组通过 `scripts/run-tests.js` 递归发现测试并串行运行。脚本会创建临时 `HOME`、`CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME`、`KIMI_CODE_HOME`、`USERPROFILE` 和 tmux server，避免污染真实 bridge、runtime home 与用户 tmux。 |
+| 全量本地测试 | `npm test` | 由 `scripts/run-test-groups.js` 先独占运行真实 CLI 分组，再并行调度其他分组；每组通过 `scripts/run-tests.js` 递归发现测试并串行运行。脚本会创建临时 `HOME`、`CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME`、`KIMI_CODE_HOME`、`USERPROFILE` 和 tmux server，避免污染真实 bridge、runtime home 与用户 tmux。 |
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
@@ -87,6 +87,8 @@ Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate
 本地测试有四种强度，不应只统称为“单元测试”：
 
 默认 `npm test` 会先按原生测试层隔离 `unit`、`workflow`、`mock-e2e`、`harness`、`local-e2e`；其中 `unit` 和 `mock-e2e` 使用 Node 原生 `--test-shard=1/2` 拆成两个文件 shard，Windows 曾暴露平台悬挂的 `workflow` 进一步拆成四个文件 shard，共十个进程组，并按 `os.availableParallelism()` 限制同时运行数。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME、各 runtime home 和 `TMUX_TMPDIR`，并移除从调用终端继承的 `TMUX`、`TMUX_PANE`；否则 tmux 会优先复用继承的用户 socket，使 `TMUX_TMPDIR` 失效。runner 结束时只终止自己的隔离 tmux server，再删除临时目录。shard 内仍保持 `--test-concurrency=1`，因此不会让同一测试文件或配置目录内部并发，也不会创建、终止用户 tmux session。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时默认仍只启动所选单组，也可显式追加 Node 原生 `--test-shard=N/M`（`1 ≤ N ≤ M`）。需要让选定 layer 也走同一隔离分组时使用 `npm test -- --parallel --unit --workflow`；CI 对稳定层和跨平台层使用该入口，并给测试 step 设置 20 分钟上限，避免平台进程永久悬挂。
+
+真实 CLI 的冷启动时限衡量其启动行为，不应同时承担其他测试分组的构建和 harness 负载。全量入口先独占运行 `local-e2e`，保留原生进程和 readiness 门限，随后并行执行其余分组；这与 CI 将真实 runtime gate 单独串行执行的安排一致。
 
 tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注入运行 Node helper，不要在 Windows 上用无扩展名 shebang 或 `.cmd` 去遮蔽真实 `tmux.exe`：`CreateProcess` 的可执行文件搜索语义与 POSIX PATH 不同，这种 fake 会静默落到真实 psmux。真实 psmux/tmux lifecycle 仍由跨平台 CI 的独立 smoke 与 real-tmux workflow 覆盖。
 
