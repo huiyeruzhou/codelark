@@ -18,7 +18,7 @@ nvm use 24
 
 | 目的 | 命令 | 说明 |
 | --- | --- | --- |
-| 全量本地测试 | `npm test` | 通过 `scripts/run-tests.js` 递归发现 `src/__tests__/**/*.test.ts` 并串行运行。脚本会创建临时 `HOME`、`CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME`、`KIMI_CODE_HOME`、`USERPROFILE` 和 tmux server，避免污染真实 bridge、runtime home 与用户 tmux。 |
+| 全量本地测试 | `npm test` | 由 `scripts/run-test-groups.js` 并行调度分组，每组通过 `scripts/run-tests.js` 递归发现测试并串行运行。脚本会创建临时 `HOME`、`CODELARK_HOME`、`CODEX_HOME`、`CODELARK_CLAUDE_HOME`、`KIMI_CODE_HOME`、`USERPROFILE` 和 tmux server，避免污染真实 bridge、runtime home 与用户 tmux。 |
 | 纯逻辑单测 | `npm test -- --unit` | 只运行 `src/__tests__/unit/`。 |
 | 本地 workflow | `npm test -- --workflow` | 只运行 `src/__tests__/workflow/`。 |
 | 本地 mock app E2E | `npm test -- --mock-e2e` | 只运行 `src/__tests__/e2e/mock-app/`。 |
@@ -106,6 +106,10 @@ tmux workflow 的 fake transport 必须通过 `TmuxCore` 的可执行命令注�
 测试应按语义边界组织，而不是按单个返回值、单个 enum 值或单个默认值机械拆分。纯逻辑测试可以用一个表驱动或矩阵用例覆盖同一解析器/格式化器的一组等价输入；只有错误路径、兼容格式、外部协议边界、异步状态转换、持久化迁移和用户可见回归应拆成独立用例，方便 fast-fail 定位。
 
 fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport：session/pane 存在性、`capture-pane`、`send-keys` 和进程退出；Codex TUI 的 update prompt、permission prompt、delayed-ready、选择后退出或进入正常输入界面由 `fake Codex TUI` 模拟。真实进程 E2E 覆盖 happy path 后，不应保留只重复 happy path 的 fake 断言；但 orphan callback、启动失败、update 后重启、bootstrap 后选择、已有 session 卡在选择页这类真实 E2E 不稳定或不应真实触发的分支仍应保留 fake/workflow 覆盖。
+
+计时窗口测试使用受控时钟验证边界，并等待被测操作实际完成。例如卡片的 30ms 合并窗口，应验证 29ms 时仍未发送、30ms 时只发送最新状态；不能假定真实 `setTimeout(10)` 必然在 30ms 内恢复执行。等待一个异步操作时，也不能只等外层 Promise 而遗漏后台请求。
+
+模拟“已有原生会话”的 workflow 必须给出完整原生身份；切换 runtime 后，应按故事恢复对应身份。专门测试首次创建时使用受控 CLI 子进程，不能让缺失夹具的测试意外调用开发机安装的真实 CLI。
 
 long-running 功能不能只测“成功派发 worker”。精炼用户故事至少覆盖：入口及时 ACK；进行态按合理频率刷新；worker 日志明确失败、worker 无完成标记提前退出和超时都进入失败终态；破坏性动作前已经持久化恢复 receipt；成功重启后由新进程消费 receipt，更新原卡或发送 fallback 完成卡。涉及真实安装、stop/start 或平台卡片时，本地 workflow 负责确定性失败矩阵，真实端再完成一次“用户点击 → 进程变化 → 用户身份回读终态”的主路径验收。
 

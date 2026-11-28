@@ -5612,7 +5612,8 @@ describe('feishu-adapter structured streaming regions', () => {
     blocked.resolve({});
   });
 
-  it('coalesces streaming card updates behind a per-card congestion window', async () => {
+  it('coalesces streaming card updates behind a per-card congestion window', async (t) => {
+    t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000 });
     const elementUpdates: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -5655,16 +5656,20 @@ describe('feishu-adapter structured streaming regions', () => {
 
     await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
     adapter.onStreamText('chat-1', '第一段输出', 'stream-1');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const state = (adapter as any).activeCards.get('stream-1');
+    await state.flushInFlight;
+    await state.backgroundFlushInFlight;
 
     adapter.onStreamStatus('chat-1', '已运行 1秒', 'stream-1');
     adapter.onStreamStatus('chat-1', '已运行 2秒', 'stream-1');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    t.mock.timers.tick(29);
 
     assert.equal(elementUpdates.length, 1);
     assert.equal(elementUpdates[0]?.path?.element_id, 'streaming_content');
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    t.mock.timers.tick(1);
+    await state.flushInFlight;
+    await state.backgroundFlushInFlight;
 
     assert.equal(elementUpdates.length, 2);
     assert.equal(elementUpdates[1]?.path?.element_id, 'streaming_status');
