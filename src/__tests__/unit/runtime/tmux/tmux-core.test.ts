@@ -66,7 +66,8 @@ describe('TmuxCore', () => {
           bracketedPaste: true,
           delayMs: 0,
         }),
-        (error: NodeJS.ErrnoException) => error.code === 'EPIPE' || error.code === 'ECONNRESET',
+        (error: NodeJS.ErrnoException) => error.syscall === 'write'
+          && ['EPIPE', 'ECONNRESET', 'EOF'].includes(error.code || ''),
       );
     } finally {
       fs.rmSync(binDir, { recursive: true, force: true });

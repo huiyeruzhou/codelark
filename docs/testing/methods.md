@@ -115,6 +115,8 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 
 模拟应用的命令故事在文件级隔离目录中复用 `scripts/setup-ci-tool-shims.js` 的 Codex bootstrap，与 CI 使用同一契约；真实进程层仍调用实际 CLI。假 tmux 的 `load-buffer` 必须读完标准输入，不能直接退出。另用提前退出的真实子进程验证输入管道关闭时，调用返回可捕获的错误，不产生未处理的 `EPIPE`。
 
+跨平台管道回归按“写入已关闭管道”的语义断言：POSIX 可返回 `EPIPE` / `ECONNRESET`，Windows 可返回 `EOF`。独立 ACP host 的清理必须等到关闭确认、连接断开以及子进程退出；仅收到关闭请求的确认就删除目录，会在 Windows 因日志句柄仍被占用而失败。
+
 long-running 功能不能只测“成功派发 worker”。精炼用户故事至少覆盖：入口及时 ACK；进行态按合理频率刷新；worker 日志明确失败、worker 无完成标记提前退出和超时都进入失败终态；破坏性动作前已经持久化恢复 receipt；成功重启后由新进程消费 receipt，更新原卡或发送 fallback 完成卡。涉及真实安装、stop/start 或平台卡片时，本地 workflow 负责确定性失败矩阵，真实端再完成一次“用户点击 → 进程变化 → 用户身份回读终态”的主路径验收。
 
 ## 语义分类

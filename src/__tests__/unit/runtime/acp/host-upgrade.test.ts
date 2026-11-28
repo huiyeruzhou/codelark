@@ -6,7 +6,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { startAcpHostServer } from '../../../../runtime/acp/host-server.js';
 import { acpHostEndpoint } from '../../../../runtime/acp/host-protocol.js';
-import { tryConnectExistingAcpHost, getSharedAcpHostClient, detachSharedAcpHostClient } from '../../../../runtime/acp/host-client.js';
+import { tryConnectExistingAcpHost, getSharedAcpHostClient, detachSharedAcpHostClient, type AcpHostClient } from '../../../../runtime/acp/host-client.js';
+
+async function shutdownTestHost(client: AcpHostClient | null): Promise<void> {
+  if (!client?.connected) return;
+  const { pid } = await client.hello();
+  await client.shutdownHost(true);
+  await client.waitForShutdown();
+  if (pid === process.pid) return;
+  // Socket closure precedes process exit. Windows retains the log file until
+  // the detached child exits, so only then may its private home be removed.
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.fail(`Test ACP host ${pid} did not exit after shutdown`);
+}
 
 it('rechecks a cached old host and upgrades only after active turns are finished and acknowledged', { timeout: 30000 }, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codelark-host-upgrade-'));
@@ -16,7 +36,7 @@ it('rechecks a cached old host and upgrades only after active turns are finished
     notify() {}, respond() {}, reject() {}, onMessage() { return () => {}; }, onDisconnect() { return () => {}; }, close() {},
   }) });
   let current = await tryConnectExistingAcpHost(home); assert.ok(current);
-  t.after(async () => { release(); await current?.shutdownHost(true).catch(() => {}); detachSharedAcpHostClient(); await server.close(true); fs.rmSync(home, { recursive: true, force: true }); });
+  t.after(async () => { release(); await shutdownTestHost(current); detachSharedAcpHostClient(); await server.close(true); fs.rmSync(home, { recursive: true, force: true }); });
   await current.ensureSession({ sessionKey: 'doubao:test', runtime: 'doubao', bridgeSessionId: 'test', executable: 'fake', args: [], cwd: home, label: 'Test', fingerprint: 'test', initializeParams: { protocolVersion: 1 } });
   const turn = await current.startTurn({ sessionKey: 'doubao:test', prompt: [{ type: 'text', text: 'test' }], meta: { runtime: 'doubao', bridgeSessionId: 'test' } });
   assert.equal(await getSharedAcpHostClient(home), current);
@@ -39,14 +59,9 @@ it('waits for a slow old host to finish closing before returning the replacement
   }) });
   let current = await tryConnectExistingAcpHost(home); assert.ok(current);
   t.after(async () => {
+    await shutdownTestHost(current);
     await server.close(true);
     detachSharedAcpHostClient();
-    // Only the child launched into this test's private home may be stopped.
-    await new Promise(resolve => setTimeout(resolve, 1100));
-    try {
-      const state = JSON.parse(fs.readFileSync(path.join(home, 'runtime', 'acp-host.json'), 'utf8'));
-      if (state.pid !== process.pid) process.kill(state.pid, 'SIGTERM');
-    } catch { /* test host already stopped */ }
     fs.rmSync(home, { recursive: true, force: true });
   });
   await current.ensureSession({ sessionKey: 'doubao:slow', runtime: 'doubao', bridgeSessionId: 'slow', executable: 'fake', args: [], cwd: home, label: 'Test', fingerprint: 'slow', initializeParams: { protocolVersion: 1 } });
@@ -56,7 +71,6 @@ it('waits for a slow old host to finish closing before returning the replacement
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.equal(current.connected, true, 'the replacement must stay connected after old cleanup');
   if (process.platform !== 'win32') assert.equal(fs.existsSync(acpHostEndpoint(home)), true, 'old cleanup must not unlink the new socket');
-  await current.shutdownHost(true);
 });
 
 it('does not retire a host while another client is loading a session', { timeout: 10000 }, async t => {
