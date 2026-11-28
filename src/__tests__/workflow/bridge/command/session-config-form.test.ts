@@ -2,6 +2,8 @@ import '../../../setup/test-setup.js';
 import { beforeEach, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { initBridgeTestContext, resetBridgeTestState, RecordingAdapter, inboundMessage } from '../../../helpers/bridge/test-bridge-utils.js';
 import { createConfigService } from '../../../../configuration/service.js';
 import { handleBridgeCommand } from '../../../../bridge/command/index.js';
@@ -121,7 +123,16 @@ it('Cursor provider form changes keep the active task and all submitted settings
   assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionId, 'tui-active');
 });
 
-it('an idle Cursor provider form switches protocols while preserving the previous native identity', async () => {
+it('an idle Cursor provider form switches protocols while preserving the previous native identity', async (t) => {
+  // The form owns configuration changes; its model catalog is an external dependency.
+  // Keep the successful catalog path without invoking an installed, unauthenticated CLI.
+  const catalog = t.mock.method(childProcess, 'execFile', ((executable: string, args: string[], options: unknown, callback: Function) => {
+    assert.deepEqual(args, ['models']);
+    queueMicrotask(() => callback(null, 'test-model - Test model (default)\n', ''));
+    return {} as ReturnType<typeof childProcess.execFile>;
+  }) as typeof childProcess.execFile);
+  syncBuiltinESMExports();
+  t.after(() => { catalog.mock.restore(); syncBuiltinESMExports(); });
   const f = fixture(false);
   f.service.set(f.scope, { runtime: { cursor: { provider: 'tmux' } } });
   f.store.updateSession(f.session.id, { runtime: { activeRuntime: 'cursor', cursor: { sessionId: 'tui-idle' } } });
@@ -130,4 +141,6 @@ it('an idle Cursor provider form switches protocols while preserving the previou
   assert.equal(f.service.get('runtime.cursor.provider', f.scope), 'acp');
   assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.sessionId, undefined);
   assert.equal(f.store.getSession(f.session.id)?.runtime?.cursor?.previousSession?.sessionId, 'tui-idle');
+  assert.equal(catalog.mock.callCount(), 1);
+  assert.match(JSON.stringify(result.richCard), /test-model/);
 });
