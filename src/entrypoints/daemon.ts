@@ -20,6 +20,7 @@ import { JsonFileStore } from '../storage/json-store.js';
 import { exportRuntimeSettings } from '../runtime/config-projections.js';
 import { PendingPermissions } from '../runtime/permission-gateway.js';
 import { setupLogger } from '../shared/logger.js';
+import { startEventLoopMonitor } from '../shared/event-loop-monitor.js';
 import { applyStandardLarkCliEnv } from '../shared/lark-cli-env.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from '../local-service/instance-lock.js';
 import { refreshBundledCodeLarkSkills } from '../local-service/manager.js';
@@ -134,6 +135,9 @@ async function main(): Promise<void> {
   const config = configService.snapshot().config;
   const settings = exportRuntimeSettings(config);
   setupLogger();
+  const stopEventLoopMonitor = startEventLoopMonitor({
+    onStall: report => console.warn(`${LOG_PREFIX} Bridge event loop stalled:`, report),
+  });
 
   const runId = crypto.randomUUID();
   console.log(`${LOG_PREFIX} Starting bridge (run_id: ${runId})`);
@@ -213,6 +217,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal?: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopEventLoopMonitor();
     const reason = signal ? `signal: ${signal}` : 'shutdown requested';
     console.log(`${LOG_PREFIX} Shutting down (${reason})...`);
     pendingPerms.denyAll();

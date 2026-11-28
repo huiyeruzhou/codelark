@@ -42,6 +42,7 @@ import {
 const DATA_DIR = path.join(CODELARK_HOME, 'data');
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
 const CHANNEL_CHATS_PATH = path.join(DATA_DIR, 'channel-chats.json');
+const SESSIONS_PATH = path.join(DATA_DIR, 'sessions.json');
 const AUDIT_JSON_PATH = path.join(DATA_DIR, 'audit.json');
 const AUDIT_JSONL_PATH = path.join(DATA_DIR, 'audit.jsonl');
 
@@ -63,6 +64,15 @@ function readJson<T>(filePath: string, fallback: T): T {
     return JSON.parse(raw) as T;
   } catch {
     return fallback;
+  }
+}
+
+function fileRevision(filePath: string): string | null {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch {
+    return null;
   }
 }
 
@@ -301,6 +311,7 @@ export class JsonFileStore implements BridgeStore {
   private settings: Map<string, string>;
   private dynamicSettings: boolean;
   private sessions = new Map<string, BridgeSession>();
+  private sessionsRevision: string | null = null;
   private bindings = new Map<string, ChannelChat>();
   private messages = new Map<string, BridgeMessage[]>();
   private permissionLinks = new Map<string, PermissionLinkRecord>();
@@ -362,14 +373,24 @@ export class JsonFileStore implements BridgeStore {
   }
 
   private reloadSessions(): void {
-    const sessions = readJson<Record<string, BridgeSession>>(
-      path.join(DATA_DIR, 'sessions.json'),
-      {},
-    );
+    const revision = fileRevision(SESSIONS_PATH);
+    if (revision !== null && revision === this.sessionsRevision) return;
+    let sessions: Record<string, BridgeSession>;
+    try {
+      sessions = JSON.parse(fs.readFileSync(SESSIONS_PATH, 'utf8')) as Record<string, BridgeSession>;
+    } catch {
+      // A transient read failure is not a valid cached revision.
+      this.sessions = new Map();
+      this.sessionsRevision = null;
+      return;
+    }
     this.sessions = new Map(Object.entries(sessions).map(([id, session]) => [
       id,
       materializeBridgeSessionRuntime(session),
     ]));
+    // Capture the revision before reading: an external writer racing this read
+    // must cause another refresh, never make an older snapshot look current.
+    this.sessionsRevision = revision;
   }
 
   private reloadBindings(): void {
@@ -397,8 +418,9 @@ export class JsonFileStore implements BridgeStore {
   }
 
   private persistSessions(): void {
+    this.sessionsRevision = null;
     writeJson(
-      path.join(DATA_DIR, 'sessions.json'),
+      SESSIONS_PATH,
       Object.fromEntries(this.sessions),
     );
   }

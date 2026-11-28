@@ -82,6 +82,12 @@ Linux、macOS 和 Windows job 都先安装固定版本的 Codex/Claude/Kimi CLI�
 
 Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate 关注的是 x64 Node.js、WinGet、原生进程/PATH、ConPTY/psmux 这条用户路径，而不是把某个 runner 标签宣传成桌面 Windows 版本。
 
+## 主线程响应性能门禁
+
+`unit/runtime/sse-stream-decoder.test.ts` 验证缓冲历史尚未处理完时，真实 loopback HTTP 请求已能响应，并核对全部事件和顺序。`workflow/bridge/control/replay-responsiveness.test.ts` 使用 48 个会话、1500 条积压事件、实际会话存储、健康状态处理和目录查询，在回放过程中发出多次请求；每次必须落在控制接口既有的 3 秒预算内。不能只看最终完成时间或进程退出码，也不能通过增大超时、删减回放内容、跳过事件来通过。
+
+存储回归同时检查外部原子替换、就地修改、删除/重建与瞬时读取失败，防止性能优化隐藏外部更新。daemon 的 `perf.event_loop.stall` 日志记录最大延迟、P99 和利用率；新增阻塞采样测试检查告警与停机清理。上线后仍须验证原会话身份、控制请求延迟和实际输出交付；CI 成功不能替代现场验收。
+
 ## 本地测试的层次
 
 本地测试有四种强度，不应只统称为“单元测试”：

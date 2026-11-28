@@ -42,6 +42,51 @@ describe('JsonFileStore', () => {
     fs.rmSync(SESSION_CONFIG_DIR, { recursive: true, force: true });
   });
 
+  it('reuses unchanged session data and observes external replacements, in-place edits and deletion', t => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('inside', 'model');
+    const file = path.join(DATA_DIR, 'sessions.json');
+    store.getSession(session.id);
+    const originalRead = fs.readFileSync;
+    let reads = 0;
+    t.mock.method(fs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]) === file) reads++;
+      return Reflect.apply(originalRead, fs, args);
+    });
+    for (let i = 0; i < 100; i++) assert.equal(store.getSession(session.id)?.name, 'inside');
+    assert.equal(reads, 0, 'stream progress must not reparse unchanged session data');
+    const data = JSON.parse(originalRead(file, 'utf8'));
+    const stat = fs.statSync(file);
+    data[session.id].name = 'remote';
+    fs.writeFileSync(`${file}.external`, JSON.stringify(data, null, 2));
+    fs.utimesSync(`${file}.external`, stat.atime, stat.mtime);
+    fs.renameSync(`${file}.external`, file);
+    assert.equal(store.getSession(session.id)?.name, 'remote');
+    data[session.id].name = 'edited';
+    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    assert.equal(store.listSessions().find(s => s.id === session.id)?.name, 'edited');
+    store.updateSession(session.id, { name: 'local' });
+    assert.equal(store.getSession(session.id)?.name, 'local');
+    fs.unlinkSync(file);
+    assert.equal(store.getSession(session.id), null);
+    fs.writeFileSync(file, JSON.stringify(data));
+    assert.equal(store.getSession(session.id)?.name, 'edited');
+  });
+
+  it('retries a transient session-file read failure without requiring a file change', t => {
+    const store = new JsonFileStore(makeSettings());
+    const session = store.createSession('retry', 'model');
+    const file = path.join(DATA_DIR, 'sessions.json');
+    const originalRead = fs.readFileSync;
+    let failed = false;
+    t.mock.method(fs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]) === file && !failed) { failed = true; throw new Error('temporary read failure'); }
+      return Reflect.apply(originalRead, fs, args);
+    });
+    assert.equal(store.getSession(session.id), null);
+    assert.equal(store.getSession(session.id)?.name, 'retry');
+  });
+
   it('getSetting returns values from settings map', () => {
     const store = new JsonFileStore(makeSettings());
     assert.equal(store.getSetting('remote_bridge_enabled'), 'true');

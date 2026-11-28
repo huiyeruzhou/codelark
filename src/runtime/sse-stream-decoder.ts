@@ -1,4 +1,5 @@
 import type { SSEEvent } from './contracts.js';
+import { setImmediate as yieldToIo } from 'node:timers/promises';
 
 function extractCompleteLines(buffer: string): { lines: string[]; trailing: string } {
   const normalized = buffer.replace(/\r\n/g, '\n');
@@ -25,6 +26,7 @@ export async function consumeSseEvents(
 ): Promise<void> {
   const reader = stream.getReader();
   let pending = '';
+  let sliceStartedAt = performance.now();
 
   while (true) {
     const { done, value } = await reader.read();
@@ -38,6 +40,12 @@ export async function consumeSseEvents(
       const event = parseDataLine(line);
       if (event) {
         await onEvent(event);
+        // Awaiting already-buffered input only drains microtasks. Historical
+        // replay must also let sockets, control requests and timers run.
+        if (performance.now() - sliceStartedAt >= 8) {
+          await yieldToIo();
+          sliceStartedAt = performance.now();
+        }
       }
     }
   }
