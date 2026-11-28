@@ -86,7 +86,7 @@ Windows 托管 runner 的版本可以随 GitHub 支持范围升级；发布 gate
 
 本地测试有四种强度，不应只统称为“单元测试”：
 
-默认 `npm test` 会先按原生测试层隔离 `unit`、`workflow`、`mock-e2e`、`harness`、`local-e2e`；其中 `unit` 和 `mock-e2e` 使用 Node 原生 `--test-shard=1/2` 拆成两个文件 shard，Windows 曾暴露平台悬挂的 `workflow` 进一步拆成四个文件 shard，共十个进程组，并按 `os.availableParallelism()` 限制同时运行数。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME、各 runtime home 和 `TMUX_TMPDIR`，并移除从调用终端继承的 `TMUX`、`TMUX_PANE`；否则 tmux 会优先复用继承的用户 socket，使 `TMUX_TMPDIR` 失效。runner 结束时只终止自己的隔离 tmux server，再删除临时目录。shard 内仍保持 `--test-concurrency=1`，因此不会让同一测试文件或配置目录内部并发，也不会创建、终止用户 tmux session。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时默认仍只启动所选单组，也可显式追加 Node 原生 `--test-shard=N/M`（`1 ≤ N ≤ M`）。需要让选定 layer 也走同一隔离分组时使用 `npm test -- --parallel --unit --workflow`；CI 对稳定层和跨平台层使用该入口，并给测试 step 设置 20 分钟上限，避免平台进程永久悬挂。
+默认 `npm test` 会先按原生测试层隔离 `unit`、`workflow`、`mock-e2e`、`harness`、`local-e2e`；其中 `unit` 和 `mock-e2e` 使用 Node 原生 `--test-shard=1/2` 拆成两个文件 shard，Windows 曾暴露平台悬挂的 `workflow` 进一步拆成四个文件 shard，两个较重的 workflow/mock 文件各自独立成组，共十二个进程组，并按 `os.availableParallelism()` 限制同时运行数。每组由 `run-tests.js` 创建独立的 HOME、CODELARK_HOME、各 runtime home 和 `TMUX_TMPDIR`，并移除从调用终端继承的 `TMUX`、`TMUX_PANE`；否则 tmux 会优先复用继承的用户 socket，使 `TMUX_TMPDIR` 失效。runner 结束时只终止自己的隔离 tmux server，再删除临时目录。shard 内仍保持 `--test-concurrency=1`，因此不会让同一测试文件或配置目录内部并发，也不会创建、终止用户 tmux session。结束时只打印各组摘要和日志目录；失败组额外打印尾部。需要复现旧串行顺序时使用 `npm run test:serial`；传入 `npm test -- --unit --workflow` 等 layer 参数时默认仍只启动所选单组，也可显式追加 Node 原生 `--test-shard=N/M`（`1 ≤ N ≤ M`）。需要让选定 layer 也走同一隔离分组时使用 `npm test -- --parallel --unit --workflow`；CI 对稳定层和跨平台层使用该入口，并给测试 step 设置 20 分钟上限，避免平台进程永久悬挂。
 
 真实 CLI 的冷启动时限衡量其启动行为，不应同时承担其他测试分组的构建和 harness 负载。全量入口先独占运行 `local-e2e`，保留原生进程和 readiness 门限，随后并行执行其余分组；这与 CI 将真实 runtime gate 单独串行执行的安排一致。
 
@@ -112,6 +112,8 @@ fake 测试也要遵守真实职责边界。`fake tmux` 只模拟 tmux transport
 计时窗口测试使用受控时钟验证边界，并等待被测操作实际完成。例如卡片的 30ms 合并窗口，应验证 29ms 时仍未发送、30ms 时只发送最新状态；不能假定真实 `setTimeout(10)` 必然在 30ms 内恢复执行。等待一个异步操作时，也不能只等外层 Promise 而遗漏后台请求。
 
 模拟“已有原生会话”的 workflow 必须给出完整原生身份；切换 runtime 后，应按故事恢复对应身份。专门测试首次创建时使用受控 CLI 子进程，不能让缺失夹具的测试意外调用开发机安装的真实 CLI。 配置表单的模型目录也属于外部依赖；workflow 应在命令执行边界提供受控目录，真实 CLI/登录通信由原生进程测试验证。
+
+模拟应用的命令故事在文件级隔离目录中复用 `scripts/setup-ci-tool-shims.js` 的 Codex bootstrap，与 CI 使用同一契约；真实进程层仍调用实际 CLI。假 tmux 的 `load-buffer` 必须读完标准输入，不能直接退出。另用提前退出的真实子进程验证输入管道关闭时，调用返回可捕获的错误，不产生未处理的 `EPIPE`。
 
 long-running 功能不能只测“成功派发 worker”。精炼用户故事至少覆盖：入口及时 ACK；进行态按合理频率刷新；worker 日志明确失败、worker 无完成标记提前退出和超时都进入失败终态；破坏性动作前已经持久化恢复 receipt；成功重启后由新进程消费 receipt，更新原卡或发送 fallback 完成卡。涉及真实安装、stop/start 或平台卡片时，本地 workflow 负责确定性失败矩阵，真实端再完成一次“用户点击 → 进程变化 → 用户身份回读终态”的主路径验收。
 

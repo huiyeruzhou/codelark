@@ -20,7 +20,9 @@ function installFakeTmux(): { binDir: string; logPath: string; core: TmuxCore } 
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TMUX_FAKE_LOG, args.join(' ') + '\\n');
-if (args[0] === 'display-message') {
+if (args[0] === 'load-buffer') {
+  process.stdin.resume();
+} else if (args[0] === 'display-message') {
   process.stdout.write((process.env.TMUX_FAKE_PANE_HEIGHT || '10') + '\\n');
 } else if (args[0] === 'capture-pane') {
   for (let index = 1; index <= 25; index += 1) {
@@ -55,6 +57,22 @@ function createScriptedTmuxCore(binDir: string, source: string): TmuxCore {
 }
 
 describe('TmuxCore', () => {
+  it('rejects a paste when the child closes stdin before consuming it', async () => {
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-unit-tmux-closed-stdin-'));
+    const core = createScriptedTmuxCore(binDir, 'process.exit(0);');
+    try {
+      await assert.rejects(
+        core.sendActions('closed-stdin', [{ type: 'literal', text: 'x'.repeat(2_000_000) }], {
+          bracketedPaste: true,
+          delayMs: 0,
+        }),
+        (error: NodeJS.ErrnoException) => error.code === 'EPIPE' || error.code === 'ECONNRESET',
+      );
+    } finally {
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
   it('uses server-side paste for Windows psmux', () => {
     assert.equal(usesPsmuxServerSidePaste('win32'), true);
     assert.equal(usesPsmuxServerSidePaste('linux'), false);

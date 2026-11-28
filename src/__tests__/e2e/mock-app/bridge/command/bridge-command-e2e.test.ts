@@ -1,11 +1,11 @@
 import '../../../../setup/test-setup.js';
-import { afterEach, beforeEach, describe, it, type TestContext } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 
 import fs from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { CODELARK_HOME } from '../../../../../configuration/paths.js';
 import {
@@ -730,6 +730,10 @@ TMUX_FAKE_LOG="\${TMUX_FAKE_LOG:-${logPath}}"
 printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 state="\${TMUX_FAKE_STATE:-${statePath}}"
 case "$1" in
+  load-buffer)
+    cat > /dev/null
+    exit 0
+    ;;
   display-message)
     if [[ "$*" == *pane_start_command* ]]; then
       target="$4"
@@ -887,6 +891,30 @@ sleep 0.1
 }
 
 describe('bridge command e2e', () => {
+  let codexFixtureRoot: string;
+  const previousCodexCliPath = process.env.CODELARK_CODEX_CLI_PATH;
+  before(() => {
+    codexFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-mock-app-codex-'));
+    execFileSync(process.execPath, ['scripts/setup-ci-tool-shims.js'], {
+      env: {
+        ...process.env,
+        RUNNER_TEMP: codexFixtureRoot,
+        GITHUB_PATH: path.join(codexFixtureRoot, 'github-path'),
+        GITHUB_ENV: path.join(codexFixtureRoot, 'github-env'),
+      },
+      stdio: 'pipe',
+    });
+    process.env.CODELARK_CODEX_CLI_PATH = path.join(
+      codexFixtureRoot, 'codelark-ci-bin', process.platform === 'win32' ? 'codex.cmd' : 'codex',
+    );
+  });
+
+  after(() => {
+    if (previousCodexCliPath === undefined) delete process.env.CODELARK_CODEX_CLI_PATH;
+    else process.env.CODELARK_CODEX_CLI_PATH = previousCodexCliPath;
+    if (codexFixtureRoot) fs.rmSync(codexFixtureRoot, { recursive: true, force: true });
+  });
+
   beforeEach(() => {
     resetBridgeTestState({ cleanCodexHome: true });
     _testOnly.resetStateForTests();

@@ -153,6 +153,7 @@ function runCommand(command: string, args: string[], stdin?: string): Promise<Tm
     child.on('error', reject);
     child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
     if (stdin !== undefined) {
+      child.stdin?.on('error', reject);
       child.stdin?.end(stdin);
     }
   });
