@@ -70,7 +70,7 @@ import {
   peekSharedAcpHostClient,
   tryConnectExistingAcpHost,
 } from '../../runtime/acp/host-client.js';
-import type { AcpCardCheckpoint } from '../../runtime/acp/host-protocol.js';
+import { isAcpTurnActiveStatus, type AcpCardCheckpoint } from '../../runtime/acp/host-protocol.js';
 import { archiveDoubaoSession } from '../../runtime/doubao/session-index.js';
 import { zcodeTmuxSessionName } from '../../runtime/zcode/tmux-provider.js';
 import {
@@ -3143,6 +3143,9 @@ export async function start(): Promise<void> {
     void INTERACTIVE_RUNTIME.reconcileTerminalSessionRuntimeState().catch((err) => {
       console.error('[bridge-manager] Terminal interactive reconcile failed:', describeUnknownError(err));
     });
+    void schedulePersistentAcpTurnReattachments(true).catch((err) => {
+      console.error('[bridge-manager] Persistent ACP turn reconcile failed:', describeUnknownError(err));
+    });
   }, 5_000);
 
   state.mirrorPollTimer = setInterval(() => {
@@ -5757,7 +5760,17 @@ async function ackHostedAcpTurn(turnId: string): Promise<void> {
   await host.ackTurn(turnId).catch(() => {});
 }
 
-async function schedulePersistentAcpTurnReattachments(): Promise<void> {
+let persistentAcpScan: Promise<void> | null = null;
+const reattachingAcpTurns = new Set<string>();
+
+function schedulePersistentAcpTurnReattachments(activeOnly = false): Promise<void> {
+  if (persistentAcpScan) return persistentAcpScan;
+  persistentAcpScan = reattachPersistentAcpTurns(activeOnly).finally(() => { persistentAcpScan = null; });
+  return persistentAcpScan;
+}
+
+async function reattachPersistentAcpTurns(activeOnly: boolean): Promise<void> {
+  if (!getState().running) return;
   if (process.env.CODELARK_ACP_HOST_DISABLE === '1') return;
   const host = await tryConnectExistingAcpHost();
   if (!host?.connected) return;
@@ -5765,10 +5778,15 @@ async function schedulePersistentAcpTurnReattachments(): Promise<void> {
   if (unackedTurns.length === 0) return;
 
   const state = getState();
+  if (!state.running) return;
   const { store } = getBridgeContext();
   const displayService = new ThreadDisplayService(store);
 
   for (const turn of unackedTurns) {
+    // Terminal delivery is adopted at startup only. Periodic recovery must not
+    // race a normal turn's pending final card delivery and acknowledgement.
+    if (activeOnly && !isAcpTurnActiveStatus(turn.status)) continue;
+    if (reattachingAcpTurns.has(turn.turnId) || state.activeTasks.has(turn.bridgeSessionId)) continue;
     const binding = (turn.meta.channelType && turn.meta.chatId
       ? store.getChannelChat(turn.meta.channelType, turn.meta.chatId)
       : undefined)
@@ -5809,6 +5827,7 @@ async function schedulePersistentAcpTurnReattachments(): Promise<void> {
       lastSeq: turn.lastSeq,
     });
 
+    reattachingAcpTurns.add(turn.turnId);
     const jobPromise = INTERACTIVE_RUNTIME.processWithSessionLock(
       binding.bridgeSessionId,
       async () => {
@@ -5880,7 +5899,7 @@ async function schedulePersistentAcpTurnReattachments(): Promise<void> {
         bridgeSessionId: binding.bridgeSessionId,
         error: describeUnknownError(error),
       });
-    });
+    }).finally(() => { reattachingAcpTurns.delete(turn.turnId); });
   }
 }
 
@@ -6066,6 +6085,7 @@ function resetStateForTests(): void {
 // without wiring up the full adapter loop.
 /** @internal */
 export const _testOnly = {
+  schedulePersistentAcpTurnReattachments,
   handleMessage: async (adapter: BaseChannelAdapter, msg: InboundMessage): Promise<void> => {
     await handleMessage(adapter, msg);
     await _testOnlyWaitForDeliveryQueuesForTests(adapter);

@@ -795,7 +795,10 @@ export class DoubaoAcpProvider implements LLMProvider {
             return;
           }
 
-          const host = options.hostClient || await getSharedAcpHostClient();
+          const host = options.hostClient || (params.reattachAcpTurnId
+            ? await tryConnectExistingAcpHost()
+            : await getSharedAcpHostClient());
+          if (!host) throw new Error('待续接的豆包 ACP 后台暂时无法连接。');
           activeHost = host;
           const sessionKey = makeAcpSessionKey('doubao', params.sessionId);
           const cwd = path.resolve(params.workingDirectory || process.cwd());

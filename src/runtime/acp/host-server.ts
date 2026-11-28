@@ -781,7 +781,7 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
       }
       case 'turn/ack': {
         const turn = turns.get(String(p.turnId || ''));
-        if (!turn) return { ok: false };
+        if (!turn || isAcpTurnActiveStatus(turn.status)) return { ok: false };
         turn.acked = true;
         pruneAckedTurns();
         return { ok: true };

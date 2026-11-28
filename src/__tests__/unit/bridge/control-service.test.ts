@@ -17,7 +17,26 @@ import {
   startBridgeControlService,
   type BridgeControlService,
 } from '../../../bridge/control/service-discovery.js';
-import { formatAgentSourceXml } from '../../../bridge/control/session-catalog.js';
+import { formatAgentSourceXml, listDiscoveredBridgeSessions } from '../../../bridge/control/session-catalog.js';
+import type { BridgeStore, BridgeSession } from '../../../domain/index.js';
+
+it('reads one fresh session snapshot per control query instead of reloading it for every chat', () => {
+  let reads = 0;
+  let sessions = [{ id: 'a', name: 'Alpha', runtime: { activeRuntime: 'cursor' }, runtime_status: 'running' },
+    { id: 'b', name: 'Beta', runtime: { activeRuntime: 'codex' }, runtime_status: 'idle' }] as BridgeSession[];
+  const store = {
+    listSessions: () => { reads++; return sessions; },
+    getSession: () => { throw new Error('a catalog query must not reload the table per chat'); },
+    listChannelChats: () => ['a', 'b'].map(id => ({ id, bridgeSessionId: id, chatId: `chat-${id}`, channelType: 'feishu' })),
+  } as unknown as BridgeStore;
+  const getAdapter = () => ({ isRunning: () => true, getBotDisplayName: () => 'Bot' }) as any;
+  const query = () => listDiscoveredBridgeSessions({ store, getAdapter, codelarkHome: os.tmpdir(), query: 'Alpha' });
+  assert.equal(query()[0]?.runtimeStatus, 'running');
+  assert.equal(reads, 1);
+  sessions = sessions.map(session => session.id === 'a' ? { ...session, runtime_status: 'idle' } : session);
+  assert.equal(query()[0]?.runtimeStatus, 'idle', 'the next request observes external session updates');
+  assert.equal(reads, 2);
+});
 
 describe('bridge control service', () => {
   const roots: string[] = [];

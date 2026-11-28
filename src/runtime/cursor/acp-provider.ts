@@ -813,7 +813,10 @@ export class CursorAcpProvider implements LLMProvider {
             return;
           }
 
-          const host = options.hostClient || await getSharedAcpHostClient();
+          const host = options.hostClient || (params.reattachAcpTurnId
+            ? await tryConnectExistingAcpHost()
+            : await getSharedAcpHostClient());
+          if (!host) throw new Error('待续接的 Cursor ACP 后台暂时无法连接。');
           activeHost = host;
           if (!params.reattachAcpTurnId && isCursorControlPrompt(params.prompt)
             && !(await host.hello()).capabilities?.cursorCommands) {

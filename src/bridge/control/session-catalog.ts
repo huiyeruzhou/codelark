@@ -17,9 +17,10 @@ export function listDiscoveredBridgeSessions(options: {
 }): DiscoveredBridgeSession[] {
   const query = options.query?.trim().toLocaleLowerCase() || '';
   const codelarkHome = path.resolve(options.codelarkHome);
+  const sessions = new Map(options.store.listSessions().map(session => [session.id, session]));
   return options.store.listChannelChats().flatMap((binding) => {
     const adapter = options.getAdapter(binding.channelType);
-    const session = options.store.getSession(binding.bridgeSessionId);
+    const session = sessions.get(binding.bridgeSessionId);
     if (!adapter?.isRunning() || !session) return [];
     const chatName = sessionName(binding, session.name);
     const item: DiscoveredBridgeSession = {

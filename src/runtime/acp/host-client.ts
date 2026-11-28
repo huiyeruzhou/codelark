@@ -10,6 +10,7 @@ import { AcpRpcError } from './client.js';
 import {
   ACP_HOST_PROTOCOL_VERSION,
   acpHostEndpoint,
+  isAcpTurnActiveStatus,
   type AcpCardCheckpoint,
   type AcpHostHelloResult,
   type AcpHostPushEnvelope,
@@ -234,6 +235,14 @@ export class AcpHostClient {
 
   async listUnackedTurns(): Promise<AcpTurnSnapshot[]> {
     const res = await this.request<{ turns: AcpTurnSnapshot[] }>('turn/list_unacked', undefined, 10_000);
+    // Older Bridges could acknowledge a transport error while the native turn
+    // was still running. Session ownership remains authoritative in that case.
+    const seen = new Set(res.turns.map(turn => turn.turnId));
+    for (const session of await this.listSessions()) {
+      if (!session.activeTurnId || seen.has(session.activeTurnId)) continue;
+      const turn = await this.getTurn(session.activeTurnId);
+      if (turn && isAcpTurnActiveStatus(turn.status)) res.turns.push(turn);
+    }
     return res.turns;
   }
 
@@ -242,7 +251,9 @@ export class AcpHostClient {
     return res.turn;
   }
 
-  ackTurn(turnId: string): Promise<{ ok: boolean }> {
+  async ackTurn(turnId: string): Promise<{ ok: boolean }> {
+    const turn = await this.getTurn(turnId);
+    if (!turn || isAcpTurnActiveStatus(turn.status)) return { ok: false };
     return this.request<{ ok: boolean }>('turn/ack', { turnId }, 5_000);
   }
 
