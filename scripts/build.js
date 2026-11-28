@@ -31,6 +31,8 @@ const common = {
     '@larksuiteoapi/node-sdk',
     // MathJax carries font data; resvg resolves its platform-specific native binary.
     'mathjax-full', '@resvg/resvg-js',
+    // PTY loads native addons and helper binaries relative to its npm package.
+    '@homebridge/node-pty-prebuilt-multiarch',
     // ws optional native deps
     'bufferutil', 'utf-8-validate',
     // Node.js built-ins

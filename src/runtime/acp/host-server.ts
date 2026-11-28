@@ -137,6 +137,8 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
   const turns = new Map<string, ManagedAcpTurn>();
   const allClients = new Set<net.Socket>();
   let shuttingDown = false;
+  let pendingOperations = 0;
+  let closing: Promise<void> | undefined;
 
   const sessionSnapshot = (session: ManagedAcpSession): AcpSessionSnapshot => ({
     sessionKey: session.sessionKey,
@@ -710,6 +712,7 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
   };
 
   const handleRequest = async (req: AcpHostRequestEnvelope, socket: net.Socket): Promise<unknown> => {
+    if (shuttingDown) throw new Error('ACP Host 正在关闭，未接收新请求。');
     const p = record(req.params);
     switch (req.method) {
       case 'host/hello':
@@ -717,9 +720,10 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
       case 'host/shutdown': {
         const force = p.force === true;
         const hello = getHello();
-        if (!force && (hello.activeTurnCount > 0 || hello.unackedTurnCount > 0)) {
+        if (!force && (pendingOperations > 0 || hello.activeTurnCount > 0 || hello.unackedTurnCount > 0)) {
           return { ok: false, activeTurnCount: hello.activeTurnCount, unackedTurnCount: hello.unackedTurnCount };
         }
+        shuttingDown = true;
         setImmediate(() => {
           void closeServer(force).then(() => options.onShutdownRequested?.());
         });
@@ -824,7 +828,13 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
           continue;
         }
         if (typeof req.id !== 'number' || typeof req.method !== 'string') continue;
-        void handleRequest(req, socket).then(
+        // Session loading and configuration are work even before turn/start.
+        // Register synchronously so a concurrent shutdown cannot overtake them.
+        const operation = ['session/ensure', 'session/rpc', 'session/close', 'turn/start', 'turn/cancel'].includes(req.method);
+        if (operation) pendingOperations += 1;
+        void handleRequest(req, socket).finally(() => {
+          if (operation) pendingOperations -= 1;
+        }).then(
           (result) => sendFrame(socket, { id: req.id, result }),
           (error) => {
             const code = error instanceof AcpRpcError ? error.code : -32000;
@@ -848,25 +858,26 @@ export async function startAcpHostServer(options: AcpHostServerOptions): Promise
     });
   });
 
-  const closeServer = async (force = false): Promise<void> => {
-    if (shuttingDown) return;
+  const closeServer = (force = false): Promise<void> => {
+    if (closing) return closing;
     shuttingDown = true;
-    clearInterval(gcTimer);
-    if (force) {
-      await Promise.allSettled([...sessions.keys()].map((key) => closeSession(key)));
-    } else {
-      await Promise.allSettled([...sessions.values()].map(async (session) => {
-        if (!session.activeTurnId) await disposeManagedSession(session);
-      }));
-    }
-    for (const sock of allClients) {
-      try { sock.destroy(); } catch { /* ignore */ }
-    }
-    allClients.clear();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (process.platform !== 'win32') {
-      try { fs.unlinkSync(options.socketPath); } catch { /* ignore */ }
-    }
+    closing = (async () => {
+      clearInterval(gcTimer);
+      if (force) {
+        await Promise.allSettled([...sessions.keys()].map((key) => closeSession(key)));
+      } else {
+        await Promise.allSettled([...sessions.values()].map(async (session) => {
+          if (!session.activeTurnId) await disposeManagedSession(session);
+        }));
+      }
+      for (const sock of allClients) {
+        try { sock.destroy(); } catch { /* ignore */ }
+      }
+      allClients.clear();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // net.Server owns removal of its Unix socket; never unlink a successor's.
+    })();
+    return closing;
   };
 
   return {

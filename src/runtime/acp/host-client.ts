@@ -165,6 +165,17 @@ export class AcpHostClient {
     return this.request('host/shutdown', { force }, 10_000);
   }
 
+  async waitForShutdown(timeoutMs = 15_000): Promise<void> {
+    if (!this.connected) return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        off();
+        reject(new Error('旧 ACP Host 尚未确认关闭，未启动替代进程。'));
+      }, timeoutMs);
+      const off = this.onDisconnect(() => { clearTimeout(timer); off(); resolve(); });
+    });
+  }
+
   async ensureSession(params: AcpSessionEnsureParams): Promise<AcpSessionEnsureResult> {
     const result = await this.request<AcpSessionEnsureResult>('session/ensure', params, 150_000);
     this.sessionCache.set(result.session.sessionKey, result.session);
@@ -299,9 +310,14 @@ export class AcpHostClient {
 export async function connectAcpHostAt(socketPath: string, timeoutMs = 2_000): Promise<AcpHostClient> {
   const socket = await connectSocket(socketPath, timeoutMs);
   const client = new AcpHostClient(socket, socketPath);
-  await client.hello();
-  await client.listSessions().catch(() => {});
-  return client;
+  try {
+    await client.hello();
+    await client.listSessions();
+    return client;
+  } catch (error) {
+    client.detach();
+    throw error;
+  }
 }
 
 let sharedClient: AcpHostClient | null = null;
@@ -382,8 +398,16 @@ export async function getSharedAcpHostClient(home = currentHome()): Promise<AcpH
   sharedConnecting = (async () => {
     const socketPath = acpHostEndpoint(home);
     const entry = resolveAcpHostEntrypoint();
-    try {
-      const existing = sharedClient?.connected ? sharedClient : await connectAcpHostAt(socketPath, 1_500);
+    let existing = sharedClient?.connected ? sharedClient : undefined;
+    if (!existing) {
+      try {
+        existing = await connectAcpHostAt(socketPath, 1_500);
+      } catch (error) {
+        // A timed-out handshake is not evidence that a live host can be replaced.
+        if (!['ENOENT', 'ECONNREFUSED'].includes((error as NodeJS.ErrnoException).code || '')) throw error;
+      }
+    }
+    if (existing) {
       const hello = await existing.hello();
       if (
         hello.protocolVersion === ACP_HOST_PROTOCOL_VERSION
@@ -398,7 +422,7 @@ export async function getSharedAcpHostClient(home = currentHome()): Promise<AcpH
         return existing;
       }
       // Host is idle and outdated; recycle cleanly to pick up the new acp-host build.
-      const shut = await existing.shutdownHost(false).catch(() => ({ ok: false }));
+      const shut = await existing.shutdownHost(false);
       if (!shut.ok) {
         if (sharedClient !== existing) {
           sharedClient = existing;
@@ -408,10 +432,9 @@ export async function getSharedAcpHostClient(home = currentHome()): Promise<AcpH
         }
         return existing;
       }
-      existing.detach();
-      await new Promise((resolve) => setTimeout(resolve, 150));
-    } catch {
-      // Host is not running yet (or stale socket); spawn fresh detached host below.
+      // The old host must finish disposing its CLI children and socket. A fixed
+      // delay can reconnect to that host while it is still shutting down.
+      await existing.waitForShutdown();
     }
 
     const client = await spawnDetachedAcpHost(home, socketPath);
