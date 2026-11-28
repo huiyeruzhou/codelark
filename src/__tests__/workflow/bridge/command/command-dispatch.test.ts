@@ -10092,6 +10092,9 @@ enabled = true
       );
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
+      // alpha represents an existing Codex TUI; its native thread already exists.
+      // Missing this identity would bootstrap the developer's installed CLI.
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, '019e824e-10ef-7430-985d-4349ce6a15f9');
       const session = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(session?.runtime?.general?.tmuxSessionName, 'alpha');
       assert.equal(getSessionTmuxSessionName(store.getSession(binding.bridgeSessionId)), 'alpha');
@@ -10241,6 +10244,7 @@ enabled = true
       assert.match(kimiSteerLogDelta, /send-keys -t alpha Enter/);
       assert.doesNotMatch(kimiSteerLogDelta, /send-keys -t alpha C-s/, 'unknown manual turn state must not force Kimi steer');
       store.updateSession(binding.bridgeSessionId, { runtime: { activeRuntime: 'codex' } });
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, '019e824e-10ef-7430-985d-4349ce6a15f9');
 
       await handleBridgeCommand(
         adapter,
@@ -10641,6 +10645,9 @@ enabled = true
       );
       const binding = store.getChannelChat(address.channelType, address.chatId);
       assert.ok(binding);
+      // alpha represents an existing Codex TUI; its native thread already exists.
+      // Missing this identity would bootstrap the developer's installed CLI.
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, '019e824e-10ef-7430-985d-4349ce6a15f9');
       transitionRuntimeTmuxInputState(
         'codex',
         'alpha',

@@ -51,6 +51,7 @@ test('hot-update script dry-run validates cwd, node runtime, env paths, and safe
   assert.doesNotMatch(output, /\[hot-update\] started /);
   assert.ok(output.indexOf('[hot-update] npm run build: planned') < output.indexOf('[hot-update] restart: planned'));
   assert.ok(output.indexOf('[hot-update] npm test: planned') < output.indexOf('[hot-update] restart: planned'));
+  assert.ok(output.indexOf('[hot-update] npm test: planned') < output.indexOf('[hot-update] npm run build: planned'));
 });
 
 test('hot-update dispatcher uses launchd with an absolute worker path on macOS', async () => {
@@ -159,5 +160,31 @@ test('hot-update stops before restart if bundled skill synchronization fails', a
     assert.deepEqual(fs.readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line)), [
       ['install-skills', 'codelark', 'condition-monitor'],
     ]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('failed hot-update tests leave the running ACP artifact and bridge untouched', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clk-hot-update-test-failure-'));
+  const calls = path.join(root, 'calls.txt');
+  for (const dir of ['scripts', 'dist', 'bin']) fs.mkdirSync(path.join(root, dir));
+  fs.copyFileSync('scripts/hot-update-bridge.sh', path.join(root, 'scripts/hot-update-bridge.sh'));
+  fs.writeFileSync(path.join(root, 'package.json'), '{"name":"codelark"}');
+  const artifact = path.join(root, 'dist/acp-host.mjs');
+  fs.writeFileSync(artifact, 'running-release');
+  fs.writeFileSync(path.join(root, 'bin/npm'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$CLK_TEST_CALLS"
+if [ "$1" = test ]; then exit 23; fi
+if [ "$1 $2" = 'run build' ]; then printf new-release > dist/acp-host.mjs; fi
+`, { mode: 0o755 });
+  try {
+    await assert.rejects(execFileAsync('bash', ['scripts/hot-update-bridge.sh', '--run'], {
+      cwd: root,
+      env: { ...process.env, PATH: `${path.join(root, 'bin')}${path.delimiter}${process.env.PATH}`,
+        CODELARK_HOME: path.join(root, 'home'), CLK_TEST_CALLS: calls },
+      timeout: 30_000,
+    }), (error: any) => error.code === 23);
+    assert.equal(fs.readFileSync(artifact, 'utf8'), 'running-release');
+    assert.equal(fs.readFileSync(calls, 'utf8').trim(), 'test');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

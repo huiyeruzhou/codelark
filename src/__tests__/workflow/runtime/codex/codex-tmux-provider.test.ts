@@ -85,10 +85,12 @@ describe('codex-tmux-provider', () => {
       'Model changed to gpt-5.6 medium\nOpenAI Codex\n› Ask Codex to do anything\ngpt-5.6 medium',
     ];
     let captures = 0;
+    let finalScreenFirstSeenAt = 0;
     const core = {
       capturePane: async () => {
         const screen = screens[Math.min(captures, screens.length - 1)]!;
         captures += 1;
+        if (captures === screens.length) finalScreenFirstSeenAt = Date.now();
         return { command: `capture-${captures}`, screen };
       },
     } as Pick<TmuxCore, 'capturePane'>;
@@ -108,7 +110,8 @@ describe('codex-tmux-provider', () => {
         core,
       });
       assert.match(result.screen, /Model changed to gpt-5\.6 medium/);
-      assert.equal(captures >= 5, true);
+      assert.ok(captures > screens.length, 'the final screen must be observed again');
+      assert.ok(Date.now() - finalScreenFirstSeenAt >= 75, 'the final screen must remain stable for the configured interval');
     } finally {
       for (const [name, value] of previous) {
         if (value === undefined) delete process.env[name];

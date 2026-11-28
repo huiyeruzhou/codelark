@@ -201,12 +201,14 @@ run_worker() {
     echo "[hot-update] git pull: skipped"
   fi
 
-  run_logged npm run build
+  # A live Bridge observes dist/acp-host.mjs and may upgrade its host as soon
+  # as that file changes. Failed tests must not publish a new host artifact.
   if [ "$SKIP_TESTS" = "1" ]; then
     echo "[hot-update] npm test: skipped by --skip-tests"
   else
     run_logged npm test
   fi
+  run_logged npm run build
 
   # Keep the user-facing executable on PATH in lockstep with the daemon built
   # from this checkout. Failure is safe here because the live bridge has not
@@ -257,8 +259,8 @@ run_dry_run() {
   echo "[hot-update] worker args: ${args[*]}"
   echo "[hot-update] dispatch command: bash $PROJECT_DIR/scripts/hot-update-bridge.sh ${args[*]}"
   echo "[hot-update] git pull: $([ "$USE_PULL" = "1" ] && echo planned || echo skipped)"
-  echo "[hot-update] npm run build: planned"
   echo "[hot-update] npm test: $([ "$SKIP_TESTS" = "1" ] && echo skipped || echo planned)"
+  echo "[hot-update] npm run build: planned"
   echo "[hot-update] global CLI sync: npm install --global --no-audit --no-fund $PROJECT_DIR"
   echo "[hot-update] bundled skills sync: $(bridge_cli_display) install-skills codelark condition-monitor"
   echo "[hot-update] restart cli: $(bridge_cli_display)"
