@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { cursorAcpSessionStorePath } from './acp-session-policy.js';
 import { commitCursorCompaction, readCursorCompactState, setCompactCopyGoal } from './compact-store.js';
+import { cursorWorkspaceHash } from './session-index.js';
 
 export interface CursorCompactOptions {
   executable: string; cwd: string; env?: NodeJS.ProcessEnv;
@@ -32,7 +32,7 @@ export async function compactCursorSession(options: CursorCompactOptions): Promi
       const from = path.join(config, name);
       if (fs.existsSync(from)) { fs.copyFileSync(from, path.join(scratch, name)); fs.chmodSync(path.join(scratch, name), 0o600); }
     }
-    const directory = path.join(scratch, 'chats', createHash('md5').update(path.resolve(options.cwd)).digest('hex'), options.sessionId);
+    const directory = path.join(scratch, 'chats', cursorWorkspaceHash(options.cwd), options.sessionId);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const copy = path.join(directory, 'store.db');
     await copyStore(source, copy);

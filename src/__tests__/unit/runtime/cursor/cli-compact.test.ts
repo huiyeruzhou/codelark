@@ -51,6 +51,16 @@ it('real PTY compactor submits once, pauses only the copy, waits for child exit 
   const pid = Number(fs.readFileSync(path.join(f.dir, 'child-pid'), 'utf8')); assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
   const db = new DatabaseSync(f.source, { readOnly: true }); assert.equal(JSON.parse((db.prepare("SELECT value FROM meta WHERE key='0'").get() as any).value).isRunEverything, false); db.close();
 });
+it('compacts from a symlinked workspace using the same directory identity as the native CLI', { skip: process.platform === 'win32' }, async t => {
+  const f = fixture(t, 'summary');
+  const aliasRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-compact-alias-'));
+  t.after(() => fs.rmSync(aliasRoot, { recursive: true, force: true }));
+  const cwd = path.join(aliasRoot, 'workspace');
+  fs.symlinkSync(f.dir, cwd, 'dir');
+  await compactCursorSession({ ...f.options, cwd });
+  assert.ok(readCursorCompactState(f.source).summary);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'received'), 'utf8').trim(), '/summarize');
+});
 it('CLI timeout never copies partial state or retries the slash input', { skip: process.platform === 'win32' }, async t => {
   const f = fixture(t, 'timeout');
   await assert.rejects(compactCursorSession(f.options), /未完成/); assert.equal(readCursorCompactState(f.source).root, f.root);

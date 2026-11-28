@@ -19,6 +19,8 @@ CLI 启动与斜杠菜单依赖当前原生版本的界面，命令只输入一�
 
 压缩使用的 `@homebridge/node-pty-prebuilt-multiarch` 作为 npm 运行时依赖加载，不由 esbuild 打进单文件。它需要按本机平台解析 `.node` 文件和辅助程序；构建测试用包含原生模块的隔离依赖验证五个发布入口都保留该边界。
 
+CLI 副本目录复用 `cursorWorkspaceHash`，先解析工作目录的真实路径，再计算哈希，与 CLI 的 `process.cwd()` 保持一致。否则符号链接目录以及 macOS 的 `/var`、`/private/var` 会让两端访问不同的 SQLite 路径。真实 PTY 回归同时覆盖普通目录与符号链接目录。
+
 ## 目标
 
 Cursor 支持两种独立 provider，默认使用 `acp`：`acp` 直接读取官方进程的协议事件，适合需要实时正文和工具结果的群；`tmux` 保留原生 CLI/桌面界面。通过当前会话的 `/p acp` 或 `/p tmux` 选择。切换命令走独立控制通道；运行中选择 ACP 会立即给出“结束并切换 ACP”按钮，确认后结束旧执行、保存旧身份并提交新配置，不必等待原任务结束后重发命令。全局 `cursorProvider` 只设置默认值，不应把已有另一协议的会话 ID 直接恢复到新 provider。`/mode`、`/model` 与 `/reasoning` 均按当前有效 provider（`acp` 或 `tmux`）展示状态与生效方式。
@@ -45,7 +47,7 @@ Cursor Desktop 已有对话同样使用 `cursor:tmux`，内部传输方式为 `d
 
 ACP 使用 `<Cursor配置根>/acp-sessions/<id>/store.db`，与 TUI 的 `chats/...` 分离。运行状态保存 `sessionProvider`，避免混用两个来源的 UUID。`/p` 切换保留 `previousSession` 供回退，但不会自动把旧 TUI 正文当作新消息发送。需要保留整段原生上下文的迁移必须先停止旧执行，再调用 `cloneCursorCliSessionForAcp` 将 SQLite 一致快照复制到新的 ACP UUID，验证 `session/load` 后再改绑定；源库不修改，两个进程不共用一个库。
 
-Bridge 持有 ACP 子进程。Bridge 停止/热更新会中断并关闭这些子进程，之后从已保存的 ACP ID 恢复上下文；不宣称热更新期间原生任务仍继续。没有完成确认的输入不会自动重发。执行模式 `cursorForce` 受原生持久化权限限制，不能把重连时省略 `--force` 描述为已经撤销旧库里的 Run Everything。
+独立 ACP host 持有原生子进程，Bridge 停止或热更新只断开订阅，活动任务继续执行；重连后按事件序号接续原轮次。host 自身退出则仍需从已保存的 ACP ID 恢复上下文，没有完成确认的输入不会自动重发。执行模式 `cursorForce` 受原生持久化权限限制，不能把重连时省略 `--force` 描述为已经撤销旧库里的 Run Everything。
 
 回归使用真实 Cursor CLI 与隔离模型后端：在最终 checkpoint 前验证两段正文及真实执行 `printf` 的工具结果已抵达；覆盖中断、多次输入、恢复去重、问卷选项与自由文本续接、TUI 快照导入。Bridge 工作流另验中断确认前不启动新轮、连续追加不丢失、用户输入出现在卡片、回复目标和 Get 归属。
 
