@@ -121,9 +121,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test stable suites
+      - name: Test complete suite
         timeout-minutes: 20
-        run: npm test -- --parallel --unit --workflow --mock-e2e --harness
+        run: npm test
 
       - name: Build
         run: npm run build
